@@ -1,6 +1,9 @@
 #include "layout_loader.h"
 #include "net.h"
 
+#include <HTTPClient.h>
+#include <WiFi.h>
+
 namespace layout {
 
 // Baked-in default layout. Mirrors what the firmware currently renders
@@ -66,6 +69,50 @@ bool load_default() {
     }
     s_loaded = true;
     net::logf("[layout] default loaded: %u screens, %u alarms", (unsigned)s_current->screen_count,
+              (unsigned)s_current->alarm_count);
+    return true;
+}
+
+bool fetch_from_signalk(const String &host, uint16_t port) {
+    if (host.length() == 0) {
+        net::logf("[layout] fetch: empty host");
+        return false;
+    }
+    if (WiFi.status() != WL_CONNECTED) {
+        net::logf("[layout] fetch: no WiFi, skipping");
+        return false;
+    }
+    String url = "http://" + host + ":" + String(port) +
+                 "/signalk/v1/api/vessels/self/configuration/boat-mfd/layouts/value";
+    HTTPClient http;
+    http.setTimeout(5000);
+    if (!http.begin(url)) {
+        net::logf("[layout] fetch: HTTPClient.begin failed for %s", url.c_str());
+        return false;
+    }
+    int code = http.GET();
+    if (code != 200) {
+        net::logf("[layout] fetch %s -> HTTP %d (keeping current config)", url.c_str(), code);
+        http.end();
+        return false;
+    }
+    String body = http.getString();
+    http.end();
+    if (body.length() == 0) {
+        net::logf("[layout] fetch: empty body");
+        return false;
+    }
+    if (!ensure_alloc()) return false;
+    int rc = parse(body.c_str(), body.length(), *s_current);
+    if (rc != 0) {
+        net::logf("[layout] fetched JSON parse FAILED (rc=%d) - keeping previous config", rc);
+        // Reload default to recover from the partial overwrite parse() did.
+        parse(DEFAULT_LAYOUT_JSON, strlen(DEFAULT_LAYOUT_JSON), *s_current);
+        return false;
+    }
+    s_loaded = true;
+    net::logf("[layout] fetched from %s:%u (%u bytes, %u screens, %u alarms)", host.c_str(), port,
+              (unsigned)body.length(), (unsigned)s_current->screen_count,
               (unsigned)s_current->alarm_count);
     return true;
 }
@@ -152,6 +199,20 @@ bool handleSerialCommand(const String &line) {
     }
     if (line == "layout-reload-default") {
         load_default();
+        return true;
+    }
+    if (line.startsWith("layout-fetch ")) {
+        String rest = line.substring(13);
+        rest.trim();
+        int colon = rest.indexOf(':');
+        String host = colon < 0 ? rest : rest.substring(0, colon);
+        uint16_t port = colon < 0 ? 3000 : (uint16_t)rest.substring(colon + 1).toInt();
+        if (port == 0) port = 3000;
+        fetch_from_signalk(host, port);
+        return true;
+    }
+    if (line == "layout-fetch") {
+        net::logf("usage: layout-fetch <host>[:<port>]");
         return true;
     }
     return false;
