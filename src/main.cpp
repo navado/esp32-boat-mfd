@@ -450,14 +450,20 @@ static void build_ui(void) {
 static const int GRID_X[4] = {0, 1, 0, 1};
 static const int GRID_Y[4] = {0, 0, 1, 1};
 
-// focused: -1 = grid, 0..3 = center that quadrant and hide the others.
+// focused: -1 = grid (each quadrant at its grid cell, 232x232),
+//           0..3 = that quadrant fills the full 480x480 screen.
 static void set_quadrant_focus(int focused) {
     for (int i = 0; i < 4; ++i) {
         if (focused < 0) {
+            lv_obj_set_size(quadrants[i], 232, 232);
             lv_obj_set_pos(quadrants[i], GRID_X[i] * 240 + 4, GRID_Y[i] * 240 + 4);
             lv_obj_clear_flag(quadrants[i], LV_OBJ_FLAG_HIDDEN);
         } else if (focused == i) {
-            lv_obj_set_pos(quadrants[i], (LCD_W - 232) / 2, (LCD_H - 232) / 2);
+            // Fill the screen. Child label alignments (TOP_MID, BOTTOM_LEFT
+            // etc.) are relative to the parent so they reflow into the
+            // larger 480x480 area automatically.
+            lv_obj_set_size(quadrants[i], LCD_W, LCD_H);
+            lv_obj_set_pos(quadrants[i], 0, 0);
             lv_obj_clear_flag(quadrants[i], LV_OBJ_FLAG_HIDDEN);
         } else {
             lv_obj_add_flag(quadrants[i], LV_OBJ_FLAG_HIDDEN);
@@ -879,6 +885,25 @@ static bool handleMainCommand(const String &line) {
     }
     if (line == "mob-off" || line == "mob-clear") {
         mob_clear();
+        return true;
+    }
+    if (line == "view") {
+        net::logf("view = %s", g_focused_quad < 0 ? "grid" : String("q" + String(g_focused_quad)).c_str());
+        return true;
+    }
+    if (line.startsWith("view ")) {
+        String v = line.substring(5);
+        v.trim();
+        int q = -2;
+        if (v == "grid") q = -1;
+        else if (v.length() == 2 && v[0] == 'q' && v[1] >= '0' && v[1] <= '3') q = v[1] - '0';
+        if (q == -2) {
+            net::logf("usage: view <grid|q0|q1|q2|q3>");
+            return true;
+        }
+        set_quadrant_focus(q);
+        g_focused_quad = q;
+        net::logf("[ui] view -> %s", v.c_str());
         return true;
     }
     if (line == "pos-format") {

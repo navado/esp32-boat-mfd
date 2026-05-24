@@ -21,6 +21,11 @@ static IPAddress broadcastAddr;
 static bool ota_started = false;
 static bool ap_mode = false;
 static ExtraCommandHandler s_extra = nullptr;
+static String s_device_id;
+
+const String &deviceId() {
+    return s_device_id;
+}
 
 // ---- BLE ----
 // Nordic UART service UUIDs (de facto BLE serial standard).
@@ -60,7 +65,7 @@ class RxCb : public NimBLECharacteristicCallbacks {
 };
 
 static void bleSetup() {
-    NimBLEDevice::init(OTA_HOSTNAME);
+    NimBLEDevice::init(s_device_id.c_str());
     NimBLEDevice::setMTU(247);
     NimBLEServer *server = NimBLEDevice::createServer();
     server->setCallbacks(new ServerCb());
@@ -77,12 +82,12 @@ static void bleSetup() {
     adv->addServiceUUID(NUS_SERVICE);
     adv->setScanResponse(true);
     NimBLEDevice::startAdvertising();
-    Serial.println("[ble] advertising as " OTA_HOSTNAME);
+    Serial.printf("[ble] advertising as %s\n", s_device_id.c_str());
 }
 
 // ---- WiFi / OTA ----
 static void otaSetup() {
-    ArduinoOTA.setHostname(OTA_HOSTNAME);
+    ArduinoOTA.setHostname(s_device_id.c_str());
     if (strlen(OTA_PASSWORD) > 0) ArduinoOTA.setPassword(OTA_PASSWORD);
     ArduinoOTA.onStart([]() {
         Serial.printf("[ota] start (%s)\n", ArduinoOTA.getCommand() == U_FLASH ? "flash" : "fs");
@@ -99,7 +104,7 @@ static void otaSetup() {
     ArduinoOTA.onError([](ota_error_t e) { Serial.printf("[ota] error %d\n", e); });
     ArduinoOTA.begin();
     ota_started = true;
-    Serial.printf("[ota] ready at %s.local\n", OTA_HOSTNAME);
+    Serial.printf("[ota] ready at %s.local\n", s_device_id.c_str());
 }
 
 static void wifiStart() {
@@ -119,7 +124,7 @@ static void wifiStart() {
     }
 
     WiFi.mode(WIFI_STA);
-    WiFi.setHostname(OTA_HOSTNAME);
+    WiFi.setHostname(s_device_id.c_str());
     WiFi.begin(ssid.c_str(), pass.c_str());
     Serial.printf("[wifi] connecting to '%s'", ssid.c_str());
     uint32_t t0 = millis();
@@ -134,9 +139,9 @@ static void wifiStart() {
         broadcastAddr = ip;
         broadcastAddr[3] = 255;
         Serial.printf("[wifi] up: ip=%s  rssi=%d\n", ip.toString().c_str(), WiFi.RSSI());
-        if (MDNS.begin(OTA_HOSTNAME)) {
+        if (MDNS.begin(s_device_id.c_str())) {
             MDNS.addService("arduino", "tcp", 3232);
-            Serial.printf("[mdns] %s.local\n", OTA_HOSTNAME);
+            Serial.printf("[mdns] %s.local\n", s_device_id.c_str());
         }
         otaSetup();
     } else {
@@ -153,8 +158,18 @@ static void wifiStart() {
 
 void setup() {
     prefs.begin("net", false);
+    s_device_id = prefs.getString("device_id", OTA_HOSTNAME);
+    Serial.printf("[net] device id: %s\n", s_device_id.c_str());
     wifiStart();
     bleSetup();
+}
+
+bool dispatchCommand(const String &line) {
+    if (handleSerialCommand(line)) return true;
+    if (sk::handleSerialCommand(line)) return true;
+    if (layout::handleSerialCommand(line)) return true;
+    if (s_extra && s_extra(line)) return true;
+    return false;
 }
 
 void loop() {
@@ -227,6 +242,23 @@ bool handleSerialCommand(const String &line) {
         return true;
     }
     if (line == "reboot") {
+        ESP.restart();
+        return true;
+    }
+    if (line == "id") {
+        logf("[net] device id: %s", s_device_id.c_str());
+        return true;
+    }
+    if (line.startsWith("id ")) {
+        String id = line.substring(3);
+        id.trim();
+        if (id.length() == 0 || id.length() > 31) {
+            logf("[net] id: name must be 1..31 chars");
+            return true;
+        }
+        prefs.putString("device_id", id);
+        logf("[net] device id -> '%s' (rebooting)", id.c_str());
+        delay(200);
         ESP.restart();
         return true;
     }

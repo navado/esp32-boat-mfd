@@ -31,6 +31,7 @@ static String connectionJson() {
     sk["state"] = sk::connectionStatus();
 
     JsonObject dev = doc["device"].to<JsonObject>();
+    dev["id"] = net::deviceId();
     dev["uptime_ms"] = millis();
     dev["heap_free"] = (uint32_t)ESP.getFreeHeap();
     dev["psram_free"] = (uint32_t)ESP.getFreePsram();
@@ -74,6 +75,23 @@ static void applyConnectionWrite(const std::string &data) {
             sk::handleSerialCommand(cmd);
             return;
         }
+    }
+    JsonVariantConst dev = doc["device"];
+    if (!dev.isNull()) {
+        const char *id = dev["id"];
+        if (id && strlen(id)) {
+            String cmd = String("id ") + id;
+            net::logf("[bleconfig] applying device id (will reboot)");
+            net::dispatchCommand(cmd);
+            return;
+        }
+    }
+    const char *view = doc["view"].as<const char *>();
+    if (view) {
+        String cmd = String("view ") + view;
+        net::logf("[bleconfig] view -> %s", view);
+        net::dispatchCommand(cmd);
+        return;
     }
     net::logf("[bleconfig] connection write: no actionable fields");
 }

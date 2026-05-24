@@ -19,6 +19,15 @@ bool wifiUp();
 String ipString();
 int rssi();
 
+// User-configurable device identity (BLE name, mDNS host, OTA host).
+// Default = OTA_HOSTNAME from secrets.h.
+const String &deviceId();
+
+// Dispatch a command line through net / sk / layout / main handlers in
+// order. Returns true if any handler consumed it. BLE / serial / extra
+// callers all funnel through this.
+bool dispatchCommand(const String &line);
+
 // Optional extra command handler registered by main; called for lines net::
 // and sk:: didn't consume. Returns true if the line was handled.
 using ExtraCommandHandler = bool (*)(const String &line);
