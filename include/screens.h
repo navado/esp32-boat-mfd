@@ -44,4 +44,19 @@ void refresh();
 void reset();  // zero trip counters via console / BLE
 }  // namespace trip
 
+namespace route {
+lv_obj_t *build(lv_obj_t *parent);
+void refresh();
+}  // namespace route
+
+namespace autopilot {
+lv_obj_t *build(lv_obj_t *parent);
+void refresh();
+}  // namespace autopilot
+
+namespace wifi_setup {
+lv_obj_t *build(lv_obj_t *parent);
+void refresh();
+}  // namespace wifi_setup
+
 }  // namespace ui

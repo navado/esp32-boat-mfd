@@ -31,13 +31,14 @@
 #define LV_USE_CHART    1
 #define LV_USE_SLIDER   1
 #define LV_USE_SWITCH   1
-#define LV_USE_TEXTAREA 0
+#define LV_USE_TEXTAREA 1
 #define LV_USE_TABLE    0
 #define LV_USE_IMAGE    1
+#define LV_USE_BUTTONMATRIX 1
 
 // Widgets we don't use - explicitly disabled (some depend on textarea)
 #define LV_USE_SPINBOX     0
-#define LV_USE_KEYBOARD    0
+#define LV_USE_KEYBOARD    1
 #define LV_USE_CALENDAR    0
 #define LV_USE_CHECKBOX    0
 #define LV_USE_DROPDOWN    0

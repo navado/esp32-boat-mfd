@@ -705,8 +705,11 @@ void setup() {
     ui::register_screen({"nav",       "Nav",        ui::nav::build(scr),           ui::nav::refresh});
     ui::register_screen({"depth",     "Depth",      ui::depth::build(scr),         ui::depth::refresh});
     ui::register_screen({"steering",  "Steering",   ui::steering::build(scr),      ui::steering::refresh});
+    ui::register_screen({"route",     "Route",      ui::route::build(scr),         ui::route::refresh});
+    ui::register_screen({"autopilot", "Autopilot",  ui::autopilot::build(scr),     ui::autopilot::refresh});
     ui::register_screen({"trip",      "Trip",       ui::trip::build(scr),          ui::trip::refresh});
     ui::register_screen({"status",    "System",     ui::status_panel::build(scr),  ui::status_panel::refresh});
+    ui::register_screen({"wifi",      "WiFi Setup", ui::wifi_setup::build(scr),    ui::wifi_setup::refresh});
 
     // Global overlays after screens so they render on top
     mob_build(scr);

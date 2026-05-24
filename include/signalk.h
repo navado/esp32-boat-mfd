@@ -20,4 +20,10 @@ bool handleSerialCommand(const String &line);
 
 String connectionStatus();
 
+// PUT a value to a SignalK path on the configured server. Body is
+// {"value": <serialized>}. value is sent as-is (caller must format e.g.
+// "1.234" for numbers, "\"auto\"" for strings). Returns the HTTP status,
+// or a negative value on transport error.
+int putValue(const char *path, const char *valueJson);
+
 }  // namespace sk

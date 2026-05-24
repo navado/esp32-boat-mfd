@@ -4,6 +4,8 @@
 
 #include <Preferences.h>
 #include <WebSocketsClient.h>
+#include <HTTPClient.h>
+#include <WiFi.h>
 #include <ArduinoJson.h>
 
 namespace sk {
@@ -140,6 +142,42 @@ bool handleSerialCommand(const String &line) {
         return true;
     }
     return false;
+}
+
+int putValue(const char *path, const char *valueJson) {
+    if (!path || !valueJson) return -1;
+    if (s_host.length() == 0) {
+        net::logf("[sk] PUT: no host configured");
+        return -2;
+    }
+    if (WiFi.status() != WL_CONNECTED) {
+        net::logf("[sk] PUT: wifi not up");
+        return -3;
+    }
+    HTTPClient http;
+    String url = String("http://") + s_host + ":" + String(s_port) +
+                 "/signalk/v1/api/vessels/self/" + path;
+    // SignalK PUT REST puts dots in path; we accept dot-paths in `path` arg
+    // and send them as-is (the SK server expects them URL-encoded with
+    // slashes between segments, but most servers accept dots too).
+    if (!http.begin(url)) {
+        net::logf("[sk] PUT: begin failed");
+        return -4;
+    }
+    String token;
+    {
+        Preferences p;
+        p.begin("sk", true);
+        token = p.getString("token", "");
+        p.end();
+    }
+    if (token.length()) http.addHeader("Authorization", String("Bearer ") + token);
+    http.addHeader("Content-Type", "application/json");
+    String body = String("{\"value\":") + valueJson + "}";
+    int code = http.PUT(body);
+    net::logf("[sk] PUT %s = %s -> %d", path, valueJson, code);
+    http.end();
+    return code;
 }
 
 String connectionStatus() {
