@@ -136,6 +136,79 @@ make demo-down
 deltas for navigation, wind, depth, water temperature, battery, and tanks
 once per second.
 
+## Layout configuration (work in progress)
+
+Multi-screen layouts are described by a JSON document on the SignalK server
+(`configuration.boat-mfd.layouts`). The device fetches the config at boot,
+falls back to a baked-in default if unreachable, and re-fetches on reconnect.
+
+### Schema
+
+```jsonc
+{
+  "version": 1,
+  "settings": {
+    "default_screen": "dashboard",
+    "demo_period_ms": 3000
+  },
+  "screens": [
+    {
+      "id": "dashboard",
+      "title": "Dashboard",
+      "type": "quadrants",
+      "tiles": [
+        {
+          "id": "wind",
+          "title": "WIND",
+          "type": "wind",
+          "paths": {
+            "awa": "environment.wind.angleApparent",
+            "aws": "environment.wind.speedApparent"
+          }
+        }
+      ]
+    },
+    {
+      "id": "steering",
+      "title": "Steering",
+      "type": "steering",
+      "paths": {
+        "hdg": "navigation.headingTrue",
+        "cts": "navigation.courseRhumbline.courseToSteer",
+        "xte": "navigation.courseRhumbline.crossTrackError"
+      }
+    }
+  ],
+  "alarms": [
+    {
+      "id": "shallow",
+      "path": "environment.depth.belowTransducer",
+      "level": "alarm",
+      "lt": 3.0,
+      "message": "SHALLOW WATER"
+    }
+  ]
+}
+```
+
+### Field reference
+
+| Field | Allowed values |
+|-------|----------------|
+| `screens[].type` | `quadrants` &middot; `steering` &middot; `autopilot` &middot; `route` &middot; `trip` &middot; `chart` |
+| `screens[].tiles[].type` | `wind` &middot; `nav` &middot; `depth_temp` &middot; `device_status` &middot; `big_number` &middot; `compass` |
+| `alarms[].level` | `info` &middot; `warn` &middot; `alarm` &middot; `emergency` |
+| `alarms[].lt` / `.gt` | Number — trigger when the path's value crosses below `lt` or above `gt` |
+
+Bounds (compile-time, see `include/layout.h`): max 8 screens, 4 tiles per
+screen, 6 path bindings per object, 8 alarms. Strings truncate to 32
+chars for ids/titles, 96 for SignalK paths.
+
+### Status
+
+- Schema defined + host-portable parser with 9 unit tests passing — `include/layout.h`, `src/layout.cpp`
+- Fetcher (SignalK REST) and LVGL renderer not yet wired (tracked in task #7)
+
 ## Architecture
 
 ```
