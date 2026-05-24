@@ -1,5 +1,6 @@
 #include "layout_loader.h"
 #include "net.h"
+#include "ble_config.h"
 
 #include <HTTPClient.h>
 #include <WiFi.h>
@@ -50,6 +51,28 @@ static const char *DEFAULT_LAYOUT_JSON =
 static Config *s_current = nullptr;
 static bool s_loaded = false;
 
+// Last successfully applied JSON document, stored verbatim so BLE/HTTP
+// reads can return what the user wrote (round-trip-safe).
+static char *s_last_json = nullptr;
+static size_t s_last_json_len = 0;
+
+static void remember_json(const char *src, size_t len) {
+    if (s_last_json) {
+        heap_caps_free(s_last_json);
+        s_last_json = nullptr;
+    }
+    s_last_json = (char *)heap_caps_malloc(len + 1, MALLOC_CAP_SPIRAM);
+    if (!s_last_json) {
+        s_last_json_len = 0;
+        net::logf("[layout] remember_json: PSRAM alloc failed (%u bytes)", (unsigned)len);
+        return;
+    }
+    memcpy(s_last_json, src, len);
+    s_last_json[len] = 0;
+    s_last_json_len = len;
+    net::logf("[layout] remember_json: stored %u bytes", (unsigned)len);
+}
+
 static bool ensure_alloc() {
     if (s_current) return true;
     s_current = (Config *)heap_caps_calloc(1, sizeof(Config), MALLOC_CAP_SPIRAM);
@@ -61,16 +84,33 @@ static bool ensure_alloc() {
 }
 
 bool load_default() {
+    return apply_json(DEFAULT_LAYOUT_JSON, strlen(DEFAULT_LAYOUT_JSON));
+}
+
+bool apply_json(const char *json, size_t len) {
     if (!ensure_alloc()) return false;
-    int rc = parse(DEFAULT_LAYOUT_JSON, strlen(DEFAULT_LAYOUT_JSON), *s_current);
+    int rc = parse(json, len, *s_current);
     if (rc != 0) {
-        net::logf("[layout] default parse FAILED (rc=%d)", rc);
+        net::logf("[layout] apply_json FAILED (rc=%d) - keeping previous config", rc);
+        // Restore from the last good JSON if we have one, else reload default.
+        if (s_last_json) {
+            parse(s_last_json, s_last_json_len, *s_current);
+        } else {
+            parse(DEFAULT_LAYOUT_JSON, strlen(DEFAULT_LAYOUT_JSON), *s_current);
+        }
         return false;
     }
     s_loaded = true;
-    net::logf("[layout] default loaded: %u screens, %u alarms", (unsigned)s_current->screen_count,
-              (unsigned)s_current->alarm_count);
+    remember_json(json, len);
+    net::logf("[layout] applied %u-byte doc: %u screens, %u alarms", (unsigned)len,
+              (unsigned)s_current->screen_count, (unsigned)s_current->alarm_count);
+    bleconfig::notifyAll();  // refresh BLE characteristics with the new layout
     return true;
+}
+
+const char *last_json(size_t *out_len) {
+    if (out_len) *out_len = s_last_json_len;
+    return s_last_json;
 }
 
 bool fetch_from_signalk(const String &host, uint16_t port) {
@@ -103,18 +143,11 @@ bool fetch_from_signalk(const String &host, uint16_t port) {
         return false;
     }
     if (!ensure_alloc()) return false;
-    int rc = parse(body.c_str(), body.length(), *s_current);
-    if (rc != 0) {
-        net::logf("[layout] fetched JSON parse FAILED (rc=%d) - keeping previous config", rc);
-        // Reload default to recover from the partial overwrite parse() did.
-        parse(DEFAULT_LAYOUT_JSON, strlen(DEFAULT_LAYOUT_JSON), *s_current);
-        return false;
+    bool ok = apply_json(body.c_str(), body.length());
+    if (ok) {
+        net::logf("[layout] fetched from %s:%u", host.c_str(), port);
     }
-    s_loaded = true;
-    net::logf("[layout] fetched from %s:%u (%u bytes, %u screens, %u alarms)", host.c_str(), port,
-              (unsigned)body.length(), (unsigned)s_current->screen_count,
-              (unsigned)s_current->alarm_count);
-    return true;
+    return ok;
 }
 
 // Returns the live config. Caller MUST call load_default() first.

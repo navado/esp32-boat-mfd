@@ -11,6 +11,7 @@
 #include "secrets.h"
 #include "signalk.h"
 #include "layout_loader.h"
+#include "ble_config.h"
 
 namespace net {
 
@@ -69,6 +70,8 @@ static void bleSetup() {
                                           NIMBLE_PROPERTY::WRITE | NIMBLE_PROPERTY::WRITE_NR);
     bleRxChar->setCallbacks(new RxCb());
     svc->start();
+
+    bleconfig::setup();  // adds the Connection + Configuration GATT service
 
     NimBLEAdvertising *adv = NimBLEDevice::getAdvertising();
     adv->addServiceUUID(NUS_SERVICE);
