@@ -18,6 +18,7 @@ static WiFiUDP udp;
 static IPAddress broadcastAddr;
 static bool ota_started = false;
 static bool ap_mode = false;
+static ExtraCommandHandler s_extra = nullptr;
 
 // ---- BLE ----
 // Nordic UART service UUIDs (de facto BLE serial standard).
@@ -47,8 +48,8 @@ class RxCb : public NimBLECharacteristicCallbacks {
             line.trim();
             if (line.length()) {
                 Serial.printf("[ble] rx: %s\n", line.c_str());
-                if (!handleSerialCommand(line)) {
-                    sk::handleSerialCommand(line);
+                if (!handleSerialCommand(line) && !sk::handleSerialCommand(line)) {
+                    if (s_extra) s_extra(line);
                 }
             }
         }
@@ -160,6 +161,14 @@ bool wifiUp() {
 }
 String ipString() {
     return ap_mode ? WiFi.softAPIP().toString() : WiFi.localIP().toString();
+}
+
+int rssi() {
+    return wifiUp() ? WiFi.RSSI() : 0;
+}
+
+void setExtraCommandHandler(ExtraCommandHandler h) {
+    s_extra = h;
 }
 
 void logf(const char *fmt, ...) {

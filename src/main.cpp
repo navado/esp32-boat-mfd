@@ -99,11 +99,21 @@ static Arduino_RGB_Display *gfx =
 
 static bool touch_present = false;
 
+// FPS benchmark counters (updated from disp_flush_cb).
+static volatile uint32_t g_flush_count = 0;
+static volatile uint32_t g_flush_us_total = 0;
+static volatile uint32_t g_flush_us_peak = 0;
+
 static void disp_flush_cb(lv_display_t *d, const lv_area_t *area, uint8_t *px_map) {
+    uint32_t t0 = micros();
     uint32_t w = area->x2 - area->x1 + 1;
     uint32_t h = area->y2 - area->y1 + 1;
     gfx->draw16bitRGBBitmap(area->x1, area->y1, (uint16_t *)px_map, w, h);
     lv_display_flush_ready(d);
+    uint32_t dt = micros() - t0;
+    g_flush_count++;
+    g_flush_us_total += dt;
+    if (dt > g_flush_us_peak) g_flush_us_peak = dt;
 }
 
 static void touch_read_cb(lv_indev_t *indev, lv_indev_data_t *data) {
@@ -160,9 +170,22 @@ static uint32_t lv_tick_cb(void) {
 // Marine dashboard: 2x2 quadrants on 480x480, each ~232x232.
 static lv_obj_t *lbl_aws, *lbl_awa;
 static lv_obj_t *needle;
-static lv_obj_t *lbl_sog, *lbl_cog;
+static lv_obj_t *lbl_sog, *lbl_cog, *lbl_hdg, *lbl_pos;
 static lv_obj_t *lbl_depth, *lbl_temp;
-static lv_obj_t *lbl_pos, *lbl_batt, *lbl_status;
+static lv_obj_t *lbl_batt, *lbl_status, *lbl_ip, *lbl_rssi;
+static lv_obj_t *quadrants[4];  // saved q1..q4 for demo focus / future fullscreen
+
+// Demo mode state - cycles through quadrants for video capture.
+static int g_demo_state = -1;  // -1 = off, 0..3 = focused quadrant, 4 = grid pause
+static lv_timer_t *g_demo_timer = nullptr;
+static uint32_t g_demo_period_ms = 3000;
+static lv_obj_t *g_demo_badge = nullptr;
+
+// FPS overlay state
+static lv_obj_t *g_fps_overlay = nullptr;
+static float g_fps = 0.0f;
+static uint32_t g_fps_peak_us = 0;
+static float g_fps_avg_us = 0.0f;
 
 static lv_obj_t *make_quadrant(lv_obj_t *parent, int qx, int qy, const char *header) {
     lv_obj_t *q = lv_obj_create(parent);
@@ -189,7 +212,8 @@ static void build_ui(void) {
     lv_obj_clear_flag(scr, LV_OBJ_FLAG_SCROLLABLE);
 
     // Wind (top-left)
-    lv_obj_t *q1 = make_quadrant(scr, 0, 0, "WIND  AWA / AWS");
+    lv_obj_t *q1 = make_quadrant(scr, 0, 0, "WIND");
+    quadrants[0] = q1;
     lv_obj_t *ring = lv_obj_create(q1);
     lv_obj_set_size(ring, 140, 140);
     lv_obj_set_style_radius(ring, LV_RADIUS_CIRCLE, 0);
@@ -217,26 +241,42 @@ static void build_ui(void) {
     lv_obj_set_style_text_font(lbl_awa, &lv_font_montserrat_28, 0);
     lv_obj_align(lbl_awa, LV_ALIGN_BOTTOM_RIGHT, 0, 0);
 
-    // Nav (top-right)
-    lv_obj_t *q2 = make_quadrant(scr, 1, 0, "NAV  SOG / COG");
+    // Nav (top-right) - SOG/COG/HDG + position
+    lv_obj_t *q2 = make_quadrant(scr, 1, 0, "NAV");
+    quadrants[1] = q2;
     lbl_sog = lv_label_create(q2);
     lv_label_set_text(lbl_sog, "--.-");
     lv_obj_set_style_text_color(lbl_sog, lv_color_hex(0xeaf2ff), 0);
     lv_obj_set_style_text_font(lbl_sog, &lv_font_montserrat_48, 0);
-    lv_obj_align(lbl_sog, LV_ALIGN_CENTER, -20, -10);
-    lv_obj_t *unit = lv_label_create(q2);
-    lv_label_set_text(unit, "kn");
-    lv_obj_set_style_text_color(unit, lv_color_hex(0x6c8bb1), 0);
-    lv_obj_set_style_text_font(unit, &lv_font_montserrat_20, 0);
-    lv_obj_align(unit, LV_ALIGN_CENTER, 60, -10);
+    lv_obj_align(lbl_sog, LV_ALIGN_TOP_MID, -16, 18);
+
+    lv_obj_t *sog_unit = lv_label_create(q2);
+    lv_label_set_text(sog_unit, "kn");
+    lv_obj_set_style_text_color(sog_unit, lv_color_hex(0x6c8bb1), 0);
+    lv_obj_set_style_text_font(sog_unit, &lv_font_montserrat_20, 0);
+    lv_obj_align(sog_unit, LV_ALIGN_TOP_MID, 60, 38);
+
     lbl_cog = lv_label_create(q2);
     lv_label_set_text(lbl_cog, "COG ---°");
     lv_obj_set_style_text_color(lbl_cog, lv_color_hex(0xeaf2ff), 0);
     lv_obj_set_style_text_font(lbl_cog, &lv_font_montserrat_20, 0);
-    lv_obj_align(lbl_cog, LV_ALIGN_BOTTOM_MID, 0, 0);
+    lv_obj_align(lbl_cog, LV_ALIGN_TOP_LEFT, 0, 92);
+
+    lbl_hdg = lv_label_create(q2);
+    lv_label_set_text(lbl_hdg, "HDG ---°");
+    lv_obj_set_style_text_color(lbl_hdg, lv_color_hex(0xeaf2ff), 0);
+    lv_obj_set_style_text_font(lbl_hdg, &lv_font_montserrat_20, 0);
+    lv_obj_align(lbl_hdg, LV_ALIGN_TOP_LEFT, 0, 122);
+
+    lbl_pos = lv_label_create(q2);
+    lv_label_set_text(lbl_pos, "---.----\n---.----");
+    lv_obj_set_style_text_color(lbl_pos, lv_color_hex(0x9ec5fe), 0);
+    lv_obj_set_style_text_font(lbl_pos, &lv_font_montserrat_14, 0);
+    lv_obj_align(lbl_pos, LV_ALIGN_BOTTOM_LEFT, 0, 0);
 
     // Depth (bottom-left)
     lv_obj_t *q3 = make_quadrant(scr, 0, 1, "DEPTH / TEMP");
+    quadrants[2] = q3;
     lbl_depth = lv_label_create(q3);
     lv_label_set_text(lbl_depth, "--.-");
     lv_obj_set_style_text_color(lbl_depth, lv_color_hex(0xeaf2ff), 0);
@@ -253,23 +293,165 @@ static void build_ui(void) {
     lv_obj_set_style_text_font(lbl_temp, &lv_font_montserrat_20, 0);
     lv_obj_align(lbl_temp, LV_ALIGN_BOTTOM_MID, 0, 0);
 
-    // Status (bottom-right)
+    // Status (bottom-right) - device health
     lv_obj_t *q4 = make_quadrant(scr, 1, 1, "STATUS");
-    lbl_pos = lv_label_create(q4);
-    lv_label_set_text(lbl_pos, "pos ---.---");
-    lv_obj_set_style_text_color(lbl_pos, lv_color_hex(0xeaf2ff), 0);
-    lv_obj_set_style_text_font(lbl_pos, &lv_font_montserrat_14, 0);
-    lv_obj_align(lbl_pos, LV_ALIGN_TOP_LEFT, 0, 26);
+    quadrants[3] = q4;
+
     lbl_batt = lv_label_create(q4);
-    lv_label_set_text(lbl_batt, "batt --.- V");
+    lv_label_set_text(lbl_batt, "--.- V");
     lv_obj_set_style_text_color(lbl_batt, lv_color_hex(0xeaf2ff), 0);
-    lv_obj_set_style_text_font(lbl_batt, &lv_font_montserrat_20, 0);
-    lv_obj_align(lbl_batt, LV_ALIGN_CENTER, 0, 0);
+    lv_obj_set_style_text_font(lbl_batt, &lv_font_montserrat_28, 0);
+    lv_obj_align(lbl_batt, LV_ALIGN_TOP_MID, 0, 24);
+
+    lv_obj_t *batt_caption = lv_label_create(q4);
+    lv_label_set_text(batt_caption, "BATTERY");
+    lv_obj_set_style_text_color(batt_caption, lv_color_hex(0x6c8bb1), 0);
+    lv_obj_set_style_text_font(batt_caption, &lv_font_montserrat_14, 0);
+    lv_obj_align(batt_caption, LV_ALIGN_TOP_MID, 0, 64);
+
     lbl_status = lv_label_create(q4);
     lv_label_set_text(lbl_status, "sk: -");
-    lv_obj_set_style_text_color(lbl_status, lv_color_hex(0x6c8bb1), 0);
+    lv_obj_set_style_text_color(lbl_status, lv_color_hex(0xeaf2ff), 0);
     lv_obj_set_style_text_font(lbl_status, &lv_font_montserrat_14, 0);
-    lv_obj_align(lbl_status, LV_ALIGN_BOTTOM_LEFT, 0, 0);
+    lv_obj_align(lbl_status, LV_ALIGN_BOTTOM_LEFT, 0, -36);
+
+    lbl_ip = lv_label_create(q4);
+    lv_label_set_text(lbl_ip, "ip ---.---.---.---");
+    lv_obj_set_style_text_color(lbl_ip, lv_color_hex(0xeaf2ff), 0);
+    lv_obj_set_style_text_font(lbl_ip, &lv_font_montserrat_14, 0);
+    lv_obj_align(lbl_ip, LV_ALIGN_BOTTOM_LEFT, 0, -18);
+
+    lbl_rssi = lv_label_create(q4);
+    lv_label_set_text(lbl_rssi, "rssi --- dBm");
+    lv_obj_set_style_text_color(lbl_rssi, lv_color_hex(0xeaf2ff), 0);
+    lv_obj_set_style_text_font(lbl_rssi, &lv_font_montserrat_14, 0);
+    lv_obj_align(lbl_rssi, LV_ALIGN_BOTTOM_LEFT, 0, 0);
+}
+
+// --- demo mode + fps benchmark helpers ----------------------------------
+
+static const int GRID_X[4] = {0, 1, 0, 1};
+static const int GRID_Y[4] = {0, 0, 1, 1};
+
+// focused: -1 = grid, 0..3 = center that quadrant and hide the others.
+static void set_quadrant_focus(int focused) {
+    for (int i = 0; i < 4; ++i) {
+        if (focused < 0) {
+            lv_obj_set_pos(quadrants[i], GRID_X[i] * 240 + 4, GRID_Y[i] * 240 + 4);
+            lv_obj_clear_flag(quadrants[i], LV_OBJ_FLAG_HIDDEN);
+        } else if (focused == i) {
+            lv_obj_set_pos(quadrants[i], (LCD_W - 232) / 2, (LCD_H - 232) / 2);
+            lv_obj_clear_flag(quadrants[i], LV_OBJ_FLAG_HIDDEN);
+        } else {
+            lv_obj_add_flag(quadrants[i], LV_OBJ_FLAG_HIDDEN);
+        }
+    }
+}
+
+static void demo_tick(lv_timer_t *) {
+    // Cycle: q0 -> q1 -> q2 -> q3 -> grid -> q0 ...
+    g_demo_state = (g_demo_state + 1) % 5;
+    set_quadrant_focus(g_demo_state == 4 ? -1 : g_demo_state);
+}
+
+static void demo_start(uint32_t period_ms) {
+    g_demo_period_ms = period_ms ? period_ms : 3000;
+    if (!g_demo_badge) {
+        g_demo_badge = lv_label_create(lv_screen_active());
+        lv_label_set_text(g_demo_badge, " DEMO ");
+        lv_obj_set_style_bg_color(g_demo_badge, lv_color_hex(0xff4d6d), 0);
+        lv_obj_set_style_bg_opa(g_demo_badge, LV_OPA_COVER, 0);
+        lv_obj_set_style_text_color(g_demo_badge, lv_color_hex(0xffffff), 0);
+        lv_obj_set_style_text_font(g_demo_badge, &lv_font_montserrat_14, 0);
+        lv_obj_set_style_pad_all(g_demo_badge, 4, 0);
+        lv_obj_set_style_radius(g_demo_badge, 4, 0);
+    }
+    lv_obj_clear_flag(g_demo_badge, LV_OBJ_FLAG_HIDDEN);
+    lv_obj_align(g_demo_badge, LV_ALIGN_TOP_RIGHT, -6, 6);
+    if (g_demo_timer) lv_timer_del(g_demo_timer);
+    g_demo_state = -1;
+    g_demo_timer = lv_timer_create(demo_tick, g_demo_period_ms, NULL);
+    net::logf("[demo] started, %lu ms per step", (unsigned long)g_demo_period_ms);
+}
+
+static void demo_stop() {
+    if (g_demo_timer) {
+        lv_timer_del(g_demo_timer);
+        g_demo_timer = nullptr;
+    }
+    if (g_demo_badge) lv_obj_add_flag(g_demo_badge, LV_OBJ_FLAG_HIDDEN);
+    set_quadrant_focus(-1);
+    net::logf("[demo] stopped");
+}
+
+// 1 Hz FPS sampling
+static void fps_tick(lv_timer_t *) {
+    g_fps = (float)g_flush_count;
+    g_fps_peak_us = g_flush_us_peak;
+    g_fps_avg_us = g_flush_count ? (float)g_flush_us_total / g_flush_count : 0.0f;
+    g_flush_count = 0;
+    g_flush_us_total = 0;
+    g_flush_us_peak = 0;
+    if (g_fps_overlay && !lv_obj_has_flag(g_fps_overlay, LV_OBJ_FLAG_HIDDEN)) {
+        char buf[64];
+        snprintf(buf, sizeof(buf), "%.0f Hz  avg %.0fus  peak %luus", g_fps, g_fps_avg_us,
+                 (unsigned long)g_fps_peak_us);
+        lv_label_set_text(g_fps_overlay, buf);
+    }
+}
+
+static void fps_overlay_toggle() {
+    if (!g_fps_overlay) {
+        g_fps_overlay = lv_label_create(lv_screen_active());
+        lv_label_set_text(g_fps_overlay, "-- Hz");
+        lv_obj_set_style_bg_color(g_fps_overlay, lv_color_hex(0x000000), 0);
+        lv_obj_set_style_bg_opa(g_fps_overlay, LV_OPA_70, 0);
+        lv_obj_set_style_text_color(g_fps_overlay, lv_color_hex(0x33ff99), 0);
+        lv_obj_set_style_text_font(g_fps_overlay, &lv_font_montserrat_14, 0);
+        lv_obj_set_style_pad_all(g_fps_overlay, 4, 0);
+        lv_obj_set_style_radius(g_fps_overlay, 4, 0);
+        lv_obj_align(g_fps_overlay, LV_ALIGN_TOP_LEFT, 4, 4);
+        return;
+    }
+    if (lv_obj_has_flag(g_fps_overlay, LV_OBJ_FLAG_HIDDEN))
+        lv_obj_clear_flag(g_fps_overlay, LV_OBJ_FLAG_HIDDEN);
+    else
+        lv_obj_add_flag(g_fps_overlay, LV_OBJ_FLAG_HIDDEN);
+}
+
+static void bench_dump() {
+    size_t heap_free = esp_get_free_heap_size();
+    size_t psram_free = heap_caps_get_free_size(MALLOC_CAP_SPIRAM);
+    size_t psram_total = heap_caps_get_total_size(MALLOC_CAP_SPIRAM);
+    net::logf("[bench] fps=%.1f Hz", g_fps);
+    net::logf("[bench] flush avg=%.0f us  peak=%lu us", g_fps_avg_us, (unsigned long)g_fps_peak_us);
+    net::logf("[bench] heap free=%u KB", (unsigned)(heap_free / 1024));
+    net::logf("[bench] psram free=%u / %u KB", (unsigned)(psram_free / 1024),
+              (unsigned)(psram_total / 1024));
+    net::logf("[bench] sk: %s", sk::connectionStatus().c_str());
+}
+
+// Returns true if the line was consumed.
+static bool handleMainCommand(const String &line) {
+    if (line == "demo" || line.startsWith("demo ")) {
+        uint32_t period = 3000;
+        if (line.length() > 5) period = (uint32_t)line.substring(5).toInt() * 1000;
+        demo_start(period);
+        return true;
+    }
+    if (line == "demo-off" || line == "demo off") {
+        demo_stop();
+        return true;
+    }
+    if (line == "fps") {
+        fps_overlay_toggle();
+        return true;
+    }
+    if (line == "bench") {
+        bench_dump();
+        return true;
+    }
+    return false;
 }
 
 static void ui_refresh(lv_timer_t *) {
@@ -296,6 +478,16 @@ static void ui_refresh(lv_timer_t *) {
         snprintf(buf, sizeof(buf), "COG %.0f°", deg);
         lv_label_set_text(lbl_cog, buf);
     }
+    if (!isnan(d.headingTrue)) {
+        double deg = d.headingTrue * 180.0 / M_PI;
+        if (deg < 0) deg += 360;
+        snprintf(buf, sizeof(buf), "HDG %.0f°", deg);
+        lv_label_set_text(lbl_hdg, buf);
+    }
+    if (!isnan(d.lat) && !isnan(d.lon)) {
+        snprintf(buf, sizeof(buf), "%+.4f\n%+.4f", d.lat, d.lon);
+        lv_label_set_text(lbl_pos, buf);
+    }
     if (!isnan(d.depth)) {
         snprintf(buf, sizeof(buf), "%.1f", d.depth);
         lv_label_set_text(lbl_depth, buf);
@@ -304,16 +496,19 @@ static void ui_refresh(lv_timer_t *) {
         snprintf(buf, sizeof(buf), "water %.1f °C", d.waterTemp - 273.15);
         lv_label_set_text(lbl_temp, buf);
     }
-    if (!isnan(d.lat) && !isnan(d.lon)) {
-        snprintf(buf, sizeof(buf), "%+.4f\n%+.4f", d.lat, d.lon);
-        lv_label_set_text(lbl_pos, buf);
-    }
     if (!isnan(d.battVoltage)) {
-        snprintf(buf, sizeof(buf), "batt %.1f V", d.battVoltage);
+        snprintf(buf, sizeof(buf), "%.1f V", d.battVoltage);
         lv_label_set_text(lbl_batt, buf);
     }
     snprintf(buf, sizeof(buf), "sk: %s", sk::connectionStatus().c_str());
     lv_label_set_text(lbl_status, buf);
+    snprintf(buf, sizeof(buf), "ip %s", net::ipString().c_str());
+    lv_label_set_text(lbl_ip, buf);
+    int r = net::rssi();
+    if (r != 0) {
+        snprintf(buf, sizeof(buf), "rssi %d dBm", r);
+        lv_label_set_text(lbl_rssi, buf);
+    }
 }
 
 void setup() {
@@ -377,11 +572,15 @@ void setup() {
     net::setup();
     net::logf("[net] up - ip=%s", net::ipString().c_str());
 
-    // SignalK: default to laptop's hotspot IP. Override with: sk <host> [port]
-    sk::setup("10.179.64.84", 3000);
+    // SignalK: empty default - configure with 'sk <host> [port]' on Serial/BLE.
+    sk::setup("", 3000);
 
-    // Refresh UI labels at 5 Hz
+    // Refresh UI labels at 5 Hz; FPS sampling at 1 Hz.
     lv_timer_create(ui_refresh, 200, NULL);
+    lv_timer_create(fps_tick, 1000, NULL);
+
+    // Route demo / fps / bench commands through main when net+sk don't claim them.
+    net::setExtraCommandHandler(handleMainCommand);
 }
 
 static String serial_line;
@@ -392,8 +591,9 @@ static void pollSerialCommands() {
         if (c == '\n' || c == '\r') {
             serial_line.trim();
             if (serial_line.length()) {
-                if (!net::handleSerialCommand(serial_line)) {
-                    sk::handleSerialCommand(serial_line);
+                if (!net::handleSerialCommand(serial_line) &&
+                    !sk::handleSerialCommand(serial_line)) {
+                    handleMainCommand(serial_line);
                 }
             }
             serial_line = "";

@@ -17,5 +17,11 @@ bool handleSerialCommand(const String &line);
 
 bool wifiUp();
 String ipString();
+int rssi();
+
+// Optional extra command handler registered by main; called for lines net::
+// and sk:: didn't consume. Returns true if the line was handled.
+using ExtraCommandHandler = bool (*)(const String &line);
+void setExtraCommandHandler(ExtraCommandHandler h);
 
 }  // namespace net
