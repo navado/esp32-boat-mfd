@@ -25,11 +25,14 @@ personal, research, educational, and other noncommercial use.
 
 ## Features
 
-- **SignalK over WebSocket** — subscribes to navigation, wind, depth, water temperature, battery, and tank levels
-- **LVGL 9 dashboard** — 4-quadrant layout on 480×480 IPS, 5 Hz refresh
-- **WiFi provisioning** — STA mode with AP fallback for first-time setup, credentials persisted in NVS
+- **SignalK over WebSocket** — subscribes to navigation, wind, depth, water temp, battery, tanks, route, and autopilot state
+- **9 fullscreen screens** — Dashboard, Wind (compass rose + AWA/TWA arrows + tac sectors), Nav (huge SOG + DDM position), Depth (chart history + alarm bands), Steering (heading bug + CTS + XTE bar), Route (DTW/BTW/CTS/XTE/VMG/TTG/ETA), Autopilot (PUT to SignalK target/state), Trip (NVS-persisted distance/time/avg/max), System health
+- **Swipe navigation** — horizontal swipes cycle screens; bottom swipe jumps to Dashboard
+- **Day / night theme** — `theme day|night` console command, persisted in NVS
+- **On-screen WiFi setup** — touch-keyboard SSID scan + password entry, no cable needed
+- **MOB + alarms** — global overlays available from every screen
 - **Over-the-air updates** — ArduinoOTA on port 3232 (no USB cable for iteration)
-- **BLE diagnostics** — Nordic UART service for logs + console commands without WiFi
+- **BLE diagnostics + config** — Nordic UART service for logs + a structured Connection/Configuration GATT for companion apps
 - **Multi-target logging** — Serial / UDP broadcast / BLE notify, the same `logf()` writes to all three
 - **Host-portable parser** — SignalK delta logic builds and tests on macOS / Linux as well as the device
 - **CI + release automation** — GitHub Actions builds firmware on every push and attaches binaries to tagged releases
@@ -106,6 +109,13 @@ Send these over the serial monitor (`make monitor`) or BLE (`make ble`):
 | `sk <host> [port]` | Save SignalK server target and reboot |
 | `sk-status` | Print SignalK connection state + age of last delta |
 | `sk-dump` | Print currently-parsed values of every tracked field |
+| `screen <id\|next\|prev\|N>` | Switch screens (ids: dashboard wind nav depth steering route autopilot trip status wifi) |
+| `theme <day\|night>` | Switch palette (saved to NVS) |
+| `pos-format <ddm\|dd\|dms>` | Lat/lon formatting; ddm is marine default |
+| `trip-reset` | Zero trip distance / time / max-speed |
+| `mob` / `mob-clear` | Trigger / clear Man Overboard |
+| `demo [N]` / `demo-off` | Auto-cycle screens every N seconds |
+| `fps` / `bench` | Toggle FPS overlay / dump rendering stats |
 | `reboot` | Soft restart |
 
 ## BLE access

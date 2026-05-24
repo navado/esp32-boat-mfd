@@ -627,8 +627,71 @@ static bool handleMainCommand(const String &line) {
     return false;
 }
 
+// ----- breadcrumb (current screen indicator) -----------------------------
+// Small chip top-center: "Wind 2/9" plus a row of pips below.
+static lv_obj_t *bc_label = nullptr;
+static lv_obj_t *bc_pips = nullptr;
+
+void breadcrumb_build(lv_obj_t *scr) {
+    bc_label = lv_label_create(scr);
+    lv_label_set_text(bc_label, "");
+    lv_obj_set_style_text_font(bc_label, &lv_font_montserrat_14, 0);
+    lv_obj_set_style_text_color(bc_label, lv_color_hex(ui::theme.fg), 0);
+    lv_obj_set_style_bg_color(bc_label, lv_color_hex(0x000000), 0);
+    lv_obj_set_style_bg_opa(bc_label, LV_OPA_50, 0);
+    lv_obj_set_style_pad_hor(bc_label, 8, 0);
+    lv_obj_set_style_pad_ver(bc_label, 2, 0);
+    lv_obj_set_style_radius(bc_label, 8, 0);
+    lv_obj_align(bc_label, LV_ALIGN_TOP_MID, 0, 2);
+
+    bc_pips = lv_obj_create(scr);
+    lv_obj_set_size(bc_pips, 200, 8);
+    lv_obj_align(bc_pips, LV_ALIGN_TOP_MID, 0, 24);
+    lv_obj_set_style_bg_opa(bc_pips, LV_OPA_TRANSP, 0);
+    lv_obj_set_style_border_width(bc_pips, 0, 0);
+    lv_obj_set_style_pad_all(bc_pips, 0, 0);
+    lv_obj_clear_flag(bc_pips, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_clear_flag(bc_pips, LV_OBJ_FLAG_CLICKABLE);
+    lv_obj_set_flex_flow(bc_pips, LV_FLEX_FLOW_ROW);
+    lv_obj_set_style_pad_gap(bc_pips, 4, 0);
+    lv_obj_set_flex_align(bc_pips, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
+}
+
+static void breadcrumb_refresh() {
+    if (!bc_label) return;
+    // Build the dot strip lazily: visible screens get a pip, current one is brighter.
+    static int last_index = -2;
+    static size_t last_count = 0;
+    int idx = ui::current_index();
+    size_t cnt = ui::screen_count();
+    if (idx == last_index && cnt == last_count) return;  // unchanged
+    last_index = idx;
+    last_count = cnt;
+
+    char buf[32];
+    snprintf(buf, sizeof(buf), "%s  %d/%u", ui::current_title(), idx + 1, (unsigned)cnt);
+    lv_label_set_text(bc_label, buf);
+
+    lv_obj_clean(bc_pips);
+    for (size_t i = 0; i < cnt; ++i) {
+        if (ui::is_hidden(i) && (int)i != idx) continue;
+        lv_obj_t *p = lv_obj_create(bc_pips);
+        lv_obj_set_size(p, 8, 8);
+        bool active = ((int)i == idx);
+        lv_obj_set_style_bg_color(
+            p, lv_color_hex(active ? ui::theme.accent : ui::theme.fg_dim), 0);
+        lv_obj_set_style_bg_opa(p, active ? LV_OPA_COVER : LV_OPA_50, 0);
+        lv_obj_set_style_border_width(p, 0, 0);
+        lv_obj_set_style_radius(p, 4, 0);
+        lv_obj_set_style_pad_all(p, 0, 0);
+        lv_obj_clear_flag(p, LV_OBJ_FLAG_SCROLLABLE);
+        lv_obj_clear_flag(p, LV_OBJ_FLAG_CLICKABLE);
+    }
+}
+
 static void ui_refresh(lv_timer_t *) {
     ui::refresh_current();
+    breadcrumb_refresh();
     mob_refresh();
     alarm_check();
 }
@@ -700,20 +763,33 @@ void setup() {
     lv_obj_clear_flag(scr, LV_OBJ_FLAG_SCROLLABLE);
     lv_obj_add_event_cb(scr, screen_gesture_handler, LV_EVENT_GESTURE, NULL);
 
-    ui::register_screen({"dashboard", "Dashboard",  ui::dashboard::build(scr),     ui::dashboard::refresh});
-    ui::register_screen({"wind",      "Wind",       ui::wind::build(scr),          ui::wind::refresh});
-    ui::register_screen({"nav",       "Nav",        ui::nav::build(scr),           ui::nav::refresh});
-    ui::register_screen({"depth",     "Depth",      ui::depth::build(scr),         ui::depth::refresh});
-    ui::register_screen({"steering",  "Steering",   ui::steering::build(scr),      ui::steering::refresh});
-    ui::register_screen({"route",     "Route",      ui::route::build(scr),         ui::route::refresh});
-    ui::register_screen({"autopilot", "Autopilot",  ui::autopilot::build(scr),     ui::autopilot::refresh});
-    ui::register_screen({"trip",      "Trip",       ui::trip::build(scr),          ui::trip::refresh});
-    ui::register_screen({"status",    "System",     ui::status_panel::build(scr),  ui::status_panel::refresh});
-    ui::register_screen({"wifi",      "WiFi Setup", ui::wifi_setup::build(scr),    ui::wifi_setup::refresh});
+    ui::register_screen({"dashboard", "Dashboard",  ui::dashboard::build(scr),     ui::dashboard::refresh,    false});
+    ui::register_screen({"wind",      "Wind",       ui::wind::build(scr),          ui::wind::refresh,         false});
+    ui::register_screen({"nav",       "Nav",        ui::nav::build(scr),           ui::nav::refresh,          false});
+    ui::register_screen({"depth",     "Depth",      ui::depth::build(scr),         ui::depth::refresh,        false});
+    ui::register_screen({"steering",  "Steering",   ui::steering::build(scr),      ui::steering::refresh,     false});
+    ui::register_screen({"route",     "Route",      ui::route::build(scr),         ui::route::refresh,        false});
+    ui::register_screen({"autopilot", "Autopilot",  ui::autopilot::build(scr),     ui::autopilot::refresh,    false});
+    ui::register_screen({"trip",      "Trip",       ui::trip::build(scr),          ui::trip::refresh,         false});
+    ui::register_screen({"status",    "System",     ui::status_panel::build(scr),  ui::status_panel::refresh, false});
+    // WiFi setup is hidden from the swipe cycle - open with `screen wifi` from
+    // console / BLE, or open automatically when not connected (below).
+    ui::register_screen({"wifi",      "WiFi Setup", ui::wifi_setup::build(scr),    ui::wifi_setup::refresh,   true});
 
     // Global overlays after screens so they render on top
     mob_build(scr);
     alarms_build(scr);
+
+    // Breadcrumb chip top-center: "Wind 2/9" + a pip strip below.
+    // Lives on lv_screen_active() above all screens so it follows view changes.
+    breadcrumb_build(scr);
+
+    // Auto-open WiFi setup when we booted into AP mode (no saved creds or
+    // STA connect failed). User can still swipe past it - it's just the
+    // friendlier first impression.
+    if (!net::wifiUp()) {
+        ui::show_by_id("wifi");
+    }
 
     digitalWrite(LCD_BL, HIGH);
     Serial.println("[boot] ready");

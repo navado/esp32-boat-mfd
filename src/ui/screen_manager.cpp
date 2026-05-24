@@ -48,19 +48,38 @@ bool show_by_id(const char *id) {
     return false;
 }
 
+// Cycle forward to the next non-hidden screen.
 void next() {
     if (s_count == 0) return;
-    show((s_index + 1) % (int)s_count);
+    for (int step = 1; step <= (int)s_count; ++step) {
+        int idx = (s_index + step) % (int)s_count;
+        if (!s_screens[idx].hidden) {
+            show(idx);
+            return;
+        }
+    }
 }
 
+// Cycle backward to the previous non-hidden screen.
 void prev() {
     if (s_count == 0) return;
-    show((s_index + (int)s_count - 1) % (int)s_count);
+    for (int step = 1; step <= (int)s_count; ++step) {
+        int idx = (s_index + (int)s_count - step) % (int)s_count;
+        if (!s_screens[idx].hidden) {
+            show(idx);
+            return;
+        }
+    }
 }
 
 int current_index() { return s_index; }
 const char *current_id() { return s_count == 0 ? "" : s_screens[s_index].id; }
+const char *current_title() { return s_count == 0 ? "" : s_screens[s_index].title; }
 size_t screen_count() { return s_count; }
+bool is_hidden(int index) {
+    if (index < 0 || index >= (int)s_count) return true;
+    return s_screens[index].hidden;
+}
 
 void refresh_current() {
     if (s_count == 0) return;
