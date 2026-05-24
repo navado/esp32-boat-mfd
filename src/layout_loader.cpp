@@ -42,23 +42,44 @@ static const char *DEFAULT_LAYOUT_JSON =
     "]"
     "}";
 
-static Config s_current;
+// Config is ~34 KB. Putting it in internal SRAM starves the BLE controller
+// (which silently hangs during AP+BLE setup). Allocate in PSRAM instead.
+static Config *s_current = nullptr;
 static bool s_loaded = false;
 
+static bool ensure_alloc() {
+    if (s_current) return true;
+    s_current = (Config *)heap_caps_calloc(1, sizeof(Config), MALLOC_CAP_SPIRAM);
+    if (!s_current) {
+        net::logf("[layout] PSRAM alloc failed (%u bytes)", (unsigned)sizeof(Config));
+        return false;
+    }
+    return true;
+}
+
 bool load_default() {
-    int rc = parse(DEFAULT_LAYOUT_JSON, strlen(DEFAULT_LAYOUT_JSON), s_current);
+    if (!ensure_alloc()) return false;
+    int rc = parse(DEFAULT_LAYOUT_JSON, strlen(DEFAULT_LAYOUT_JSON), *s_current);
     if (rc != 0) {
         net::logf("[layout] default parse FAILED (rc=%d)", rc);
         return false;
     }
     s_loaded = true;
-    net::logf("[layout] default loaded: %u screens, %u alarms", (unsigned)s_current.screen_count,
-              (unsigned)s_current.alarm_count);
+    net::logf("[layout] default loaded: %u screens, %u alarms", (unsigned)s_current->screen_count,
+              (unsigned)s_current->alarm_count);
     return true;
 }
 
+// Returns the live config. Caller MUST call load_default() first.
+// If PSRAM alloc failed, this returns *nullptr - intentional, because if
+// PSRAM is broken there is no useful fallback. Callers should check
+// loaded() before using.
 const Config &current() {
-    return s_current;
+    return *s_current;
+}
+
+bool loaded() {
+    return s_loaded;
 }
 
 static const char *screen_type_name(ScreenType t) {
@@ -104,10 +125,11 @@ void show_summary() {
         net::logf("[layout] not loaded");
         return;
     }
-    net::logf("[layout] version=%d default=%s demo=%lums", s_current.version,
-              s_current.settings.default_screen, (unsigned long)s_current.settings.demo_period_ms);
-    for (size_t i = 0; i < s_current.screen_count; ++i) {
-        const Screen &s = s_current.screens[i];
+    net::logf("[layout] version=%d default=%s demo=%lums", s_current->version,
+              s_current->settings.default_screen,
+              (unsigned long)s_current->settings.demo_period_ms);
+    for (size_t i = 0; i < s_current->screen_count; ++i) {
+        const Screen &s = s_current->screens[i];
         net::logf("[layout] screen %u id=%s type=%s tiles=%u", (unsigned)i, s.id,
                   screen_type_name(s.type), (unsigned)s.tile_count);
         for (size_t j = 0; j < s.tile_count; ++j) {
@@ -116,8 +138,8 @@ void show_summary() {
                       tile_type_name(t.type), (unsigned)t.path_count);
         }
     }
-    for (size_t i = 0; i < s_current.alarm_count; ++i) {
-        const AlarmRule &a = s_current.alarms[i];
+    for (size_t i = 0; i < s_current->alarm_count; ++i) {
+        const AlarmRule &a = s_current->alarms[i];
         net::logf("[layout] alarm %s path=%s lt=%g msg=%s", a.id, a.path, a.has_lt ? a.lt : 0.0,
                   a.message);
     }
