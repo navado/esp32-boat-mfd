@@ -125,69 +125,112 @@ static void disp_flush_cb(lv_display_t *d, const lv_area_t *area, uint8_t *px_ma
     if (dt > g_flush_us_peak) g_flush_us_peak = dt;
 }
 
-static void touch_read_cb(lv_indev_t *indev, lv_indev_data_t *data) {
-    static lv_indev_state_t last_state = LV_INDEV_STATE_RELEASED;
-    static int16_t last_x = -1, last_y = -1;
+// ----- Touch task --------------------------------------------------------
+// I2C reads from the LVGL indev callback could stall the render task. Move
+// polling to a dedicated FreeRTOS task on core 0 (LVGL stays on core 1).
+// The task posts the latest point into a shared snapshot guarded by a
+// mutex; the indev callback just copies the snapshot - never touches I2C.
+// 16 ms poll period = ~60 Hz sample rate, matches the panel refresh.
 
-    if (!touch_present) {
-        data->state = LV_INDEV_STATE_RELEASED;
-        return;
-    }
+struct TouchSnapshot {
+    int16_t x;
+    int16_t y;
+    bool pressed;
+    uint32_t last_ms;
+};
+static TouchSnapshot g_touch = {-1, -1, false, 0};
+static SemaphoreHandle_t g_touch_mtx = nullptr;
+static TaskHandle_t g_touch_task = nullptr;
+
+static bool gt911_read_once(int16_t *out_x, int16_t *out_y) {
     Wire.beginTransmission(0x5D);
     Wire.write(0x81);
     Wire.write(0x4E);
-    if (Wire.endTransmission(false) != 0) {
-        data->state = LV_INDEV_STATE_RELEASED;
-        return;
-    }
+    if (Wire.endTransmission(false) != 0) return false;
     Wire.requestFrom(0x5D, 1);
-    if (!Wire.available()) {
-        data->state = LV_INDEV_STATE_RELEASED;
-        return;
-    }
+    if (!Wire.available()) return false;
     uint8_t status = Wire.read();
-    uint8_t pts = status & 0x0F;
-    if ((status & 0x80) && pts > 0) {
+    bool has_point = (status & 0x80) && ((status & 0x0F) > 0);
+
+    if (has_point) {
         Wire.beginTransmission(0x5D);
         Wire.write(0x81);
         Wire.write(0x50);
         Wire.endTransmission(false);
         Wire.requestFrom(0x5D, 6);
         if (Wire.available() >= 6) {
-            (void)Wire.read();
-            // Empirically verified: GT911 on this Sunton 4848S040 panel
-            // returns coord bytes high-byte-first (big-endian) within each
-            // 16-bit field, contrary to most GT911 references.
+            (void)Wire.read();  // track id
+            // GT911 on this panel returns coords high-byte-first within
+            // each 16-bit field (empirically verified).
             uint8_t xh = Wire.read();
             uint8_t xl = Wire.read();
             uint8_t yh = Wire.read();
             uint8_t yl = Wire.read();
-            uint16_t x = ((uint16_t)xh << 8) | xl;
-            uint16_t y = ((uint16_t)yh << 8) | yl;
-            data->point.x = x;
-            data->point.y = y;
-            data->state = LV_INDEV_STATE_PRESSED;
-            if (last_state == LV_INDEV_STATE_RELEASED || abs((int)x - last_x) > 20 ||
-                abs((int)y - last_y) > 20) {
-                net::logf("[touch] DOWN raw=(%d,%d) pts=%d", x, y, pts);
-                last_x = x;
-                last_y = y;
-            }
+            *out_x = (int16_t)(((uint16_t)xh << 8) | xl);
+            *out_y = (int16_t)(((uint16_t)yh << 8) | yl);
         } else {
-            data->state = LV_INDEV_STATE_RELEASED;
+            has_point = false;
         }
-    } else {
-        data->state = LV_INDEV_STATE_RELEASED;
     }
-    if (last_state == LV_INDEV_STATE_PRESSED && data->state == LV_INDEV_STATE_RELEASED) {
-        net::logf("[touch] UP   raw=(%d,%d)", last_x, last_y);
-    }
-    last_state = data->state;
+    // Always clear status register so next sample fires
     Wire.beginTransmission(0x5D);
     Wire.write(0x81);
     Wire.write(0x4E);
     Wire.write(0x00);
     Wire.endTransmission();
+    return has_point;
+}
+
+static void touch_task(void *) {
+    int16_t last_logged_x = -1, last_logged_y = -1;
+    bool last_state = false;
+    for (;;) {
+        if (touch_present) {
+            int16_t x = -1, y = -1;
+            bool pressed = gt911_read_once(&x, &y);
+            if (xSemaphoreTake(g_touch_mtx, pdMS_TO_TICKS(2))) {
+                g_touch.pressed = pressed;
+                if (pressed) {
+                    g_touch.x = x;
+                    g_touch.y = y;
+                }
+                g_touch.last_ms = millis();
+                xSemaphoreGive(g_touch_mtx);
+            }
+            // Coarse-grained logging so user can see in BLE/UDP that taps
+            // are landing on the IC. Throttled to changes.
+            if (pressed && (!last_state || abs(x - last_logged_x) > 20 ||
+                            abs(y - last_logged_y) > 20)) {
+                net::logf("[touch] DOWN raw=(%d,%d)", x, y);
+                last_logged_x = x;
+                last_logged_y = y;
+            }
+            if (!pressed && last_state) {
+                net::logf("[touch] UP   raw=(%d,%d)", last_logged_x, last_logged_y);
+            }
+            last_state = pressed;
+        }
+        vTaskDelay(pdMS_TO_TICKS(16));  // ~60 Hz
+    }
+}
+
+static void touch_read_cb(lv_indev_t *indev, lv_indev_data_t *data) {
+    if (!touch_present) {
+        data->state = LV_INDEV_STATE_RELEASED;
+        return;
+    }
+    TouchSnapshot snap = {0, 0, false, 0};
+    if (g_touch_mtx && xSemaphoreTake(g_touch_mtx, pdMS_TO_TICKS(1))) {
+        snap = g_touch;
+        xSemaphoreGive(g_touch_mtx);
+    }
+    if (snap.pressed && snap.x >= 0 && snap.y >= 0) {
+        data->point.x = snap.x;
+        data->point.y = snap.y;
+        data->state = LV_INDEV_STATE_PRESSED;
+    } else {
+        data->state = LV_INDEV_STATE_RELEASED;
+    }
 }
 
 static uint32_t lv_tick_cb(void) { return millis(); }
@@ -764,6 +807,14 @@ void setup() {
     }
     Serial.printf("[touch] GT911 probe: %s\n", ok ? "ACK" : "no response");
     touch_present = ok;
+
+    // Start the dedicated touch polling task on core 0 (LVGL stays on
+    // core 1). I2C reads in the LVGL indev callback were stalling render
+    // ticks; the task decouples them.
+    g_touch_mtx = xSemaphoreCreateMutex();
+    if (touch_present && g_touch_mtx) {
+        xTaskCreatePinnedToCore(touch_task, "touch", 4096, nullptr, 2, &g_touch_task, 0);
+    }
 
     lv_init();
     lv_tick_set_cb(lv_tick_cb);
