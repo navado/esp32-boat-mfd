@@ -24,6 +24,21 @@ static bool ota_started = false;
 static bool ap_mode = false;
 static ExtraCommandHandler s_extra = nullptr;
 static String s_device_id;
+static volatile WifiState s_wifi_state = WifiState::Idle;
+static TaskHandle_t s_wifi_task = nullptr;
+
+WifiState wifiState() { return s_wifi_state; }
+
+const char *wifiStateName() {
+    switch (s_wifi_state) {
+    case WifiState::Idle: return "idle";
+    case WifiState::Connecting: return "connecting";
+    case WifiState::StaUp: return "sta";
+    case WifiState::ApSetup: return "ap";
+    case WifiState::Failed: return "failed";
+    }
+    return "?";
+}
 
 const String &deviceId() {
     return s_device_id;
@@ -177,7 +192,18 @@ static void start_ap_mode() {
     Serial.printf("[wifi] connected stations: %d\n", WiFi.softAPgetStationNum());
 }
 
-static void wifiStart() {
+// Tell the UI to open the WiFi setup screen (used when we fall into AP
+// mode). Posted via the app event queue so the UI task does the LVGL
+// work. Safe to call from this manager task.
+static void post_show_wifi_screen() {
+    app::Command cmd;
+    cmd.type = app::CommandType::ShowScreen;
+    strncpy(cmd.a, "wifi", sizeof(cmd.a) - 1);
+    app::post(cmd, 200);
+}
+
+static void wifi_manager_task(void *) {
+    s_wifi_state = WifiState::Connecting;
     wifi_store::load();
     wifi_store::migrate_legacy_if_any();
 
@@ -185,6 +211,9 @@ static void wifiStart() {
         Serial.println("[wifi] no saved networks, AP-only");
         start_ap_mode();
         udp.begin(UDP_LOG_PORT);
+        s_wifi_state = WifiState::ApSetup;
+        post_show_wifi_screen();
+        vTaskDelete(NULL);
         return;
     }
 
@@ -211,19 +240,30 @@ static void wifiStart() {
             Serial.printf("[mdns] %s.local\n", s_device_id.c_str());
         }
         otaSetup();
+        udp.begin(UDP_LOG_PORT);
+        s_wifi_state = WifiState::StaUp;
     } else {
         Serial.println("[wifi] all saved networks failed, fallback to AP");
         start_ap_mode();
+        udp.begin(UDP_LOG_PORT);
+        s_wifi_state = WifiState::ApSetup;
+        post_show_wifi_screen();
     }
-    udp.begin(UDP_LOG_PORT);
+    vTaskDelete(NULL);
 }
 
 void setup() {
     prefs.begin("net", false);
     s_device_id = prefs.getString("device_id", OTA_HOSTNAME);
     Serial.printf("[net] device id: %s\n", s_device_id.c_str());
-    wifiStart();
+    // BLE is independent of WiFi - bring it up immediately so the BLE
+    // console is responsive even if the WiFi manager is still trying.
     bleSetup();
+    // WiFi join attempts run on their own task (Phase 4). With multiple
+    // saved networks and 10 s per try this could be 30+ seconds blocking
+    // the main loop; making it async lets the UI render immediately.
+    xTaskCreatePinnedToCore(wifi_manager_task, "wifi-mgr", 6144, nullptr, 1,
+                            &s_wifi_task, 0);
 }
 
 bool dispatchCommand(const String &line) {

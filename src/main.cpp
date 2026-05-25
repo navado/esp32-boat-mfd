@@ -552,7 +552,8 @@ static void bench_dump() {
     net::logf("[bench] queues ui=%u (hi=%lu)  net=%u (hi=%lu)",
               (unsigned)app::ui_queue_depth(), (unsigned long)app::ui_high_water(),
               (unsigned)app::net_queue_depth(), (unsigned long)app::net_high_water());
-    net::logf("[bench] sk: %s", sk::connectionStatus().c_str());
+    net::logf("[bench] wifi: %s  sk: %s", net::wifiStateName(),
+              sk::connectionStatus().c_str());
     // Reset peak counters so next bench shows recent activity.
     g_loop_max_us = 0;
     g_lvgl_max_us = 0;
@@ -911,20 +912,14 @@ void setup() {
     }
     Serial.println("[boot] ready");
 
-    net::setup();
-    net::logf("[net] up - ip=%s", net::ipString().c_str());
-    screenshot::setup();
+    // App event queue must exist before any task that wants to post.
     app::setup();
+    screenshot::setup();
+    // net::setup() returns immediately now (Phase 4). The wifi manager
+    // task posts ShowScreen("wifi") when it falls into AP mode; otherwise
+    // we stay on the already-loaded dashboard.
+    net::setup();
     web::setup();
-
-    // Choose the boot screen based on whether the radio is actually up.
-    // STA -> dashboard (already loaded by register_screen anyway). AP ->
-    // wifi setup so the QR / SSID is the first thing the user sees.
-    if (net::wifiUp()) {
-        ui::show_by_id("dashboard");
-    } else {
-        ui::show_by_id("wifi");
-    }
 
     layout::load_default();
     sk::setup("", 3000);

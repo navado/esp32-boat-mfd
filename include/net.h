@@ -19,6 +19,18 @@ bool wifiUp();
 String ipString();
 int rssi();
 
+// WiFi manager state. Set by the async wifi_manager_task; readable from
+// any task.
+enum class WifiState : uint8_t {
+    Idle,        // setup() not yet called
+    Connecting,  // trying saved networks
+    StaUp,       // STA joined, mDNS / OTA up
+    ApSetup,     // STA failed (or no creds) - AP fallback active
+    Failed,      // unrecoverable
+};
+WifiState wifiState();
+const char *wifiStateName();
+
 // Persist WiFi credentials (NVS) and reboot. Pass empty `pass` for open
 // networks. SSIDs with spaces are fine - this is the path callers should
 // use when they already have the ssid/pass split (e.g. JSON over BLE / web).

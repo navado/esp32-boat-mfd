@@ -79,6 +79,7 @@ static void handle_state() {
     JsonObject wifi = doc["wifi"].to<JsonObject>();
     wifi["up"] = net::wifiUp();
     wifi["mode"] = net::wifiUp() ? "STA" : "AP";
+    wifi["state"] = net::wifiStateName();
     wifi["ssid"] = WiFi.SSID();
     wifi["ip"] = net::ipString();
     wifi["rssi"] = net::rssi();
