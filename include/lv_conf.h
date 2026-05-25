@@ -5,9 +5,15 @@
 #define LV_COLOR_DEPTH 16
 #define LV_COLOR_16_SWAP 0
 
-#define LV_USE_STDLIB_MALLOC    LV_STDLIB_BUILTIN
+// PSRAM-backed allocators. lv_malloc/free/realloc -> heap_caps_*(SPIRAM)
+// via src/lvgl_alloc.cpp. Frees the entire 8 MB PSRAM pool for LVGL,
+// removing the LV_MEM_SIZE ceiling. lv_qrcode, lv_canvas, lv_snapshot all
+// now have room to allocate big pixmaps.
+#define LV_USE_STDLIB_MALLOC    LV_STDLIB_CUSTOM
 #define LV_USE_STDLIB_STRING    LV_STDLIB_BUILTIN
 #define LV_USE_STDLIB_SPRINTF   LV_STDLIB_BUILTIN
+// Ignored when STDLIB_MALLOC == CUSTOM, but some LVGL paths still reference
+// it for sanity defaults.
 #define LV_MEM_SIZE (96U * 1024U)
 
 #define LV_DEF_REFR_PERIOD  16
@@ -55,13 +61,8 @@
 #define LV_USE_SPINNER     0
 #define LV_USE_LED         0
 #define LV_USE_ANIMIMG     0
-// Canvas/snapshot disabled along with qrcode - both allocate large pixel
-// buffers from the LVGL pool.
-#define LV_USE_CANVAS      0
-// QR is disabled for now - lv_qrcode allocates a full-size canvas (240*240*
-// 2 = 115 kB at 16bpp) which exceeds LV_MEM_SIZE and crashes the renderer.
-// Re-enable once we move LVGL pool to PSRAM.
-#define LV_USE_QRCODE      0
+#define LV_USE_CANVAS      1
+#define LV_USE_QRCODE      1
 #define LV_USE_BARCODE     0
 
 // Themes
@@ -86,6 +87,7 @@
 #define LV_USE_OUTLINE   1
 #define LV_USE_BLEND_MODES 1
 
-// Snapshot disabled - it depends on canvas (which we disabled) and the
-// screenshot endpoint isn't safe from the web task anyway.
-#define LV_USE_SNAPSHOT 0
+// Snapshot enabled (used by /api/screenshot.bmp). The web task still
+// can't call it directly until we marshal via a queue; for now it returns
+// 503, but enabling here so we don't have to rebuild lvgl to flip it.
+#define LV_USE_SNAPSHOT 1
