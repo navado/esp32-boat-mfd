@@ -14,6 +14,7 @@
 #include "web.h"
 #include "screenshot.h"
 #include "app_events.h"
+#include "touch_cal.h"
 
 #include <Preferences.h>
 #include <math.h>
@@ -139,8 +140,10 @@ struct TouchSnapshot {
     int16_t y;
     bool pressed;
     uint32_t last_ms;
+    int16_t raw_x;  // pre-calibration, for the calibration screen
+    int16_t raw_y;
 };
-static TouchSnapshot g_touch = {-1, -1, false, 0};
+static TouchSnapshot g_touch = {-1, -1, false, 0, -1, -1};
 static SemaphoreHandle_t g_touch_mtx = nullptr;
 static TaskHandle_t g_touch_task = nullptr;
 
@@ -308,13 +311,21 @@ static void touch_task(void *) {
     uint32_t down_ms = 0;
     for (;;) {
         if (touch_present) {
-            int16_t x = -1, y = -1;
-            bool pressed = gt911_read_once(&x, &y);
+            int16_t raw_x = -1, raw_y = -1;
+            bool pressed = gt911_read_once(&raw_x, &raw_y);
+            int16_t x = raw_x, y = raw_y;
+            if (pressed) {
+                // Apply user calibration. Identity until user runs the
+                // calibration screen, so this is a no-op out of the box.
+                touch_cal::apply(&x, &y);
+            }
             if (xSemaphoreTake(g_touch_mtx, pdMS_TO_TICKS(2))) {
                 g_touch.pressed = pressed;
                 if (pressed) {
                     g_touch.x = x;
                     g_touch.y = y;
+                    g_touch.raw_x = raw_x;
+                    g_touch.raw_y = raw_y;
                 }
                 g_touch.last_ms = millis();
                 xSemaphoreGive(g_touch_mtx);
@@ -323,7 +334,8 @@ static void touch_task(void *) {
             // are landing on the IC. Throttled to changes.
             if (pressed && (!last_state || abs(x - last_logged_x) > 20 ||
                             abs(y - last_logged_y) > 20)) {
-                net::logf("[touch] DOWN raw=(%d,%d)", x, y);
+                net::logf("[touch] DOWN raw=(%d,%d) cal=(%d,%d)",
+                          raw_x, raw_y, x, y);
                 last_logged_x = x;
                 last_logged_y = y;
             }
@@ -382,8 +394,6 @@ enum AlarmId { ALARM_NONE = 0, ALARM_DEPTH_SHALLOW, ALARM_SK_STALLED, ALARM_BATT
 static AlarmId g_alarm = ALARM_NONE;
 static lv_obj_t *alarm_banner = nullptr;
 static lv_obj_t *alarm_label = nullptr;
-static const double ALARM_DEPTH_M = 3.0;
-static const double ALARM_BATT_V = 11.5;
 
 // FPS overlay
 static lv_obj_t *g_fps_overlay = nullptr;
@@ -579,7 +589,7 @@ static void alarm_set(AlarmId id, const char *msg) {
 }
 
 static void alarm_check() {
-    if (!isnan(sk::data.depth) && sk::data.depth > 0 && sk::data.depth < ALARM_DEPTH_M) {
+    if (!isnan(sk::data.depth) && sk::data.depth > 0 && sk::data.depth < ui::depth_alarm_m()) {
         alarm_set(ALARM_DEPTH_SHALLOW, "SHALLOW WATER");
         return;
     }
@@ -587,7 +597,7 @@ static void alarm_check() {
         alarm_set(ALARM_SK_STALLED, "SIGNALK STALLED");
         return;
     }
-    if (!isnan(sk::data.battVoltage) && sk::data.battVoltage < ALARM_BATT_V) {
+    if (!isnan(sk::data.battVoltage) && sk::data.battVoltage < ui::battery_alarm_v()) {
         alarm_set(ALARM_BATT_LOW, "BATTERY LOW");
         return;
     }
@@ -726,7 +736,7 @@ uint32_t main_gesture_count() { return g_gesture_count; }
 uint32_t main_gesture_suppressed() { return g_gesture_suppressed; }
 const char *main_last_gesture() { return g_last_gesture; }
 void main_touch_state(int *x, int *y, int *pressed, uint32_t *last_ms) {
-    TouchSnapshot snap = {-1, -1, false, 0};
+    TouchSnapshot snap = {-1, -1, false, 0, -1, -1};
     if (g_touch_mtx && xSemaphoreTake(g_touch_mtx, pdMS_TO_TICKS(2))) {
         snap = g_touch;
         xSemaphoreGive(g_touch_mtx);
@@ -735,6 +745,17 @@ void main_touch_state(int *x, int *y, int *pressed, uint32_t *last_ms) {
     if (y) *y = snap.y;
     if (pressed) *pressed = snap.pressed ? 1 : 0;
     if (last_ms) *last_ms = snap.last_ms;
+}
+// Raw (pre-calibration) coords for the calibration screen.
+void main_touch_raw(int *raw_x, int *raw_y, int *pressed) {
+    TouchSnapshot snap = {-1, -1, false, 0, -1, -1};
+    if (g_touch_mtx && xSemaphoreTake(g_touch_mtx, pdMS_TO_TICKS(2))) {
+        snap = g_touch;
+        xSemaphoreGive(g_touch_mtx);
+    }
+    if (raw_x) *raw_x = snap.raw_x;
+    if (raw_y) *raw_y = snap.raw_y;
+    if (pressed) *pressed = snap.pressed ? 1 : 0;
 }
 }
 
@@ -816,6 +837,19 @@ static bool handleMainCommand(const String &line) {
         bench_dump();
         return true;
     }
+    if (line == "touch-cal" || line == "calibrate") {
+        ui::show_by_id("touch_cal");
+        return true;
+    }
+    if (line == "touch-cal-reset") {
+        // Restore identity matrix (clear NVS keys).
+        Preferences p;
+        p.begin("touch_cal", false);
+        p.clear();
+        p.end();
+        net::logf("[cal] reset to identity (reboot to take effect)");
+        return true;
+    }
     if (line == "wind-refresh" || line.startsWith("wind-refresh ")) {
         String v = line.length() > 13 ? line.substring(13) : String();
         v.trim();
@@ -894,24 +928,32 @@ static bool handleMainCommand(const String &line) {
         ui::trip::reset();
         return true;
     }
+    if (line == "thresholds") {
+        net::logf("threshold depth=%.1fm battery=%.1fV", ui::depth_alarm_m(),
+                  ui::battery_alarm_v());
+        return true;
+    }
+    if (line.startsWith("threshold depth ")) {
+        double value = line.substring(16).toDouble();
+        ui::set_depth_alarm_m(value);
+        net::logf("threshold depth -> %.1fm", ui::depth_alarm_m());
+        return true;
+    }
+    if (line.startsWith("threshold battery ")) {
+        double value = line.substring(18).toDouble();
+        ui::set_battery_alarm_v(value);
+        net::logf("threshold battery -> %.1fV", ui::battery_alarm_v());
+        return true;
+    }
     if (line == "bright" || line.startsWith("bright ")) {
         if (line == "bright") {
-            Preferences p;
-            p.begin("ui", true);
-            uint8_t b = p.getUChar("bright", 200);
-            p.end();
+            uint8_t b = ui::brightness();
             net::logf("brightness = %u/255", (unsigned)b);
             return true;
         }
         int b = line.substring(7).toInt();
-        if (b < 0) b = 0;
-        if (b > 255) b = 255;
-        ledcWrite(0, b);
-        Preferences p;
-        p.begin("ui", false);
-        p.putUChar("bright", (uint8_t)b);
-        p.end();
-        net::logf("brightness -> %d/255", b);
+        ui::set_brightness(b);
+        net::logf("brightness -> %u/255", (unsigned)ui::brightness());
         return true;
     }
     if (line.startsWith("theme ")) {
@@ -1068,6 +1110,10 @@ void setup() {
     Serial.printf("[touch] GT911 probe: %s\n", ok ? "ACK" : "no response");
     touch_present = ok;
 
+    // Load any persisted calibration before the touch task starts so
+    // the very first sample is already in screen coordinates.
+    touch_cal::setup();
+
     // Start the dedicated touch polling task on core 0 (LVGL stays on
     // core 1). I2C reads in the LVGL indev callback were stalling render
     // ticks; the task decouples them.
@@ -1111,13 +1157,17 @@ void setup() {
     // LVGL's gesture path practically unreachable without disturbing
     // its tap/long-press handling.
     lv_indev_set_gesture_min_velocity(indev, 255);
-    // Capacitive-touch finger contact drifts 20-50 px during a normal
-    // "tap" on this panel. With LVGL's default scroll_limit=10 every
-    // such tap is reclassified as a drag and the button never fires
-    // CLICKED. Raise it to 50 px so finger drift up to the swipe
-    // threshold still resolves as a tap. Sliders use their own PRESSING
-    // handler so this doesn't affect them.
-    lv_indev_set_scroll_limit(indev, 50);
+    // Capacitive-touch finger contact drifts 20-80 px during a normal
+    // "tap" on this panel. Default scroll_limit=10 made every such tap
+    // a drag and the button never fired CLICKED. Match scroll_limit to
+    // SWIPE_MIN_PX so the only motion bands are:
+    //
+    //   0 .. SWIPE_MIN_PX-1  -> LVGL CLICKED on release (tap)
+    //   SWIPE_MIN_PX ..      -> touch_task posts ShowScreen (swipe)
+    //
+    // No dead zone between them. Sliders use their own PRESSING handler
+    // so this does not affect drag-to-set behavior.
+    lv_indev_set_scroll_limit(indev, SWIPE_MIN_PX);
 
     // Load theme + position format prefs
     {
@@ -1145,6 +1195,7 @@ void setup() {
     ui::register_screen({"status",    "System",     ui::status_panel::build(NULL),  ui::status_panel::refresh, false});
     ui::register_screen({"wifi",      "WiFi Setup", ui::wifi_setup::build(NULL),    ui::wifi_setup::refresh,   true});
     ui::register_screen({"settings",  "Settings",   ui::settings::build(NULL),      ui::settings::refresh,     true});
+    ui::register_screen({"touch_cal", "Touch Cal",  ui::touch_cal_screen::build(NULL), ui::touch_cal_screen::refresh, true});
 
     // Attach the gesture handler to EVERY screen root. LVGL routes
     // LV_EVENT_GESTURE to the currently loaded screen (or the widget
@@ -1174,10 +1225,7 @@ void setup() {
 
     // Restore last-known brightness from NVS (default 200/255 ~ 78%).
     {
-        Preferences p;
-        p.begin("ui", true);
-        uint8_t b = p.getUChar("bright", 200);
-        p.end();
+        uint8_t b = ui::brightness();
         ledcWrite(0, b);
         Serial.printf("[bl] brightness %u/255\n", (unsigned)b);
     }

@@ -20,6 +20,11 @@ void set_refresh_enabled(bool e);
 bool refresh_enabled();
 }  // namespace wind
 
+namespace touch_cal_screen {
+lv_obj_t *build(lv_obj_t *parent);
+void refresh();
+}  // namespace touch_cal_screen
+
 namespace nav {
 lv_obj_t *build(lv_obj_t *parent);
 void refresh();
