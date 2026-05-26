@@ -31,4 +31,10 @@ int putValue(const char *path, const char *valueJson);
 // critical section.
 void copyData(Data &out);
 
+// Diagnostics: how many iterations the SK task has completed (ever-
+// growing), and the longest single ws.loop() call since the last read
+// (reading clears the peak so each /api/state sample is a fresh window).
+uint32_t loopIters();
+uint32_t loopMaxUs();
+
 }  // namespace sk

@@ -26,6 +26,12 @@ static Preferences prefs;
 static String s_host = "";
 static uint16_t s_port = 3000;
 static bool subscribed = false;
+static TaskHandle_t s_sk_task = nullptr;
+static volatile bool s_running = false;
+// Diagnostic counters - how often the SK task drains ws.loop() and how
+// long it spends inside. Exposed via /api/state.sk for profiling.
+static volatile uint32_t s_loop_iters = 0;
+static volatile uint32_t s_loop_max_us = 0;
 
 static void subscribe() {
     if (subscribed) return;
@@ -81,17 +87,23 @@ static void onText(uint8_t *payload, size_t len) {
     if (s_data_mtx) xSemaphoreGive(s_data_mtx);
 }
 
+static void set_connected(bool v) {
+    if (s_data_mtx) xSemaphoreTake(s_data_mtx, portMAX_DELAY);
+    data.connected = v;
+    if (s_data_mtx) xSemaphoreGive(s_data_mtx);
+}
+
 static void onEvent(WStype_t type, uint8_t *payload, size_t len) {
     switch (type) {
     case WStype_CONNECTED:
         net::logf("[sk] WS connected to %s:%u", s_host.c_str(), s_port);
-        data.connected = true;
+        set_connected(true);
         subscribed = false;
         subscribe();
         break;
     case WStype_DISCONNECTED:
         net::logf("[sk] WS disconnected");
-        data.connected = false;
+        set_connected(false);
         subscribed = false;
         break;
     case WStype_TEXT:
@@ -111,6 +123,25 @@ void copyData(Data &out) {
     if (s_data_mtx) xSemaphoreGive(s_data_mtx);
 }
 
+// Dedicated SK task. Runs ws.loop() on core 0 so the synchronous
+// WiFiClient::connect() (up to 5 s on a downed boat WiFi) cannot
+// stall lv_timer_handler on core 1. The event callbacks (onEvent /
+// onText / subscribe()) execute on this task; sk::data writes go
+// through s_data_mtx and remain safe for UI/web readers.
+static void sk_task(void *) {
+    s_running = true;
+    for (;;) {
+        uint32_t t0 = micros();
+        ws.loop();
+        uint32_t dt = micros() - t0;
+        s_loop_iters++;
+        if (dt > s_loop_max_us) s_loop_max_us = dt;
+        // 10 ms cadence is plenty for WS frame draining and matches what
+        // the old main-loop call site achieved via the loop's delay(5).
+        vTaskDelay(pdMS_TO_TICKS(10));
+    }
+}
+
 void setup(const String &host, uint16_t port) {
     if (!s_data_mtx) s_data_mtx = xSemaphoreCreateMutex();
     prefs.begin("sk", false);
@@ -125,10 +156,26 @@ void setup(const String &host, uint16_t port) {
     ws.onEvent(onEvent);
     ws.setReconnectInterval(5000);
     ws.enableHeartbeat(15000, 3000, 2);
+
+    if (!s_sk_task) {
+        // Pin to core 0 (network/IO core). Stack 6 KB - WebSockets +
+        // ArduinoJson subscribe doc need a few KB during connect.
+        xTaskCreatePinnedToCore(sk_task, "sk", 6144, nullptr, 1,
+                                &s_sk_task, 0);
+    }
 }
 
 void loop() {
-    ws.loop();
+    // No-op. SK runs on its own task (sk_task) since blocking
+    // WiFiClient::connect() during reconnect was stalling the main
+    // Arduino loop and starving lv_timer_handler.
+}
+
+uint32_t loopIters() { return s_loop_iters; }
+uint32_t loopMaxUs() {
+    uint32_t v = s_loop_max_us;
+    s_loop_max_us = 0;
+    return v;
 }
 
 bool handleSerialCommand(const String &line) {
@@ -201,9 +248,16 @@ int putValue(const char *path, const char *valueJson) {
 }
 
 String connectionStatus() {
-    if (!data.connected) return "disconnected";
-    uint32_t ago = millis() - data.lastUpdateMs;
-    if (data.lastUpdateMs == 0 || ago > 10000) return "stalled";
+    // Snapshot under the same mutex sk_task uses to mutate these fields.
+    bool connected;
+    uint32_t lastUpdate;
+    if (s_data_mtx) xSemaphoreTake(s_data_mtx, portMAX_DELAY);
+    connected = data.connected;
+    lastUpdate = data.lastUpdateMs;
+    if (s_data_mtx) xSemaphoreGive(s_data_mtx);
+    if (!connected) return "disconnected";
+    uint32_t ago = millis() - lastUpdate;
+    if (lastUpdate == 0 || ago > 10000) return "stalled";
     return "live";
 }
 

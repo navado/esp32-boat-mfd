@@ -104,6 +104,11 @@ static void handle_state() {
     sk["host"] = p.getString("host", "");
     sk["port"] = p.getUInt("port", 3000);
     p.end();
+    // Task diagnostics: confirms sk_task is alive (iters keeps growing)
+    // and exposes the peak ws.loop() duration since last sample. A high
+    // peak here is fine - it's on core 0, not on the LVGL task.
+    sk["task_iters"] = sk::loopIters();
+    sk["task_peak_us"] = sk::loopMaxUs();
 
     JsonObject screen = doc["screen"].to<JsonObject>();
     screen["index"] = ui::current_index();

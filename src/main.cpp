@@ -1236,9 +1236,8 @@ void loop() {
     net::loop();
     note_slow_section("net", micros() - t_section);
 
-    t_section = micros();
-    sk::loop();
-    note_slow_section("signalk", micros() - t_section);
+    // sk runs on its own task (sk_task on core 0). sk::loop() is now
+    // a no-op kept for ABI compatibility; we don't time it.
 
     t_section = micros();
     web::loop();
