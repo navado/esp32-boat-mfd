@@ -4,11 +4,13 @@
 #include <lvgl.h>
 #include <stddef.h>
 
-// Screen manager: each "screen" is a fullscreen 480x480 root object;
-// horizontal swipes cycle through them; bottom swipe returns to index 0
-// (dashboard). Screens are pre-created on boot and hidden via
-// LV_OBJ_FLAG_HIDDEN - cheaper than creating on demand and lets a refresh
-// callback keep painting in the background if needed.
+// Screen manager: each "screen" is a fullscreen 480x480 LVGL screen
+// (lv_obj_create(NULL) - parentless, swapped via lv_screen_load()).
+// Horizontal swipes cycle through registered screens; up swipe opens
+// Settings; down swipe returns to Dashboard. Inactive screens are NOT
+// in the render tree, so per-frame cost is bounded by the active screen.
+// Global overlays (MOB, alarm banner, breadcrumb) attach to
+// lv_layer_top() so they survive screen swaps without re-parenting.
 
 namespace ui {
 

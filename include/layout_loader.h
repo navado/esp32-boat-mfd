@@ -24,7 +24,13 @@ bool fetch_from_signalk(const String &host, uint16_t port);
 
 // The last successfully applied JSON document, stored verbatim. Length is
 // written to *out_len. Returns nullptr if nothing has been loaded yet.
+// DEPRECATED for cross-task callers - the returned pointer can be freed
+// by a concurrent apply_json(). Use copy_last_json() instead.
 const char *last_json(size_t *out_len);
+
+// Thread-safe snapshot copy of the last applied JSON. Returns true and
+// fills `out` if a document is loaded. Safe to call from any task.
+bool copy_last_json(String &out);
 
 // Read-only access to the currently active config. Caller MUST check
 // loaded() first - dereferencing before load_default() succeeds is UB.

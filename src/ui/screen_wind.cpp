@@ -436,7 +436,7 @@ static int16_t deg_to_lvgl(double deg) {
 }
 
 void refresh() {
-    const sk::Data &d = sk::data;
+    sk::Data d_snap; sk::copyData(d_snap); const sk::Data &d = d_snap;
     char buf[64];
 
     // --- hero readouts ---

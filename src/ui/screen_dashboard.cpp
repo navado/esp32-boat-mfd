@@ -163,7 +163,7 @@ lv_obj_t *build(lv_obj_t *parent) {
 }
 
 void refresh() {
-    const sk::Data &d = sk::data;
+    sk::Data d_snap; sk::copyData(d_snap); const sk::Data &d = d_snap;
     char buf[64];
     if (!isnan(d.aws)) {
         snprintf(buf, sizeof(buf), "%.1f kn", mps_to_kn(d.aws));

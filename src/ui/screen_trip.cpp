@@ -179,7 +179,7 @@ lv_obj_t *build(lv_obj_t *parent) {
 }
 
 void refresh() {
-    const sk::Data &d = sk::data;
+    sk::Data d_snap; sk::copyData(d_snap); const sk::Data &d = d_snap;
     char buf[64];
 
     // Integrate SOG over real elapsed time (sample at most 1 Hz).

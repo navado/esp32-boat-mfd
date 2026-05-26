@@ -11,7 +11,8 @@ Files:
   addressing model.
 - `03-screen-specs.md` - per-screen visualization and interaction specs.
 - `04-layout-presets.md` - recommended default screen stacks for common users.
+- `05-gesture-subsystem-spec.md` - asynchronous touch and gesture subsystem
+  design.
 
 Use these specs when implementing the data-driven renderer, refining individual
 screens, or adding Signal K plugin/device-management features.
-

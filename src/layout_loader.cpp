@@ -4,6 +4,8 @@
 
 #include <HTTPClient.h>
 #include <WiFi.h>
+#include <freertos/FreeRTOS.h>
+#include <freertos/semphr.h>
 
 namespace layout {
 
@@ -55,8 +57,16 @@ static bool s_loaded = false;
 // reads can return what the user wrote (round-trip-safe).
 static char *s_last_json = nullptr;
 static size_t s_last_json_len = 0;
+// Mutex guards the s_last_json buffer + length so concurrent
+// apply_json (UI task) and reads (web / BLE) don't race.
+static SemaphoreHandle_t s_mtx = nullptr;
+static inline SemaphoreHandle_t mtx() {
+    if (!s_mtx) s_mtx = xSemaphoreCreateMutex();
+    return s_mtx;
+}
 
 static void remember_json(const char *src, size_t len) {
+    xSemaphoreTake(mtx(), portMAX_DELAY);
     if (s_last_json) {
         heap_caps_free(s_last_json);
         s_last_json = nullptr;
@@ -64,12 +74,14 @@ static void remember_json(const char *src, size_t len) {
     s_last_json = (char *)heap_caps_malloc(len + 1, MALLOC_CAP_SPIRAM);
     if (!s_last_json) {
         s_last_json_len = 0;
+        xSemaphoreGive(s_mtx);
         net::logf("[layout] remember_json: PSRAM alloc failed (%u bytes)", (unsigned)len);
         return;
     }
     memcpy(s_last_json, src, len);
     s_last_json[len] = 0;
     s_last_json_len = len;
+    xSemaphoreGive(s_mtx);
     net::logf("[layout] remember_json: stored %u bytes", (unsigned)len);
 }
 
@@ -111,6 +123,16 @@ bool apply_json(const char *json, size_t len) {
 const char *last_json(size_t *out_len) {
     if (out_len) *out_len = s_last_json_len;
     return s_last_json;
+}
+
+bool copy_last_json(String &out) {
+    xSemaphoreTake(mtx(), portMAX_DELAY);
+    bool ok = s_last_json && s_last_json_len;
+    if (ok) {
+        out = String(s_last_json);  // String ctor copies
+    }
+    xSemaphoreGive(s_mtx);
+    return ok;
 }
 
 bool fetch_from_signalk(const String &host, uint16_t port) {

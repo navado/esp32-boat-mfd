@@ -124,16 +124,16 @@ class ConfigCb : public NimBLECharacteristicCallbacks {
         // here - phone apps should use the SignalK REST endpoint or chunked
         // writes for large layouts. We return either the full layout (if it
         // fits) or a compact summary indicating size + screen count.
-        size_t len = 0;
-        const char *j = layout::last_json(&len);
-        if (j && len && len <= 512) {
-            c->setValue((const uint8_t *)j, len);
+        String body;
+        bool have = layout::copy_last_json(body);
+        if (have && body.length() && body.length() <= 512) {
+            c->setValue((const uint8_t *)body.c_str(), body.length());
             return;
         }
         // Fall back to summary: total size + screen list
         JsonDocument doc;
         doc["truncated"] = true;
-        doc["size"] = (uint32_t)len;
+        doc["size"] = (uint32_t)(have ? body.length() : 0);
         if (layout::loaded()) {
             const layout::Config &cfg = layout::current();
             doc["screen_count"] = cfg.screen_count;
@@ -188,9 +188,9 @@ void setup() {
         CONFIG_UUID, NIMBLE_PROPERTY::READ | NIMBLE_PROPERTY::WRITE | NIMBLE_PROPERTY::NOTIFY);
     s_config->setCallbacks(new ConfigCb());
     {
-        size_t len = 0;
-        const char *j = layout::last_json(&len);
-        if (j && len) s_config->setValue((uint8_t *)j, len);
+        String body;
+        if (layout::copy_last_json(body) && body.length())
+            s_config->setValue((const uint8_t *)body.c_str(), body.length());
     }
 
     svc->start();
@@ -209,10 +209,10 @@ void notifyAll() {
         s_conn->notify();
     }
     if (s_config) {
-        size_t len = 0;
-        const char *j = layout::last_json(&len);
-        if (j && len && len <= 512) {
-            s_config->setValue((const uint8_t *)j, len);
+        String body;
+        bool have = layout::copy_last_json(body);
+        if (have && body.length() && body.length() <= 512) {
+            s_config->setValue((const uint8_t *)body.c_str(), body.length());
             s_config->notify();
         }
         // For layouts > 512 B, the read callback returns a summary; no notify

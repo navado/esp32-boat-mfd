@@ -159,7 +159,9 @@ static void put_double(JsonObject o, const char *k, double v) {
 }
 
 static void handle_sk_data() {
-    const sk::Data &d = sk::data;
+    sk::Data d_snap;
+    sk::copyData(d_snap);
+    const sk::Data &d = d_snap;
     JsonDocument doc;
     JsonObject nav = doc["nav"].to<JsonObject>();
     put_double(nav, "lat", d.lat);
@@ -206,14 +208,13 @@ static void handle_sk_data() {
 // ---- /api/layout (GET / PUT) -------------------------------------------
 
 static void handle_layout_get() {
-    size_t len = 0;
-    const char *j = layout::last_json(&len);
-    if (!j || !len) {
+    String body;
+    if (!layout::copy_last_json(body)) {
         server.send(404, "text/plain", "no layout loaded");
         return;
     }
     server.sendHeader("Access-Control-Allow-Origin", "*");
-    server.send(200, "application/json", String(j));
+    server.send(200, "application/json", body);
 }
 
 static void handle_layout_put() {
@@ -331,12 +332,19 @@ static void handle_wifi_connect() {
 }
 
 static void handle_wifi_forget() {
+    // Route through the net worker queue; wifi-forget reboots, which
+    // would otherwise happen on the web task and cut off the response.
+    app::Command cmd;
+    cmd.type = app::CommandType::RunCommand;
+    strncpy(cmd.a, "wifi-forget", sizeof(cmd.a) - 1);
+    if (!app::post_net(cmd, 50)) {
+        server.send(503, "text/plain", "net queue full");
+        return;
+    }
     JsonDocument out;
-    out["ok"] = true;
+    out["queued"] = true;
     out["rebooting"] = true;
-    send_json(200, out);
-    delay(150);
-    net::dispatchCommand("wifi-forget");
+    send_json(202, out);
 }
 
 static void handle_wifi_saved_get() {

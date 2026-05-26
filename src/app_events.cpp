@@ -58,6 +58,13 @@ static void net_task(void *) {
             ESP.restart();
             break;
         }
+        case CommandType::RunCommand: {
+            // Net-side console command (e.g. "wifi-forget", "scan").
+            // Dispatch through the legacy command handlers - on this
+            // task the reboot/scan is safe.
+            net::dispatchCommand(String(cmd.a));
+            break;
+        }
         default:
             net::logf("[net-worker] unhandled cmd type %d", (int)cmd.type);
             break;

@@ -48,8 +48,12 @@ static void on_adjust(lv_event_t *e) {
     if (lv_event_get_code(e) != LV_EVENT_CLICKED) return;
     int delta_deg = (int)(intptr_t)lv_event_get_user_data(e);
     double target = s_target_local;
-    if (isnan(target)) target = sk::data.apTargetHdg;
-    if (isnan(target)) target = sk::data.headingTrue;
+    if (isnan(target)) {
+        sk::Data d_snap;
+        sk::copyData(d_snap);
+        target = d_snap.apTargetHdg;
+        if (isnan(target)) target = d_snap.headingTrue;
+    }
     if (isnan(target)) target = 0;
     target += delta_deg * M_PI / 180.0;
     while (target < 0) target += 2 * M_PI;
@@ -165,7 +169,7 @@ lv_obj_t *build(lv_obj_t *parent) {
 }
 
 void refresh() {
-    const sk::Data &d = sk::data;
+    sk::Data d_snap; sk::copyData(d_snap); const sk::Data &d = d_snap;
     char buf[64];
 
     if (d.apState[0]) {

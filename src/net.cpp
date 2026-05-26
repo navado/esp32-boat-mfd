@@ -78,9 +78,14 @@ class RxCb : public NimBLECharacteristicCallbacks {
         // sk-dump, ip, bench, screen, wifi-list, bright (read)) are fast
         // enough to keep inline so the immediate BLE-stream response
         // doesn't lag.
+        // `scan` removed from the inline allow-list: WiFi.scanNetworks
+        // blocks the NimBLE callback task. It now runs on the UI/net
+        // queue path (with async scan support already wired in the web
+        // UI), but a console-issued `scan` still routes through there
+        // cleanly via dispatchCommand.
         bool inline_ok = (line == "ip" || line == "bench" || line == "screen" ||
                           line == "sk-status" || line == "sk-dump" ||
-                          line == "wifi-list" || line == "bright" || line == "scan");
+                          line == "wifi-list" || line == "bright");
         if (inline_ok) {
             if (!handleSerialCommand(line) && !sk::handleSerialCommand(line) &&
                 !layout::handleSerialCommand(line)) {
