@@ -3,6 +3,11 @@
 Goal: improve responsiveness and stability by making LVGL single-owner, moving
 slow I/O off the UI loop, and using FreeRTOS queues/events for cross-task work.
 
+See also `docs/specs/07-event-driven-mvc.md` for the proposed long-term
+event-driven MVC/MVU-lite architecture. This plan describes the lower-level
+task/queue refactor; the spec describes the model/view/controller boundaries
+that should emerge from it.
+
 ## Context
 
 The project already uses the right core frameworks:

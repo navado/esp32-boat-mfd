@@ -13,6 +13,11 @@ Files:
 - `04-layout-presets.md` - recommended default screen stacks for common users.
 - `05-gesture-subsystem-spec.md` - asynchronous touch and gesture subsystem
   design.
+- `06-ui-interactions.md` - user-facing interaction model and gesture behavior.
+- `07-event-driven-mvc.md` - proposed event-driven MVC/MVU-lite architecture
+  and migration path.
+- `08-configuration-storage-sync.md` - configuration storage, source
+  precedence, local/external synchronization, and conflict handling.
 
 Use these specs when implementing the data-driven renderer, refining individual
 screens, or adding Signal K plugin/device-management features.
