@@ -26,8 +26,10 @@ struct QuadGridTile {
     lv_obj_t *value;
     lv_obj_t *unit;
     lv_obj_t *secondary;
+    lv_obj_t *extras[4];      // multi-row tiles - small label+value lines
     char last_value[24];
     char last_secondary[24];
+    char last_extras[4][32];
     int idx;  // metric index into spec.metrics[]
 };
 
@@ -184,6 +186,7 @@ static QuadGridTile build_tile(lv_obj_t *parent, int x, int y, int w, int h,
     t.idx = -1;
     strncpy(t.last_value, "\xFF", sizeof(t.last_value));
     strncpy(t.last_secondary, "\xFF", sizeof(t.last_secondary));
+    for (int i = 0; i < 4; ++i) strncpy(t.last_extras[i], "\xFF", sizeof(t.last_extras[0]));
 
     t.root = lv_obj_create(parent);
     lv_obj_set_size(t.root, w, h);
@@ -196,7 +199,7 @@ static QuadGridTile build_tile(lv_obj_t *parent, int x, int y, int w, int h,
     lv_obj_set_style_pad_all(t.root, 10, 0);
     lv_obj_clear_flag(t.root, LV_OBJ_FLAG_SCROLLABLE);
 
-    // Accent rail - small vertical stripe on the left.
+    // Accent rail.
     lv_obj_t *rail = lv_obj_create(t.root);
     lv_obj_set_size(rail, 4, h - 20);
     lv_obj_set_pos(rail, 0, 0);
@@ -208,7 +211,7 @@ static QuadGridTile build_tile(lv_obj_t *parent, int x, int y, int w, int h,
     lv_obj_clear_flag(rail, LV_OBJ_FLAG_SCROLLABLE);
     lv_obj_clear_flag(rail, LV_OBJ_FLAG_CLICKABLE);
 
-    // Caption (top of tile).
+    // Caption.
     t.cap = lv_label_create(t.root);
     lv_label_set_text(t.cap, m.label ? m.label : "");
     lv_obj_set_style_text_font(t.cap, &lv_font_montserrat_14, 0);
@@ -216,33 +219,58 @@ static QuadGridTile build_tile(lv_obj_t *parent, int x, int y, int w, int h,
     lv_obj_set_pos(t.cap, 12, 4);
     lv_obj_clear_flag(t.cap, LV_OBJ_FLAG_CLICKABLE);
 
-    // Primary value (large, centered horizontally below the cap).
+    bool has_extras = (m.extras_count > 0);
+
+    // Primary value. If extras are present, shrink + pin to upper area
+    // so the extras have room below. Otherwise it stays large + centered.
     t.value = lv_label_create(t.root);
     lv_label_set_text(t.value, "--");
-    lv_obj_set_style_text_font(t.value, &lv_font_montserrat_48, 0);
+    const lv_font_t *primary_font = has_extras ? &lv_font_montserrat_28
+                                                : &lv_font_montserrat_48;
+    lv_obj_set_style_text_font(t.value, primary_font, 0);
     lv_obj_set_style_text_color(t.value, lv_color_hex(theme.fg), 0);
-    lv_obj_align(t.value, LV_ALIGN_CENTER, 0, 0);
+    if (has_extras) {
+        lv_obj_align(t.value, LV_ALIGN_TOP_LEFT, 12, 26);
+    } else {
+        lv_obj_align(t.value, LV_ALIGN_CENTER, 0, 0);
+    }
     lv_obj_clear_flag(t.value, LV_OBJ_FLAG_CLICKABLE);
 
-    // Unit (small, to the right of value if specified).
+    // Unit.
     if (m.unit && m.unit[0]) {
         t.unit = lv_label_create(t.root);
         lv_label_set_text(t.unit, m.unit);
         lv_obj_set_style_text_font(t.unit, &lv_font_montserrat_20, 0);
         lv_obj_set_style_text_color(t.unit, lv_color_hex(theme.fg_dim), 0);
-        lv_obj_align(t.unit, LV_ALIGN_CENTER, 0, 30);
+        if (has_extras) {
+            lv_obj_align(t.unit, LV_ALIGN_TOP_LEFT, 12 + 90, 32);
+        } else {
+            lv_obj_align(t.unit, LV_ALIGN_CENTER, 0, 30);
+        }
         lv_obj_clear_flag(t.unit, LV_OBJ_FLAG_CLICKABLE);
     }
 
-    // Secondary value (small, bottom-right).
-    t.secondary = lv_label_create(t.root);
-    lv_label_set_text(t.secondary, "");
-    lv_obj_set_style_text_font(t.secondary, &lv_font_montserrat_14, 0);
-    lv_obj_set_style_text_color(t.secondary, lv_color_hex(theme.fg_dim), 0);
-    lv_obj_align(t.secondary, LV_ALIGN_BOTTOM_RIGHT, -4, -4);
-    lv_obj_clear_flag(t.secondary, LV_OBJ_FLAG_CLICKABLE);
+    if (!has_extras) {
+        // Classic Hero layout: secondary in bottom-right.
+        t.secondary = lv_label_create(t.root);
+        lv_label_set_text(t.secondary, "");
+        lv_obj_set_style_text_font(t.secondary, &lv_font_montserrat_14, 0);
+        lv_obj_set_style_text_color(t.secondary, lv_color_hex(theme.fg_dim), 0);
+        lv_obj_align(t.secondary, LV_ALIGN_BOTTOM_RIGHT, -4, -4);
+        lv_obj_clear_flag(t.secondary, LV_OBJ_FLAG_CLICKABLE);
+    } else {
+        // Multi-row layout: stack up to 4 extras below the primary value.
+        for (uint8_t i = 0; i < m.extras_count && i < 4; ++i) {
+            t.extras[i] = lv_label_create(t.root);
+            lv_label_set_text(t.extras[i], "");
+            lv_obj_set_style_text_font(t.extras[i], &lv_font_montserrat_14, 0);
+            lv_obj_set_style_text_color(t.extras[i], lv_color_hex(theme.fg), 0);
+            // Row positions packed below the primary value area.
+            lv_obj_align(t.extras[i], LV_ALIGN_TOP_LEFT, 12, 76 + i * 22);
+            lv_obj_clear_flag(t.extras[i], LV_OBJ_FLAG_CLICKABLE);
+        }
+    }
 
-    // Tap-to-detail: only if the binding declares a target.
     if (m.target_screen && m.target_screen[0]) {
         lv_obj_add_event_cb(t.root, tile_clicked_cb, LV_EVENT_CLICKED,
                             (void *)m.target_screen);
@@ -296,12 +324,32 @@ static void update_quad_grid(lv_obj_t *root, const ScreenVariantSpec &spec,
         QuadGridTile &t = st->tiles[i];
         if (t.idx < 0 || t.idx >= spec.metric_count) continue;
         const MetricBinding &m = spec.metrics[t.idx];
+
         char pri[24], sec[24];
         format_metric(m, data, pri, sizeof(pri), sec, sizeof(sec));
         ui::set_text_if_changed(t.value, t.last_value, sizeof(t.last_value), pri);
+
         if (t.secondary) {
             ui::set_text_if_changed(t.secondary, t.last_secondary,
                                     sizeof(t.last_secondary), sec);
+        }
+        // Render extras (multi-row tiles). Each extra reuses
+        // format_metric on a synthetic MetricBinding so all the
+        // unit/format logic is shared.
+        for (uint8_t e = 0; e < m.extras_count && e < 4; ++e) {
+            if (!t.extras[e]) continue;
+            MetricBinding eb = {};
+            eb.source = m.extras[e].source;
+            char ep[24], esec[24];
+            format_metric(eb, data, ep, sizeof(ep), esec, sizeof(esec));
+            char row[32];
+            if (m.extras[e].label && m.extras[e].label[0]) {
+                snprintf(row, sizeof(row), "%s %s", m.extras[e].label, ep);
+            } else {
+                snprintf(row, sizeof(row), "%s", ep);
+            }
+            ui::set_text_if_changed(t.extras[e], t.last_extras[e],
+                                    sizeof(t.last_extras[e]), row);
         }
     }
 }

@@ -59,13 +59,25 @@ enum class MetricSource : uint8_t {
     APState,
 };
 
+// Optional extra row beneath the primary value (multi-value tiles).
+// Up to 4 extras per tile; rendered as "<label> <value>" small text.
+struct MetricRow {
+    const char *label;   // "COG", "HDG", "" for no prefix
+    MetricSource source;
+};
+
 struct MetricBinding {
     const char *id;            // "wind", "depth", ... stable id for API addressing
     const char *label;         // "WIND" displayed caption
     const char *unit;          // "kn", "m", "deg" - shown next to primary value
-    MetricSource source;       // which sk::Data field
+    MetricSource source;       // primary value
     uint32_t accent;           // small color rail (0xRRGGBB)
     const char *target_screen; // tap target (NULL = no nav action)
+    // Optional secondary rows. extras_count <= 4. Leave at 0 for the
+    // classic Hero/secondary tile (back-compat with the first quad_grid
+    // demos that didn't carry these fields).
+    uint8_t extras_count;
+    MetricRow extras[4];
 };
 
 struct ScreenVariantSpec {
