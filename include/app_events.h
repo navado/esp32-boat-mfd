@@ -31,7 +31,11 @@ enum class CommandType : uint8_t {
 
 struct Command {
     CommandType type = CommandType::None;
-    char a[96] = {0};
+    // `a` was 96 bytes; bumped to 256 so RunCommand can carry a full
+    // sk-token line (a JWT is ~145 chars before any prefix). Memory
+    // cost is queue_slots * 160 extra bytes - tolerable. Anything
+    // longer than this still belongs in the heap-owned `blob`.
+    char a[256] = {0};
     char b[256] = {0};
     int32_t i = 0;
     // Heap-owned payload for ApplyLayout. The consumer (pump or net

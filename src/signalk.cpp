@@ -303,6 +303,40 @@ bool handleSerialCommand(const String &line) {
         ESP.restart();
         return true;
     }
+    if (line == "sk-reconnect") {
+        // Force the WS lib to re-begin against the current host/port +
+        // token. Useful after the server's rate limiter has thrown us
+        // into an internal-error retry loop the lib can't recover from
+        // on its own.
+        if (s_host.length() == 0) {
+            net::logf("[sk] sk-reconnect: no host");
+            return true;
+        }
+        ws.disconnect();
+        s_ws_started = false;
+        subscribed = false;
+        delay(200);
+        start_ws();
+        return true;
+    }
+    if (line == "sk-test") {
+        // Plain TCP connect probe to s_host:s_port. Reports OK/FAIL so
+        // we can tell apart "can't reach the server" from "WS upgrade /
+        // auth refused". No WS, no HTTP - pure socket.
+        if (s_host.length() == 0) {
+            net::logf("[sk] sk-test: no host configured");
+            return true;
+        }
+        WiFiClient c;
+        uint32_t t0 = millis();
+        bool ok = c.connect(s_host.c_str(), s_port, 4000);
+        uint32_t dt = millis() - t0;
+        net::logf("[sk] sk-test: %s:%u %s in %lums",
+                  s_host.c_str(), s_port, ok ? "OK" : "FAIL",
+                  (unsigned long)dt);
+        if (ok) c.stop();
+        return true;
+    }
     if (line == "sk-discover") {
         s_last_discover_ms = 0;  // unthrottle
         bool ok = tryAutoDiscover(millis());
