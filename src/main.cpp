@@ -797,7 +797,13 @@ static volatile uint32_t g_loop_max_us = 0;
 static volatile uint32_t g_lvgl_max_us = 0;
 static volatile uint32_t g_section_max_us = 0;
 static char g_section_peak_name[24] = "-";
-static volatile bool g_force_invalidate = true;
+// Default changed from true -> false per docs/specs/09 "remove or
+// scope forced full-screen invalidation". With per-screen dirty-value
+// caches in place (see screen_wind.cpp), continuously invalidating
+// the active screen at 5 Hz just defeats LVGL's partial-render mode.
+// Re-enable per-screen via `force-invalidate on` if a screen needs
+// continuous time-based redraws.
+static volatile bool g_force_invalidate = false;
 
 static void note_slow_section(const char *name, uint32_t dt_us) {
     if (dt_us <= g_section_max_us) return;

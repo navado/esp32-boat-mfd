@@ -445,94 +445,147 @@ static volatile bool s_refresh_enabled = true;
 void set_refresh_enabled(bool e) { s_refresh_enabled = e; }
 bool refresh_enabled() { return s_refresh_enabled; }
 
+// Dirty-value caches per docs/specs/09 "Implementation Improvements"
+// #1. Setters are skipped when the displayed value would not change.
+// Cached values use a single sentinel (INT16_MIN for rotations, "\0xff"
+// in [0] for unset text) so the first refresh always writes.
+static char s_last_aws[16] = {(char)0xFF};
+static char s_last_tws[16] = {(char)0xFF};
+static char s_last_awa[16] = {(char)0xFF};
+static char s_last_twa[16] = {(char)0xFF};
+static char s_last_hdg[16] = {(char)0xFF};
+static char s_last_cog[16] = {(char)0xFF};
+static char s_last_tide[16] = {(char)0xFF};
+static int16_t s_last_awa_rot = INT16_MIN;
+static int16_t s_last_twa_rot = INT16_MIN;
+static int16_t s_last_bezel_rot = INT16_MIN;
+static int16_t s_last_tide_rot = INT16_MIN;
+static int16_t s_last_wp_rot = INT16_MIN;
+static int8_t s_last_awa_hidden = -1;  // -1 = unset, 0 = shown, 1 = hidden
+static int8_t s_last_twa_hidden = -1;
+static int8_t s_last_tide_hidden = -1;
+static int8_t s_last_wp_hidden = -1;
+
+static inline void set_text_if_changed(lv_obj_t *obj, char *cache, size_t cap,
+                                       const char *value) {
+    if (!obj) return;
+    if (strncmp(cache, value, cap) != 0) {
+        strncpy(cache, value, cap - 1);
+        cache[cap - 1] = 0;
+        lv_label_set_text(obj, value);
+    }
+}
+
+static inline void set_rot_if_changed(lv_obj_t *obj, int16_t *cache, int16_t value) {
+    if (!obj) return;
+    if (*cache != value) {
+        *cache = value;
+        lv_obj_set_style_transform_rotation(obj, value, 0);
+    }
+}
+
+static inline void set_hidden_if_changed(lv_obj_t *obj, int8_t *cache, bool hidden) {
+    if (!obj) return;
+    int8_t want = hidden ? 1 : 0;
+    if (*cache != want) {
+        *cache = want;
+        if (hidden) lv_obj_add_flag(obj, LV_OBJ_FLAG_HIDDEN);
+        else        lv_obj_clear_flag(obj, LV_OBJ_FLAG_HIDDEN);
+    }
+}
+
 void refresh() {
     if (!s_refresh_enabled) return;
     sk::Data d_snap; sk::copyData(d_snap); const sk::Data &d = d_snap;
     char buf[64];
 
-    // --- hero readouts ---
+    // --- hero speed readouts ---
     if (!isnan(d.aws)) {
         snprintf(buf, sizeof(buf), "%.1f", mps_to_kn(d.aws));
-        lv_label_set_text(lbl_aws_value, buf);
-    } else
-        lv_label_set_text(lbl_aws_value, "--");
-
+        set_text_if_changed(lbl_aws_value, s_last_aws, sizeof(s_last_aws), buf);
+    } else {
+        set_text_if_changed(lbl_aws_value, s_last_aws, sizeof(s_last_aws), "--");
+    }
     if (!isnan(d.tws)) {
         snprintf(buf, sizeof(buf), "%.1f", mps_to_kn(d.tws));
-        lv_label_set_text(lbl_tws_value, buf);
-    } else
-        lv_label_set_text(lbl_tws_value, "--");
+        set_text_if_changed(lbl_tws_value, s_last_tws, sizeof(s_last_tws), buf);
+    } else {
+        set_text_if_changed(lbl_tws_value, s_last_tws, sizeof(s_last_tws), "--");
+    }
 
-    // AWA / TWA angle text in port/stbd form (e.g. 42° P)
+    // --- AWA: angle text in port/stbd form + marker rotation ---
     if (!isnan(d.awa)) {
         double deg = rad_to_deg_pos(d.awa);
         bool starboard = deg <= 180.0;
         double mag = starboard ? deg : 360.0 - deg;
         snprintf(buf, sizeof(buf), "%.0f%c", mag, starboard ? 'S' : 'P');
-        lv_label_set_text(lbl_awa_value, buf);
-        lv_obj_set_style_transform_rotation(awa_marker, deg_to_lvgl(deg), 0);
-        lv_obj_clear_flag(awa_marker, LV_OBJ_FLAG_HIDDEN);
+        set_text_if_changed(lbl_awa_value, s_last_awa, sizeof(s_last_awa), buf);
+        set_rot_if_changed(awa_marker, &s_last_awa_rot, deg_to_lvgl(deg));
+        set_hidden_if_changed(awa_marker, &s_last_awa_hidden, false);
     } else {
-        lv_label_set_text(lbl_awa_value, "--");
-        // Sweep marker slowly so the screen reads alive
-        int16_t a = (int16_t)((millis() / 7) % 3600);
-        lv_obj_set_style_transform_rotation(awa_marker, a, 0);
-        lv_obj_clear_flag(awa_marker, LV_OBJ_FLAG_HIDDEN);
+        // No live data: hide the marker entirely. The earlier "sweep
+        // slowly so the screen reads alive" animation forced a wind-
+        // bezel-sized invalidation every refresh and was a major hit
+        // on RenderLatency / FrameInterval (see docs/specs/09).
+        set_text_if_changed(lbl_awa_value, s_last_awa, sizeof(s_last_awa), "--");
+        set_hidden_if_changed(awa_marker, &s_last_awa_hidden, true);
     }
 
+    // --- TWA ---
     if (!isnan(d.twa)) {
         double deg = rad_to_deg_pos(d.twa);
         bool starboard = deg <= 180.0;
         double mag = starboard ? deg : 360.0 - deg;
         snprintf(buf, sizeof(buf), "%.0f%c", mag, starboard ? 'S' : 'P');
-        lv_label_set_text(lbl_twa_value, buf);
-        lv_obj_set_style_transform_rotation(twa_marker, deg_to_lvgl(deg), 0);
-        lv_obj_clear_flag(twa_marker, LV_OBJ_FLAG_HIDDEN);
+        set_text_if_changed(lbl_twa_value, s_last_twa, sizeof(s_last_twa), buf);
+        set_rot_if_changed(twa_marker, &s_last_twa_rot, deg_to_lvgl(deg));
+        set_hidden_if_changed(twa_marker, &s_last_twa_hidden, false);
     } else {
-        lv_label_set_text(lbl_twa_value, "--");
-        lv_obj_add_flag(twa_marker, LV_OBJ_FLAG_HIDDEN);
+        set_text_if_changed(lbl_twa_value, s_last_twa, sizeof(s_last_twa), "--");
+        set_hidden_if_changed(twa_marker, &s_last_twa_hidden, true);
     }
 
-    // --- bezel rotation: -heading so cardinal at heading is at top ---
+    // --- bezel rotation (heading) ---
     double hdg_deg = NAN;
     if (!isnan(d.headingTrue)) hdg_deg = rad_to_deg_pos(d.headingTrue);
     if (!isnan(hdg_deg)) {
-        lv_obj_set_style_transform_rotation(bezel, deg_to_lvgl(-hdg_deg), 0);
+        set_rot_if_changed(bezel, &s_last_bezel_rot, deg_to_lvgl(-hdg_deg));
         snprintf(buf, sizeof(buf), "%03.0f\xC2\xB0", hdg_deg);
-        lv_label_set_text(lbl_hdg_value, buf);
+        set_text_if_changed(lbl_hdg_value, s_last_hdg, sizeof(s_last_hdg), buf);
     } else {
-        lv_label_set_text(lbl_hdg_value, "--\xC2\xB0");
+        set_text_if_changed(lbl_hdg_value, s_last_hdg, sizeof(s_last_hdg), "--\xC2\xB0");
     }
 
     if (!isnan(d.cogTrue)) {
         snprintf(buf, sizeof(buf), "%03.0f\xC2\xB0", rad_to_deg_pos(d.cogTrue));
-        lv_label_set_text(lbl_cog_value, buf);
-    } else
-        lv_label_set_text(lbl_cog_value, "--\xC2\xB0");
+        set_text_if_changed(lbl_cog_value, s_last_cog, sizeof(s_last_cog), buf);
+    } else {
+        set_text_if_changed(lbl_cog_value, s_last_cog, sizeof(s_last_cog), "--\xC2\xB0");
+    }
 
-    // --- tide arrow: rotate (current.setTrue - heading) ---
+    // --- tide arrow ---
     bool show_tide = !isnan(d.currentSetTrue) && !isnan(d.currentDrift) &&
                      d.currentDrift > 0.05 && !isnan(hdg_deg);
     if (show_tide) {
         double tide_rel = rad_to_deg_pos(d.currentSetTrue) - hdg_deg;
         while (tide_rel < 0) tide_rel += 360;
-        lv_obj_set_style_transform_rotation(tide_arrow, deg_to_lvgl(tide_rel), 0);
-        lv_obj_clear_flag(tide_arrow, LV_OBJ_FLAG_HIDDEN);
+        set_rot_if_changed(tide_arrow, &s_last_tide_rot, deg_to_lvgl(tide_rel));
+        set_hidden_if_changed(tide_arrow, &s_last_tide_hidden, false);
         snprintf(buf, sizeof(buf), "%.1f", mps_to_kn(d.currentDrift));
-        lv_label_set_text(lbl_tide_speed, buf);
+        set_text_if_changed(lbl_tide_speed, s_last_tide, sizeof(s_last_tide), buf);
     } else {
-        lv_obj_add_flag(tide_arrow, LV_OBJ_FLAG_HIDDEN);
-        lv_label_set_text(lbl_tide_speed, "");
+        set_hidden_if_changed(tide_arrow, &s_last_tide_hidden, true);
+        set_text_if_changed(lbl_tide_speed, s_last_tide, sizeof(s_last_tide), "");
     }
 
-    // --- waypoint pip: (btw - heading) bow-relative ---
+    // --- waypoint pip ---
     if (!isnan(d.btw) && !isnan(hdg_deg)) {
         double wp_rel = rad_to_deg_pos(d.btw) - hdg_deg;
         while (wp_rel < 0) wp_rel += 360;
-        lv_obj_set_style_transform_rotation(waypoint_marker, deg_to_lvgl(wp_rel), 0);
-        lv_obj_clear_flag(waypoint_marker, LV_OBJ_FLAG_HIDDEN);
+        set_rot_if_changed(waypoint_marker, &s_last_wp_rot, deg_to_lvgl(wp_rel));
+        set_hidden_if_changed(waypoint_marker, &s_last_wp_hidden, false);
     } else {
-        lv_obj_add_flag(waypoint_marker, LV_OBJ_FLAG_HIDDEN);
+        set_hidden_if_changed(waypoint_marker, &s_last_wp_hidden, true);
     }
 }
 
