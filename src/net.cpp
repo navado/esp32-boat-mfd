@@ -17,6 +17,7 @@
 #include "app_events.h"
 #include "source_nmea_wifi.h"
 #include "source_nmea2000.h"
+#include "boat_cli.h"
 
 namespace net {
 
@@ -299,6 +300,7 @@ bool dispatchCommand(const String &line) {
     if (sk::handleSerialCommand(line)) return true;
     if (nmea_wifi::handleSerialCommand(line)) return true;
     if (nmea2000::handleSerialCommand(line)) return true;
+    if (boat::handleSerialCommand(line)) return true;
     if (layout::handleSerialCommand(line)) return true;
     if (s_extra && s_extra(line)) return true;
     return false;
