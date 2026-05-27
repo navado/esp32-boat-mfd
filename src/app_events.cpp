@@ -1,4 +1,5 @@
 #include "app_events.h"
+#include "latency.h"
 
 #include <freertos/FreeRTOS.h>
 #include <freertos/queue.h>
@@ -118,14 +119,22 @@ void setup() {
 
 bool post(const Command &cmd, uint32_t timeout_ms) {
     if (!s_ui_q) return false;
-    bool ok = xQueueSend(s_ui_q, &cmd, pdMS_TO_TICKS(timeout_ms)) == pdTRUE;
+    // Stamp the post wall-clock so pump() can record the post->drain
+    // latency for the CommandRtt benchmark channel. Producers may set
+    // their own t_post_us (e.g., touch_task setting it at the point of
+    // gesture detection); only fill if they didn't.
+    Command stamped = cmd;
+    if (stamped.t_post_us == 0) stamped.t_post_us = micros();
+    bool ok = xQueueSend(s_ui_q, &stamped, pdMS_TO_TICKS(timeout_ms)) == pdTRUE;
     if (ok) track_depth(s_ui_q, &s_ui_hi);
     return ok;
 }
 
 bool post_net(const Command &cmd, uint32_t timeout_ms) {
     if (!s_net_q) return false;
-    bool ok = xQueueSend(s_net_q, &cmd, pdMS_TO_TICKS(timeout_ms)) == pdTRUE;
+    Command stamped = cmd;
+    if (stamped.t_post_us == 0) stamped.t_post_us = micros();
+    bool ok = xQueueSend(s_net_q, &stamped, pdMS_TO_TICKS(timeout_ms)) == pdTRUE;
     if (ok) track_depth(s_net_q, &s_net_hi);
     return ok;
 }
@@ -138,6 +147,15 @@ void pump() {
     // queue is being spammed (we'd starve LVGL).
     int max_per_tick = 8;
     while (max_per_tick-- > 0 && xQueueReceive(s_ui_q, &cmd, 0) == pdTRUE) {
+        // Record post->drain latency for the CommandRtt channel.
+        if (cmd.t_post_us) {
+            uint32_t now = micros();
+            // Defensive against wrap (~71 min).
+            uint32_t dt = now - cmd.t_post_us;
+            if ((int32_t)dt >= 0) {
+                latency::record(latency::Channel::CommandRtt, dt);
+            }
+        }
         switch (cmd.type) {
         case CommandType::ShowScreen: {
             const char *id = cmd.a;

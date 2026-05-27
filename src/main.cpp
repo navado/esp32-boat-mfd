@@ -16,6 +16,7 @@
 #include "app_events.h"
 #include "touch_cal.h"
 #include "config_runtime.h"
+#include "latency.h"
 
 #include <Preferences.h>
 #include <math.h>
@@ -112,21 +113,47 @@ static Arduino_RGB_Display *gfx =
 
 static bool touch_present = false;
 
-// FPS benchmark counters (updated from disp_flush_cb).
+// FPS / render benchmark counters (updated from disp_flush_cb).
+// Per docs/specs/09: track flushed pixel volume too so we can compare
+// before/after invalidation tweaks.
 static volatile uint32_t g_flush_count = 0;
 static volatile uint32_t g_flush_us_total = 0;
 static volatile uint32_t g_flush_us_peak = 0;
+static volatile uint64_t g_flush_px_total = 0;
+static volatile uint32_t g_flush_px_peak = 0;  // largest single rect (W*H)
+
+// Latency stamps consumed by latency::record():
+//   g_last_invalidate_us : set by ui_refresh when it forces a full-
+//                          screen invalidate; cleared after first flush
+//                          that follows. The delta is "render latency".
+//   g_last_flush_us      : timestamp of the previous flush, for the
+//                          frame-interval channel.
+static volatile uint32_t g_last_invalidate_us = 0;
+static volatile uint32_t g_last_flush_us = 0;
 
 static void disp_flush_cb(lv_display_t *d, const lv_area_t *area, uint8_t *px_map) {
     uint32_t t0 = micros();
     uint32_t w = area->x2 - area->x1 + 1;
     uint32_t h = area->y2 - area->y1 + 1;
+    uint32_t px = w * h;
     gfx->draw16bitRGBBitmap(area->x1, area->y1, (uint16_t *)px_map, w, h);
     lv_display_flush_ready(d);
     uint32_t dt = micros() - t0;
     g_flush_count++;
     g_flush_us_total += dt;
+    g_flush_px_total += px;
     if (dt > g_flush_us_peak) g_flush_us_peak = dt;
+    if (px > g_flush_px_peak) g_flush_px_peak = px;
+
+    // Latency channels.
+    if (g_last_flush_us) {
+        latency::record(latency::Channel::FrameInterval, t0 - g_last_flush_us);
+    }
+    g_last_flush_us = t0;
+    if (g_last_invalidate_us) {
+        latency::record(latency::Channel::RenderLatency, t0 - g_last_invalidate_us);
+        g_last_invalidate_us = 0;  // only the first flush after invalidate counts
+    }
 }
 
 // ----- Touch task --------------------------------------------------------
@@ -387,6 +414,10 @@ static void detect_swipe_release(int16_t down_x, int16_t down_y, uint32_t down_m
     app::Command c;
     c.type = app::CommandType::ShowScreen;
     strncpy(c.a, cmd, sizeof(c.a) - 1);
+    // Stamp the post time at gesture detection so the CommandRtt
+    // channel measures the actual touch-to-screen-switch latency,
+    // not just the queue post->drain time.
+    c.t_post_us = micros();
     app::post(c, 0);
 }
 
@@ -810,10 +841,40 @@ static void bench_dump() {
               (unsigned long)g_i2c_err_count,
               (unsigned long)g_gt_ready_count,
               (unsigned long)g_gt_points_count);
+    // Render volume (docs/specs/09): flushed pixels since last reset
+    // and largest single flush rect. 480*480 = 230400 px is a "full
+    // screen" reference.
+    uint64_t flushed = g_flush_px_total;
+    uint32_t flush_peak = g_flush_px_peak;
+    net::logf("[bench] render: flushed=%llu px (~%llu full screens) peak_rect=%lu px (%.1f%% screen)",
+              (unsigned long long)flushed,
+              (unsigned long long)(flushed / 230400ULL),
+              (unsigned long)flush_peak,
+              flush_peak * 100.0f / 230400.0f);
+    // Latency channels (docs/specs/09). Each line: count, min, avg, max
+    // in microseconds. Persist across bench dumps so a long sample is
+    // possible; use `latency-reset` to zero the histograms.
+    for (int i = 0; i < (int)latency::Channel::COUNT; ++i) {
+        latency::Channel ch = (latency::Channel)i;
+        latency::Stats s = latency::snapshot(ch);
+        if (s.count == 0) {
+            net::logf("[bench] lat %-14s n=0", latency::channel_name(ch));
+        } else {
+            uint32_t avg = (uint32_t)(s.sum_us / s.count);
+            net::logf("[bench] lat %-14s n=%lu  min=%lu us  avg=%lu us  max=%lu us",
+                      latency::channel_name(ch),
+                      (unsigned long)s.count,
+                      (unsigned long)s.min_us,
+                      (unsigned long)avg,
+                      (unsigned long)s.max_us);
+        }
+    }
     // Reset peak counters so next bench shows recent activity.
     g_loop_max_us = 0;
     g_lvgl_max_us = 0;
     g_section_max_us = 0;
+    g_flush_px_total = 0;
+    g_flush_px_peak = 0;
     strncpy(g_section_peak_name, "-", sizeof(g_section_peak_name) - 1);
     g_section_peak_name[sizeof(g_section_peak_name) - 1] = 0;
 }
@@ -980,6 +1041,21 @@ static bool handleMainCommand(const String &line) {
     }
     if (line == "config-flush") {
         config::flush_pending();
+        return true;
+    }
+    if (line == "latency-reset" || line == "bench-reset") {
+        latency::reset_all();
+        g_flush_count = 0;
+        g_flush_us_total = 0;
+        g_flush_us_peak = 0;
+        g_flush_px_total = 0;
+        g_flush_px_peak = 0;
+        g_loop_max_us = 0;
+        g_lvgl_max_us = 0;
+        g_section_max_us = 0;
+        strncpy(g_section_peak_name, "-", sizeof(g_section_peak_name) - 1);
+        g_section_peak_name[sizeof(g_section_peak_name) - 1] = 0;
+        net::logf("[bench] reset");
         return true;
     }
     if (line == "touch-cal-reset") {
@@ -1188,6 +1264,21 @@ static void ui_refresh(lv_timer_t *) {
     app::pump();
     note_slow_section("ui:pump", micros() - t);
 
+    // SK-age channel: record how stale sk::data was at the moment the
+    // active screen read it. Only sample when SK has produced at least
+    // one delta and isn't currently in steady-disconnected state.
+    {
+        sk::Data d_snap;
+        sk::copyData(d_snap);
+        if (d_snap.lastUpdateMs) {
+            uint32_t age_ms = millis() - d_snap.lastUpdateMs;
+            // 1 hour cap so a never-updated reading doesn't pin max.
+            if (age_ms < 3600000) {
+                latency::record(latency::Channel::SkAge, age_ms * 1000);
+            }
+        }
+    }
+
     t = micros();
     ui::refresh_current();
     note_slow_section("ui:screen", micros() - t);
@@ -1220,6 +1311,7 @@ static void ui_refresh(lv_timer_t *) {
     // Runtime-togglable so we can A/B test perf on the wind screen
     // (force-invalidate on|off via console).
     if (g_force_invalidate) {
+        g_last_invalidate_us = micros();  // RenderLatency channel
         lv_obj_invalidate(lv_screen_active());
     }
 }

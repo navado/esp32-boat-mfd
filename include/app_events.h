@@ -38,6 +38,10 @@ struct Command {
     // worker) is responsible for heap_caps_free(blob).
     void *blob = nullptr;
     size_t blob_len = 0;
+    // Wall-clock stamp (micros() at post site). Read by pump() to
+    // compute post->drain latency for the latency benchmark in
+    // docs/specs/09. Producers can leave it at 0; post() fills it.
+    uint32_t t_post_us = 0;
 };
 
 void setup();
