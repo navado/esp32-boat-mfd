@@ -75,7 +75,52 @@ class Device:
         path.write_bytes(r.content)
         return path
 
+    # ---- Touch / gesture injection ----
+    def touch(self, x: int, y: int, pressed: bool) -> dict:
+        """Raw touchscreen-manager-level injection."""
+        r = requests.post(f"{self.base}/api/test/touch",
+                          json={"x": x, "y": y, "pressed": pressed},
+                          timeout=5)
+        r.raise_for_status()
+        return r.json()
+
+    def tap(self, x: int, y: int, hold_ms: int = 50) -> dict:
+        r = requests.post(f"{self.base}/api/test/tap",
+                          json={"x": x, "y": y, "hold_ms": hold_ms},
+                          timeout=10)
+        r.raise_for_status()
+        return r.json()
+
+    def swipe(self, x0: int, y0: int, x1: int, y1: int,
+              dur_ms: int = 300, steps: int = 8) -> dict:
+        r = requests.post(f"{self.base}/api/test/swipe",
+                          json={"x0": x0, "y0": y0, "x1": x1, "y1": y1,
+                                "dur_ms": dur_ms, "steps": steps},
+                          timeout=15)
+        r.raise_for_status()
+        return r.json()
+
+    def gesture(self, direction: str) -> dict:
+        """Action-queue-level injection: 'left' / 'right' / 'up' / 'down'."""
+        r = requests.post(f"{self.base}/api/test/gesture",
+                          json={"dir": direction}, timeout=5)
+        r.raise_for_status()
+        return r.json()
+
     # ---- Polling helpers ----
+    def wait_for_screen(self, screen_id: str,
+                        timeout_s: float = 5.0,
+                        interval_s: float = 0.25) -> str:
+        """Poll /api/state until screen.id == screen_id."""
+        deadline = time.time() + timeout_s
+        last = None
+        while time.time() < deadline:
+            last = self.state()["screen"]["id"]
+            if last == screen_id:
+                return last
+            time.sleep(interval_s)
+        pytest.fail(f"screen never became {screen_id!r}; last={last!r}")
+
     def wait_for_field(self, name: str, expected_source: str,
                        timeout_s: float = 8.0,
                        interval_s: float = 0.4) -> dict:

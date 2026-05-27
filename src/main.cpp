@@ -604,6 +604,83 @@ static void touch_read_cb(lv_indev_t *indev, lv_indev_data_t *data) {
 
 static uint32_t lv_tick_cb(void) { return millis(); }
 
+// ----- Test injection API (see include/input_test.h) ---------------------
+// Implemented in this TU so it can reach the file-local g_touch /
+// g_touch_mtx / detect_swipe_release. Always available - tests rely on
+// it; if a deployment ever needs to lock this down, gate the web-side
+// registrations in src/web.cpp, not these symbols.
+
+#include "input_test.h"
+
+namespace input_test {
+
+bool inject_touch(int16_t x, int16_t y, bool pressed) {
+    if (!g_touch_mtx) return false;
+    if (xSemaphoreTake(g_touch_mtx, pdMS_TO_TICKS(20)) != pdTRUE) return false;
+    g_touch.pressed = pressed;
+    if (pressed) {
+        g_touch.x = x;
+        g_touch.y = y;
+        g_touch.raw_x = x;
+        g_touch.raw_y = y;
+    }
+    g_touch.last_ms = millis();
+    xSemaphoreGive(g_touch_mtx);
+    net::logf("[test] inject_touch x=%d y=%d pressed=%d", x, y, pressed);
+    return true;
+}
+
+bool inject_tap(int16_t x, int16_t y, uint32_t hold_ms) {
+    if (hold_ms < 20) hold_ms = 20;     // LVGL indev polls ~5 ms; give it time
+    if (hold_ms > 2000) hold_ms = 2000; // sanity
+    if (!inject_touch(x, y, true)) return false;
+    vTaskDelay(pdMS_TO_TICKS(hold_ms));
+    return inject_touch(0, 0, false);
+}
+
+bool inject_swipe(int16_t x0, int16_t y0,
+                  int16_t x1, int16_t y1,
+                  uint32_t dur_ms, uint8_t steps) {
+    if (steps < 2) steps = 2;
+    if (steps > 32) steps = 32;
+    if (dur_ms < 20) dur_ms = 20;
+    if (dur_ms > 3000) dur_ms = 3000;
+    uint32_t per_step = dur_ms / steps;
+    uint32_t down_ms = millis();
+    // Intermediate samples - LVGL sees motion and updates its drag state.
+    for (uint8_t i = 0; i <= steps; ++i) {
+        int32_t x = x0 + ((int32_t)(x1 - x0) * i) / steps;
+        int32_t y = y0 + ((int32_t)(y1 - y0) * i) / steps;
+        inject_touch((int16_t)x, (int16_t)y, true);
+        vTaskDelay(pdMS_TO_TICKS(per_step));
+    }
+    inject_touch(0, 0, false);
+    // Drive the project's high-level swipe detector directly. The
+    // touch_task also calls this on real GT911 release transitions; we
+    // call it here so injection doesn't depend on whether the touch
+    // task happened to be polling at our release moment.
+    detect_swipe_release(x0, y0, down_ms, x1, y1);
+    return true;
+}
+
+bool post_gesture(const char *dir) {
+    if (!dir) return false;
+    const char *cmd = nullptr;
+    if      (!strcmp(dir, "left"))  cmd = "next";
+    else if (!strcmp(dir, "right")) cmd = "prev";
+    else if (!strcmp(dir, "up"))    cmd = "settings";
+    else if (!strcmp(dir, "down"))  cmd = "dashboard";
+    else return false;
+    app::Command c;
+    c.type = app::CommandType::ShowScreen;
+    strncpy(c.a, cmd, sizeof(c.a) - 1);
+    c.t_post_us = micros();
+    net::logf("[test] post_gesture dir=%s -> %s", dir, cmd);
+    return app::post(c, 0);
+}
+
+}  // namespace input_test
+
 // ----- Global overlays (visible on every screen) -------------------------
 // MOB button + rescue overlay
 static struct {
