@@ -355,11 +355,336 @@ static void update_quad_grid(lv_obj_t *root, const ScreenVariantSpec &spec,
 }
 
 // ---------------------------------------------------------------------------
+// hero_plus template - one huge primary value with up to 4 secondary
+// stats stacked beneath it. Used by single-purpose screens (depth, wind
+// detail, single-battery view).
+
+struct HeroPlusState {
+    lv_obj_t *primary_value;
+    lv_obj_t *primary_unit;
+    lv_obj_t *primary_secondary;  // small qualifier line right of primary
+    lv_obj_t *extras_label[4];
+    lv_obj_t *extras_value[4];
+    char last_primary[24];
+    char last_primary_secondary[24];
+    char last_extras[4][24];
+    MetricBinding metric;  // copy of metrics[0]
+};
+
+static lv_obj_t *create_hero_plus(lv_obj_t *parent, const ScreenVariantSpec &spec) {
+    if (spec.metric_count < 1) return nullptr;
+    lv_obj_t *root = lv_obj_create(parent);
+    lv_obj_set_size(root, LCD_W, LCD_H);
+    if (parent) lv_obj_set_pos(root, 0, 0);
+    lv_obj_set_style_bg_color(root, lv_color_hex(theme.bg), 0);
+    lv_obj_set_style_bg_opa(root, LV_OPA_COVER, 0);
+    lv_obj_set_style_border_width(root, 0, 0);
+    lv_obj_set_style_radius(root, 0, 0);
+    lv_obj_set_style_pad_all(root, 0, 0);
+    lv_obj_clear_flag(root, LV_OBJ_FLAG_SCROLLABLE);
+
+    HeroPlusState *st = (HeroPlusState *)heap_caps_calloc(1, sizeof(HeroPlusState),
+                                                          MALLOC_CAP_INTERNAL);
+    if (!st) { net::logf("[layout] hero_plus alloc failed"); return root; }
+    st->metric = spec.metrics[0];
+    strncpy(st->last_primary, "\xFF", sizeof(st->last_primary));
+    strncpy(st->last_primary_secondary, "\xFF", sizeof(st->last_primary_secondary));
+    for (int i = 0; i < 4; ++i)
+        strncpy(st->last_extras[i], "\xFF", sizeof(st->last_extras[0]));
+
+    // Title at top, montserrat_28, accent color.
+    lv_obj_t *title = lv_label_create(root);
+    lv_label_set_text(title, spec.title ? spec.title : st->metric.label);
+    lv_obj_set_style_text_font(title, &lv_font_montserrat_28, 0);
+    lv_obj_set_style_text_color(title, lv_color_hex(st->metric.accent), 0);
+    lv_obj_align(title, LV_ALIGN_TOP_MID, 0, 10);
+
+    // Hero panel (top half).
+    lv_obj_t *hero = lv_obj_create(root);
+    lv_obj_set_size(hero, LCD_W - 16, 220);
+    lv_obj_set_pos(hero, 8, 58);
+    lv_obj_set_style_bg_color(hero, lv_color_hex(theme.panel), 0);
+    lv_obj_set_style_bg_opa(hero, LV_OPA_COVER, 0);
+    lv_obj_set_style_border_color(hero, lv_color_hex(theme.panel_edge), 0);
+    lv_obj_set_style_border_width(hero, 1, 0);
+    lv_obj_set_style_radius(hero, 10, 0);
+    lv_obj_set_style_pad_all(hero, 0, 0);
+    lv_obj_clear_flag(hero, LV_OBJ_FLAG_SCROLLABLE);
+
+    st->primary_value = lv_label_create(hero);
+    lv_label_set_text(st->primary_value, "--");
+    lv_obj_set_style_text_font(st->primary_value, &lv_font_montserrat_48, 0);
+    lv_obj_set_style_text_color(st->primary_value, lv_color_hex(theme.fg), 0);
+    lv_obj_align(st->primary_value, LV_ALIGN_CENTER, -30, -10);
+
+    if (st->metric.unit && st->metric.unit[0]) {
+        st->primary_unit = lv_label_create(hero);
+        lv_label_set_text(st->primary_unit, st->metric.unit);
+        lv_obj_set_style_text_font(st->primary_unit, &lv_font_montserrat_28, 0);
+        lv_obj_set_style_text_color(st->primary_unit, lv_color_hex(theme.fg_dim), 0);
+        lv_obj_align(st->primary_unit, LV_ALIGN_CENTER, 80, 8);
+    }
+
+    st->primary_secondary = lv_label_create(hero);
+    lv_label_set_text(st->primary_secondary, "");
+    lv_obj_set_style_text_font(st->primary_secondary, &lv_font_montserrat_20, 0);
+    lv_obj_set_style_text_color(st->primary_secondary, lv_color_hex(theme.fg_dim), 0);
+    lv_obj_align(st->primary_secondary, LV_ALIGN_BOTTOM_MID, 0, -10);
+
+    // Secondary stat panel - 2x2 grid below hero.
+    lv_obj_t *grid = lv_obj_create(root);
+    int gy = 58 + 220 + 8;
+    lv_obj_set_size(grid, LCD_W - 16, LCD_H - gy - 8);
+    lv_obj_set_pos(grid, 8, gy);
+    lv_obj_set_style_bg_color(grid, lv_color_hex(theme.panel), 0);
+    lv_obj_set_style_bg_opa(grid, LV_OPA_COVER, 0);
+    lv_obj_set_style_border_color(grid, lv_color_hex(theme.panel_edge), 0);
+    lv_obj_set_style_border_width(grid, 1, 0);
+    lv_obj_set_style_radius(grid, 10, 0);
+    lv_obj_set_style_pad_all(grid, 12, 0);
+    lv_obj_clear_flag(grid, LV_OBJ_FLAG_SCROLLABLE);
+
+    int cell_w = (LCD_W - 16 - 24) / 2;
+    int cell_h = ((LCD_H - gy - 8) - 24) / 2;
+    for (uint8_t i = 0; i < st->metric.extras_count && i < 4; ++i) {
+        int col = i % 2;
+        int row = i / 2;
+        int x = col * cell_w;
+        int y = row * cell_h;
+        st->extras_label[i] = lv_label_create(grid);
+        lv_label_set_text(st->extras_label[i],
+                          st->metric.extras[i].label ? st->metric.extras[i].label : "");
+        lv_obj_set_style_text_font(st->extras_label[i], &lv_font_montserrat_14, 0);
+        lv_obj_set_style_text_color(st->extras_label[i], lv_color_hex(theme.fg_dim), 0);
+        lv_obj_set_pos(st->extras_label[i], x, y);
+
+        st->extras_value[i] = lv_label_create(grid);
+        lv_label_set_text(st->extras_value[i], "--");
+        lv_obj_set_style_text_font(st->extras_value[i], &lv_font_montserrat_28, 0);
+        lv_obj_set_style_text_color(st->extras_value[i], lv_color_hex(theme.fg), 0);
+        lv_obj_set_pos(st->extras_value[i], x, y + 18);
+    }
+
+    lv_obj_set_user_data(root, st);
+    return root;
+}
+
+static void update_hero_plus(lv_obj_t *root, const ScreenVariantSpec &spec,
+                             const sk::Data &data) {
+    (void)spec;
+    if (!root) return;
+    auto *st = (HeroPlusState *)lv_obj_get_user_data(root);
+    if (!st) return;
+
+    char pri[24], sec[24];
+    format_metric(st->metric, data, pri, sizeof(pri), sec, sizeof(sec));
+    ui::set_text_if_changed(st->primary_value, st->last_primary,
+                            sizeof(st->last_primary), pri);
+    if (st->primary_secondary) {
+        ui::set_text_if_changed(st->primary_secondary, st->last_primary_secondary,
+                                sizeof(st->last_primary_secondary), sec);
+    }
+
+    for (uint8_t i = 0; i < st->metric.extras_count && i < 4; ++i) {
+        if (!st->extras_value[i]) continue;
+        MetricBinding eb = {};
+        eb.source = st->metric.extras[i].source;
+        char ep[24], esec[24];
+        format_metric(eb, data, ep, sizeof(ep), esec, sizeof(esec));
+        ui::set_text_if_changed(st->extras_value[i], st->last_extras[i],
+                                sizeof(st->last_extras[i]), ep);
+    }
+}
+
+// ---------------------------------------------------------------------------
+// status_list template - vertical list of label : value rows. Up to 8
+// rows; each metric is one row. Used for system/diagnostics screens.
+
+struct StatusListState {
+    lv_obj_t *value_labels[8];
+    char last_values[8][32];
+};
+
+static lv_obj_t *create_status_list(lv_obj_t *parent, const ScreenVariantSpec &spec) {
+    if (spec.metric_count < 1) return nullptr;
+    lv_obj_t *root = lv_obj_create(parent);
+    lv_obj_set_size(root, LCD_W, LCD_H);
+    if (parent) lv_obj_set_pos(root, 0, 0);
+    lv_obj_set_style_bg_color(root, lv_color_hex(theme.bg), 0);
+    lv_obj_set_style_bg_opa(root, LV_OPA_COVER, 0);
+    lv_obj_set_style_border_width(root, 0, 0);
+    lv_obj_set_style_radius(root, 0, 0);
+    lv_obj_set_style_pad_all(root, 0, 0);
+    lv_obj_clear_flag(root, LV_OBJ_FLAG_SCROLLABLE);
+
+    StatusListState *st = (StatusListState *)heap_caps_calloc(1, sizeof(StatusListState),
+                                                              MALLOC_CAP_INTERNAL);
+    if (!st) { net::logf("[layout] status_list alloc failed"); return root; }
+    for (int i = 0; i < 8; ++i)
+        strncpy(st->last_values[i], "\xFF", sizeof(st->last_values[0]));
+
+    // Title at top.
+    lv_obj_t *title = lv_label_create(root);
+    lv_label_set_text(title, spec.title ? spec.title : "STATUS");
+    lv_obj_set_style_text_font(title, &lv_font_montserrat_28, 0);
+    lv_obj_set_style_text_color(title, lv_color_hex(theme.accent), 0);
+    lv_obj_align(title, LV_ALIGN_TOP_MID, 0, 10);
+
+    // Panel container.
+    lv_obj_t *panel = lv_obj_create(root);
+    lv_obj_set_size(panel, LCD_W - 16, LCD_H - 60);
+    lv_obj_set_pos(panel, 8, 52);
+    lv_obj_set_style_bg_color(panel, lv_color_hex(theme.panel), 0);
+    lv_obj_set_style_bg_opa(panel, LV_OPA_COVER, 0);
+    lv_obj_set_style_border_color(panel, lv_color_hex(theme.panel_edge), 0);
+    lv_obj_set_style_border_width(panel, 1, 0);
+    lv_obj_set_style_radius(panel, 10, 0);
+    lv_obj_set_style_pad_all(panel, 12, 0);
+    lv_obj_clear_flag(panel, LV_OBJ_FLAG_SCROLLABLE);
+
+    int row_h = (LCD_H - 60 - 24) / 8;
+    int n = spec.metric_count > 8 ? 8 : spec.metric_count;
+    for (int i = 0; i < n; ++i) {
+        const MetricBinding &m = spec.metrics[i];
+        lv_obj_t *lbl = lv_label_create(panel);
+        lv_label_set_text(lbl, m.label ? m.label : "");
+        lv_obj_set_style_text_font(lbl, &lv_font_montserrat_20, 0);
+        lv_obj_set_style_text_color(lbl, lv_color_hex(theme.fg_dim), 0);
+        lv_obj_set_pos(lbl, 0, i * row_h);
+
+        st->value_labels[i] = lv_label_create(panel);
+        lv_label_set_text(st->value_labels[i], "--");
+        lv_obj_set_style_text_font(st->value_labels[i], &lv_font_montserrat_20, 0);
+        lv_obj_set_style_text_color(st->value_labels[i], lv_color_hex(theme.fg), 0);
+        lv_obj_set_pos(st->value_labels[i], 180, i * row_h);
+    }
+
+    lv_obj_set_user_data(root, st);
+    return root;
+}
+
+static void update_status_list(lv_obj_t *root, const ScreenVariantSpec &spec,
+                                const sk::Data &data) {
+    if (!root) return;
+    auto *st = (StatusListState *)lv_obj_get_user_data(root);
+    if (!st) return;
+    int n = spec.metric_count > 8 ? 8 : spec.metric_count;
+    for (int i = 0; i < n; ++i) {
+        if (!st->value_labels[i]) continue;
+        char pri[24], sec[24];
+        format_metric(spec.metrics[i], data, pri, sizeof(pri), sec, sizeof(sec));
+        char combined[32];
+        if (spec.metrics[i].unit && spec.metrics[i].unit[0]) {
+            snprintf(combined, sizeof(combined), "%s %s", pri, spec.metrics[i].unit);
+        } else {
+            snprintf(combined, sizeof(combined), "%s", pri);
+        }
+        ui::set_text_if_changed(st->value_labels[i], st->last_values[i],
+                                sizeof(st->last_values[i]), combined);
+    }
+}
+
+// ---------------------------------------------------------------------------
+// round_instrument template - circular bezel with center value. Minimal
+// first cut (no rotating needle yet); useful for compass/heading
+// digital readouts where a future revision can layer the needle on top.
+
+struct RoundInstrumentState {
+    lv_obj_t *value;
+    lv_obj_t *unit;
+    lv_obj_t *secondary;
+    char last_value[24];
+    char last_secondary[24];
+    MetricBinding metric;
+};
+
+static lv_obj_t *create_round_instrument(lv_obj_t *parent,
+                                          const ScreenVariantSpec &spec) {
+    if (spec.metric_count < 1) return nullptr;
+    lv_obj_t *root = lv_obj_create(parent);
+    lv_obj_set_size(root, LCD_W, LCD_H);
+    if (parent) lv_obj_set_pos(root, 0, 0);
+    lv_obj_set_style_bg_color(root, lv_color_hex(theme.bg), 0);
+    lv_obj_set_style_bg_opa(root, LV_OPA_COVER, 0);
+    lv_obj_set_style_border_width(root, 0, 0);
+    lv_obj_set_style_pad_all(root, 0, 0);
+    lv_obj_clear_flag(root, LV_OBJ_FLAG_SCROLLABLE);
+
+    RoundInstrumentState *st = (RoundInstrumentState *)heap_caps_calloc(
+        1, sizeof(RoundInstrumentState), MALLOC_CAP_INTERNAL);
+    if (!st) { net::logf("[layout] round_inst alloc failed"); return root; }
+    st->metric = spec.metrics[0];
+    strncpy(st->last_value, "\xFF", sizeof(st->last_value));
+    strncpy(st->last_secondary, "\xFF", sizeof(st->last_secondary));
+
+    // Title at top.
+    lv_obj_t *title = lv_label_create(root);
+    lv_label_set_text(title, spec.title ? spec.title : st->metric.label);
+    lv_obj_set_style_text_font(title, &lv_font_montserrat_20, 0);
+    lv_obj_set_style_text_color(title, lv_color_hex(st->metric.accent), 0);
+    lv_obj_align(title, LV_ALIGN_TOP_MID, 0, 8);
+
+    // Bezel: a rounded square that approximates a circle on a square panel.
+    int dial_size = LCD_W - 80;
+    lv_obj_t *bezel = lv_obj_create(root);
+    lv_obj_set_size(bezel, dial_size, dial_size);
+    lv_obj_align(bezel, LV_ALIGN_CENTER, 0, 10);
+    lv_obj_set_style_bg_color(bezel, lv_color_hex(theme.panel), 0);
+    lv_obj_set_style_bg_opa(bezel, LV_OPA_COVER, 0);
+    lv_obj_set_style_border_color(bezel, lv_color_hex(theme.panel_edge), 0);
+    lv_obj_set_style_border_width(bezel, 4, 0);
+    lv_obj_set_style_radius(bezel, LV_RADIUS_CIRCLE, 0);
+    lv_obj_set_style_pad_all(bezel, 0, 0);
+    lv_obj_clear_flag(bezel, LV_OBJ_FLAG_SCROLLABLE);
+
+    st->value = lv_label_create(bezel);
+    lv_label_set_text(st->value, "--");
+    lv_obj_set_style_text_font(st->value, &lv_font_montserrat_48, 0);
+    lv_obj_set_style_text_color(st->value, lv_color_hex(theme.fg), 0);
+    lv_obj_align(st->value, LV_ALIGN_CENTER, 0, -8);
+
+    if (st->metric.unit && st->metric.unit[0]) {
+        st->unit = lv_label_create(bezel);
+        lv_label_set_text(st->unit, st->metric.unit);
+        lv_obj_set_style_text_font(st->unit, &lv_font_montserrat_20, 0);
+        lv_obj_set_style_text_color(st->unit, lv_color_hex(theme.fg_dim), 0);
+        lv_obj_align(st->unit, LV_ALIGN_CENTER, 0, 32);
+    }
+
+    st->secondary = lv_label_create(bezel);
+    lv_label_set_text(st->secondary, "");
+    lv_obj_set_style_text_font(st->secondary, &lv_font_montserrat_14, 0);
+    lv_obj_set_style_text_color(st->secondary, lv_color_hex(theme.fg_dim), 0);
+    lv_obj_align(st->secondary, LV_ALIGN_BOTTOM_MID, 0, -16);
+
+    lv_obj_set_user_data(root, st);
+    return root;
+}
+
+static void update_round_instrument(lv_obj_t *root, const ScreenVariantSpec &spec,
+                                     const sk::Data &data) {
+    (void)spec;
+    if (!root) return;
+    auto *st = (RoundInstrumentState *)lv_obj_get_user_data(root);
+    if (!st) return;
+    char pri[24], sec[24];
+    format_metric(st->metric, data, pri, sizeof(pri), sec, sizeof(sec));
+    ui::set_text_if_changed(st->value, st->last_value, sizeof(st->last_value), pri);
+    if (st->secondary) {
+        ui::set_text_if_changed(st->secondary, st->last_secondary,
+                                sizeof(st->last_secondary), sec);
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Public factory entry points
 
 lv_obj_t *create(lv_obj_t *parent, const ScreenVariantSpec &spec) {
     switch (spec.template_id) {
-    case TemplateId::QuadGrid: return create_quad_grid(parent, spec);
+    case TemplateId::QuadGrid:        return create_quad_grid(parent, spec);
+    case TemplateId::HeroPlus:        return create_hero_plus(parent, spec);
+    case TemplateId::StatusList:      return create_status_list(parent, spec);
+    case TemplateId::RoundInstrument: return create_round_instrument(parent, spec);
     default:
         net::logf("[layout] template %d not implemented yet", (int)spec.template_id);
         return nullptr;
@@ -368,7 +693,10 @@ lv_obj_t *create(lv_obj_t *parent, const ScreenVariantSpec &spec) {
 
 void update(lv_obj_t *root, const ScreenVariantSpec &spec, const sk::Data &data) {
     switch (spec.template_id) {
-    case TemplateId::QuadGrid: update_quad_grid(root, spec, data); break;
+    case TemplateId::QuadGrid:        update_quad_grid(root, spec, data); break;
+    case TemplateId::HeroPlus:        update_hero_plus(root, spec, data); break;
+    case TemplateId::StatusList:      update_status_list(root, spec, data); break;
+    case TemplateId::RoundInstrument: update_round_instrument(root, spec, data); break;
     default: break;
     }
 }
