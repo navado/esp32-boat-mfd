@@ -1,5 +1,6 @@
 #include "signalk.h"
 #include "signalk_parser.h"
+#include "source_signalk.h"
 #include "net.h"
 
 #include <Preferences.h>
@@ -83,8 +84,14 @@ static void subscribe() {
 static void onText(uint8_t *payload, size_t len) {
     if (s_data_mtx) xSemaphoreTake(s_data_mtx, portMAX_DELAY);
     int n = applyDelta((const char *)payload, len, data);
-    if (n > 0) data.lastUpdateMs = millis();
+    uint32_t now = millis();
+    if (n > 0) data.lastUpdateMs = now;
+    Data snap = data;
     if (s_data_mtx) xSemaphoreGive(s_data_mtx);
+    // Bridge into the source-neutral model. boat::publish() does its own
+    // locking; we hand it a snapshot so the SK mutex isn't held across
+    // the priority-resolution path.
+    if (n > 0) boat::bridge_signalk_into_boat(snap, now);
 }
 
 static void set_connected(bool v) {
