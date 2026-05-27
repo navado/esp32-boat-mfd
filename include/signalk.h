@@ -37,4 +37,13 @@ void copyData(Data &out);
 uint32_t loopIters();
 uint32_t loopMaxUs();
 
+// mDNS auto-discovery. When no manual host has been set, the SK task
+// periodically queries _signalk-ws._tcp.local. and uses the first
+// record. `manual` mode disables discovery so the saved host wins.
+//   `sk-discover`     - one-shot discovery, log result
+//   `sk-host auto`    - clear manual host, enable discovery
+//   `sk-host manual <host> [port]` - pin to this host (no discovery)
+bool isAutoMode();
+bool tryAutoDiscover(uint32_t now_ms);  // safe to call from sk_task; returns true if a host was set
+
 }  // namespace sk

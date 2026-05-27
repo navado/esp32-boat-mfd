@@ -7,6 +7,7 @@
 #include <WebSocketsClient.h>
 #include <HTTPClient.h>
 #include <WiFi.h>
+#include <ESPmDNS.h>
 #include <ArduinoJson.h>
 #include <freertos/FreeRTOS.h>
 #include <freertos/semphr.h>
@@ -26,9 +27,16 @@ static WebSocketsClient ws;
 static Preferences prefs;
 static String s_host = "";
 static uint16_t s_port = 3000;
+// "auto" mode = no manual host saved -> we'll poll mDNS for
+// _signalk-ws._tcp.local. and use the first record found. The user can
+// pin a manual host with `sk-host manual <host>` (or the legacy `sk
+// <host>`) which clears auto mode by saving a host.
+static bool s_auto_mode = true;
+static uint32_t s_last_discover_ms = 0;
 static bool subscribed = false;
 static TaskHandle_t s_sk_task = nullptr;
 static volatile bool s_running = false;
+static bool s_ws_started = false;
 // Diagnostic counters - how often the SK task drains ws.loop() and how
 // long it spends inside. Exposed via /api/state.sk for profiling.
 static volatile uint32_t s_loop_iters = 0;
@@ -130,6 +138,46 @@ void copyData(Data &out) {
     if (s_data_mtx) xSemaphoreGive(s_data_mtx);
 }
 
+// Start (or restart) the WebSocket client against the current
+// s_host/s_port. Safe to call repeatedly - WebSocketsClient handles
+// re-begin by closing the prior connection.
+static void start_ws() {
+    if (s_host.length() == 0) return;
+    ws.begin(s_host.c_str(), s_port, "/signalk/v1/stream?subscribe=none");
+    ws.onEvent(onEvent);
+    ws.setReconnectInterval(5000);
+    ws.enableHeartbeat(15000, 3000, 2);
+    s_ws_started = true;
+    net::logf("[sk] ws begin %s:%u", s_host.c_str(), s_port);
+}
+
+bool isAutoMode() { return s_auto_mode; }
+
+bool tryAutoDiscover(uint32_t now_ms) {
+    if (!s_auto_mode) return false;
+    if (s_ws_started) return false;
+    if (WiFi.status() != WL_CONNECTED) return false;
+    // Throttle to one attempt per 15s; mDNS query is blocking ~1s.
+    if (s_last_discover_ms && (now_ms - s_last_discover_ms) < 15000) return false;
+    s_last_discover_ms = now_ms;
+    int n = MDNS.queryService("signalk-ws", "tcp");
+    if (n <= 0) {
+        net::logf("[sk] mDNS: no _signalk-ws._tcp record found");
+        return false;
+    }
+    String host = MDNS.hostname(0);
+    IPAddress ip = MDNS.IP(0);
+    uint16_t port = MDNS.port(0);
+    if (host.length() == 0 && ip == IPAddress(0, 0, 0, 0)) return false;
+    String target = ip != IPAddress(0, 0, 0, 0) ? ip.toString() : host;
+    s_host = target;
+    s_port = port ? port : 3000;
+    net::logf("[sk] mDNS discovered signalk-ws at %s:%u (%d records)",
+              s_host.c_str(), s_port, n);
+    start_ws();
+    return true;
+}
+
 // Dedicated SK task. Runs ws.loop() on core 0 so the synchronous
 // WiFiClient::connect() (up to 5 s on a downed boat WiFi) cannot
 // stall lv_timer_handler on core 1. The event callbacks (onEvent /
@@ -138,8 +186,10 @@ void copyData(Data &out) {
 static void sk_task(void *) {
     s_running = true;
     for (;;) {
+        // Try auto-discovery whenever we have no target yet.
+        if (!s_ws_started) tryAutoDiscover(millis());
         uint32_t t0 = micros();
-        ws.loop();
+        if (s_ws_started) ws.loop();
         uint32_t dt = micros() - t0;
         s_loop_iters++;
         if (dt > s_loop_max_us) s_loop_max_us = dt;
@@ -154,15 +204,15 @@ void setup(const String &host, uint16_t port) {
     prefs.begin("sk", false);
     s_host = prefs.getString("host", host);
     s_port = (uint16_t)prefs.getUInt("port", port);
-    if (s_host.length() == 0) {
-        net::logf("[sk] no host configured - use 'sk <host> [port]'");
-        return;
+    // Auto mode iff no saved host. Manual mode persists across reboot
+    // by virtue of a saved host being present.
+    s_auto_mode = (s_host.length() == 0);
+    if (s_auto_mode) {
+        net::logf("[sk] auto-discovery enabled (no host saved); polling mDNS");
+    } else {
+        net::logf("[sk] manual target %s:%u", s_host.c_str(), s_port);
+        start_ws();
     }
-    net::logf("[sk] target %s:%u", s_host.c_str(), s_port);
-    ws.begin(s_host.c_str(), s_port, "/signalk/v1/stream?subscribe=none");
-    ws.onEvent(onEvent);
-    ws.setReconnectInterval(5000);
-    ws.enableHeartbeat(15000, 3000, 2);
 
     if (!s_sk_task) {
         // Pin to core 0 (network/IO core). Stack 6 KB - WebSockets +
@@ -200,8 +250,24 @@ bool handleSerialCommand(const String &line) {
         ESP.restart();
         return true;
     }
+    if (line == "sk-host auto") {
+        prefs.remove("host");
+        prefs.remove("port");
+        net::logf("[sk] auto-discovery enabled - rebooting");
+        delay(200);
+        ESP.restart();
+        return true;
+    }
+    if (line == "sk-discover") {
+        s_last_discover_ms = 0;  // unthrottle
+        bool ok = tryAutoDiscover(millis());
+        if (!ok) net::logf("[sk] discover: no record (or already started)");
+        return true;
+    }
     if (line == "sk-status") {
-        net::logf("host=%s port=%u connected=%d lastUpdateAgo=%lums", s_host.c_str(), s_port,
+        net::logf("mode=%s host=%s port=%u connected=%d lastUpdateAgo=%lums",
+                  s_auto_mode ? "auto" : "manual",
+                  s_host.c_str(), s_port,
                   data.connected, data.lastUpdateMs ? (millis() - data.lastUpdateMs) : 0);
         return true;
     }
