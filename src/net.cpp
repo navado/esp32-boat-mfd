@@ -15,6 +15,7 @@
 #include "ble_config.h"
 #include "wifi_store.h"
 #include "app_events.h"
+#include "source_nmea_wifi.h"
 
 namespace net {
 
@@ -295,6 +296,7 @@ void setup() {
 bool dispatchCommand(const String &line) {
     if (handleSerialCommand(line)) return true;
     if (sk::handleSerialCommand(line)) return true;
+    if (nmea_wifi::handleSerialCommand(line)) return true;
     if (layout::handleSerialCommand(line)) return true;
     if (s_extra && s_extra(line)) return true;
     return false;

@@ -17,6 +17,7 @@
 #include "touch_cal.h"
 #include "config_runtime.h"
 #include "latency.h"
+#include "source_nmea_wifi.h"
 
 #include <Preferences.h>
 #include <math.h>
@@ -1633,6 +1634,7 @@ void setup() {
 
     layout::load_default();
     sk::setup("", 3000);
+    nmea_wifi::setup();
 
     lv_timer_create(ui_refresh, 200, NULL);
     lv_timer_create(fps_tick, 1000, NULL);
