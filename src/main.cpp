@@ -15,6 +15,7 @@
 #include "screenshot.h"
 #include "app_events.h"
 #include "touch_cal.h"
+#include "config_runtime.h"
 
 #include <Preferences.h>
 #include <math.h>
@@ -841,6 +842,35 @@ static bool handleMainCommand(const String &line) {
         ui::show_by_id("touch_cal");
         return true;
     }
+    if (line == "config-show") {
+        config::UiConfig u = config::ui();
+        config::AlarmConfig a = config::alarms();
+        config::SignalKConfig sk = config::signalk();
+        config::DomainMeta mu = config::meta(config::Domain::Ui);
+        config::DomainMeta ma = config::meta(config::Domain::Alarms);
+        config::DomainMeta ms = config::meta(config::Domain::SignalK);
+        net::logf("[cfg] ui  rev=%u src=%s pending=%d  theme=%s bright=%u fmt=%s",
+                  (unsigned)mu.revision, config::source_name(mu.source),
+                  mu.persist_pending, config::theme_name(u.theme), (unsigned)u.brightness,
+                  config::pos_format_name(u.pos_format));
+        net::logf("[cfg] alm rev=%u src=%s pending=%d  depth=%.1fm batt=%.1fV",
+                  (unsigned)ma.revision, config::source_name(ma.source),
+                  ma.persist_pending, a.depth_alarm_m, a.battery_alarm_v);
+        net::logf("[cfg] sk  rev=%u src=%s pending=%d  host=%s:%u%s",
+                  (unsigned)ms.revision, config::source_name(ms.source),
+                  ms.persist_pending, sk.host, (unsigned)sk.port,
+                  sk.token[0] ? " (token)" : "");
+        net::logf("[cfg] jobs queued=%u completed=%u failed=%u coalesced=%u",
+                  (unsigned)config::persist_jobs_queued(),
+                  (unsigned)config::persist_jobs_completed(),
+                  (unsigned)config::persist_jobs_failed(),
+                  (unsigned)config::coalesced_writes());
+        return true;
+    }
+    if (line == "config-flush") {
+        config::flush_pending();
+        return true;
+    }
     if (line == "touch-cal-reset") {
         // Restore identity matrix in RAM and NVS - effective immediately,
         // no reboot. Use this if a bad calibration locks you out of the
@@ -1232,6 +1262,10 @@ void setup() {
     // App event queue must exist before any task that wants to post.
     app::setup();
     screenshot::setup();
+    // Load persisted UI/Alarm/SignalK config into the RAM-first config
+    // owner before any module that reads those values. Replaces direct
+    // Preferences reads scattered in ui_data, screen_settings, etc.
+    config::setup();
     // net::setup() returns immediately now (Phase 4). The wifi manager
     // task posts ShowScreen("wifi") when it falls into AP mode; otherwise
     // we stay on the already-loaded dashboard.

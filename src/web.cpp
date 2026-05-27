@@ -17,6 +17,7 @@
 #include "wifi_store.h"
 #include "screenshot.h"
 #include "app_events.h"
+#include "config_runtime.h"
 #include <esp_heap_caps.h>
 
 // Gesture diagnostics live in main.cpp (top-level - not in any namespace).
@@ -436,6 +437,77 @@ static void handle_cmd() {
     send_json(202, doc);
 }
 
+// ---- /api/config -------------------------------------------------------
+// Per docs/specs/08: surfaces the RAM-resident config + per-domain
+// metadata. No NVS reads happen here - everything comes from
+// config_runtime snapshots so this endpoint is cheap.
+
+static void emit_meta(JsonObject &dst, ::config::Domain d) {
+    ::config::DomainMeta m = ::config::meta(d);
+    dst["schema"] = m.schema;
+    dst["source"] = ::config::source_name(m.source);
+    dst["revision"] = m.revision;
+    dst["updated_ms"] = m.updated_ms;
+    dst["dirty"] = m.dirty;
+    dst["persist_pending"] = m.persist_pending;
+    dst["persist_error"] = m.persist_error;
+    if (m.last_error[0]) dst["last_error"] = m.last_error;
+}
+
+static void handle_config() {
+    ::config::UiConfig ui = ::config::ui();
+    ::config::AlarmConfig al = ::config::alarms();
+    ::config::SignalKConfig sk = ::config::signalk();
+
+    JsonDocument doc;
+    JsonObject root = doc.to<JsonObject>();
+
+    JsonObject ui_obj = root["ui"].to<JsonObject>();
+    JsonObject ui_v = ui_obj["values"].to<JsonObject>();
+    ui_v["theme"] = ::config::theme_name(ui.theme);
+    ui_v["brightness"] = ui.brightness;
+    ui_v["pos_format"] = ::config::pos_format_name(ui.pos_format);
+    ui_v["default_screen"] = ui.default_screen;
+    JsonObject ui_m = ui_obj["meta"].to<JsonObject>();
+    emit_meta(ui_m, ::config::Domain::Ui);
+
+    JsonObject al_obj = root["alarms"].to<JsonObject>();
+    JsonObject al_v = al_obj["values"].to<JsonObject>();
+    al_v["depth_m"] = al.depth_alarm_m;
+    al_v["battery_v"] = al.battery_alarm_v;
+    al_v["audible"] = al.audible;
+    JsonObject al_m = al_obj["meta"].to<JsonObject>();
+    emit_meta(al_m, ::config::Domain::Alarms);
+
+    JsonObject sk_obj = root["signalk"].to<JsonObject>();
+    JsonObject sk_v = sk_obj["values"].to<JsonObject>();
+    sk_v["host"] = sk.host;
+    sk_v["port"] = sk.port;
+    // Token is sensitive - report presence only.
+    sk_v["has_token"] = (sk.token[0] != 0);
+    JsonObject sk_m = sk_obj["meta"].to<JsonObject>();
+    emit_meta(sk_m, ::config::Domain::SignalK);
+
+    send_json(200, doc);
+}
+
+static void handle_config_status() {
+    JsonDocument doc;
+    JsonObject root = doc.to<JsonObject>();
+    root["jobs_queued"] = ::config::persist_jobs_queued();
+    root["jobs_completed"] = ::config::persist_jobs_completed();
+    root["jobs_failed"] = ::config::persist_jobs_failed();
+    root["coalesced"] = ::config::coalesced_writes();
+    JsonObject domains = root["domains"].to<JsonObject>();
+    JsonObject u = domains["ui"].to<JsonObject>();
+    emit_meta(u, ::config::Domain::Ui);
+    JsonObject a = domains["alarms"].to<JsonObject>();
+    emit_meta(a, ::config::Domain::Alarms);
+    JsonObject k = domains["signalk"].to<JsonObject>();
+    emit_meta(k, ::config::Domain::SignalK);
+    send_json(200, doc);
+}
+
 // ---- /api/screenshot.bmp -----------------------------------------------
 // LVGL snapshot of the active screen. Requires LV_USE_SNAPSHOT in lv_conf.h.
 
@@ -727,6 +799,8 @@ static void bind_routes() {
     server.on("/chat", HTTP_GET, handle_probe);
     server.on("/check_network_status.txt", HTTP_GET, handle_probe);
     server.on("/api/state", HTTP_GET, handle_state);
+    server.on("/api/config", HTTP_GET, handle_config);
+    server.on("/api/config/status", HTTP_GET, handle_config_status);
     server.on("/api/screens", HTTP_GET, handle_screens);
     server.on("/api/sk", HTTP_GET, handle_sk_data);
     server.on("/api/layout", HTTP_GET, handle_layout_get);
