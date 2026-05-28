@@ -7,6 +7,7 @@
 #include "board_pins.h"
 #include "app_events.h"
 #include "net.h"
+#include "autopilot.h"
 
 #include <math.h>
 #include <stdio.h>
@@ -1146,6 +1147,203 @@ static void update_alert_focus(lv_obj_t *root, const ScreenVariantSpec &spec,
 }
 
 // ---------------------------------------------------------------------------
+// control_console template - autopilot-specific mode + adjust panel.
+//
+// Layout:
+//   top row    : mode segmented buttons (Standby / Auto / Wind / Track)
+//   middle     : large current/target heading display (deg, montserrat_48)
+//   bottom row : -10 | -1 | +1 | +10 heading-delta buttons + Silence
+//
+// Click handlers call autopilot:: which posts to the net worker queue,
+// so this runs safely from the LVGL task. State is read on each
+// update() call so the active-mode highlight reflects what the
+// emulator/backend actually believes (not just what we last asked for).
+
+struct ControlConsoleState {
+    lv_obj_t *mode_btns[5];        // standby auto wind pretrack track
+    autopilot::Mode mode_for[5];
+    lv_obj_t *current_lbl;
+    lv_obj_t *target_lbl;
+    lv_obj_t *backend_lbl;
+    autopilot::Mode last_mode = autopilot::Mode::Unknown;
+    char last_current[16];
+    char last_target[16];
+};
+
+static void cc_mode_btn_cb(lv_event_t *e) {
+    if (lv_event_get_code(e) != LV_EVENT_CLICKED) return;
+    auto mode = static_cast<autopilot::Mode>(
+        (uintptr_t)lv_event_get_user_data(e));
+    autopilot::Result r = autopilot::set_mode(mode);
+    net::logf("[cc] set_mode(%s) -> %d",
+              autopilot::mode_name(mode), (int)r);
+}
+
+static void cc_adjust_btn_cb(lv_event_t *e) {
+    if (lv_event_get_code(e) != LV_EVENT_CLICKED) return;
+    int delta = (int)(intptr_t)lv_event_get_user_data(e);
+    autopilot::Result r = autopilot::adjust_heading_deg(delta);
+    net::logf("[cc] adjust(%+d) -> %d", delta, (int)r);
+}
+
+static void cc_silence_btn_cb(lv_event_t *e) {
+    if (lv_event_get_code(e) != LV_EVENT_CLICKED) return;
+    autopilot::Result r = autopilot::silence_alarm();
+    net::logf("[cc] silence -> %d", (int)r);
+}
+
+static lv_obj_t *cc_make_button(lv_obj_t *parent, int x, int y, int w, int h,
+                                 const char *label, uint32_t bg,
+                                 uint32_t fg, lv_event_cb_t cb, void *user) {
+    lv_obj_t *b = lv_btn_create(parent);
+    lv_obj_set_size(b, w, h);
+    lv_obj_set_pos(b, x, y);
+    lv_obj_set_style_bg_color(b, lv_color_hex(bg), 0);
+    lv_obj_set_style_radius(b, 8, 0);
+    lv_obj_set_style_border_width(b, 0, 0);
+    lv_obj_set_style_pad_all(b, 0, 0);
+    lv_obj_t *lbl = lv_label_create(b);
+    lv_label_set_text(lbl, label);
+    lv_obj_set_style_text_font(lbl, &lv_font_montserrat_20, 0);
+    lv_obj_set_style_text_color(lbl, lv_color_hex(fg), 0);
+    lv_obj_center(lbl);
+    lv_obj_add_event_cb(b, cb, LV_EVENT_CLICKED, user);
+    return b;
+}
+
+static lv_obj_t *create_control_console(lv_obj_t *parent,
+                                         const ScreenVariantSpec &spec) {
+    lv_obj_t *root = lv_obj_create(parent);
+    lv_obj_set_size(root, LCD_W, LCD_H);
+    if (parent) lv_obj_set_pos(root, 0, 0);
+    lv_obj_set_style_bg_color(root, lv_color_hex(theme.bg), 0);
+    lv_obj_set_style_bg_opa(root, LV_OPA_COVER, 0);
+    lv_obj_set_style_border_width(root, 0, 0);
+    lv_obj_set_style_pad_all(root, 0, 0);
+    lv_obj_clear_flag(root, LV_OBJ_FLAG_SCROLLABLE);
+
+    ControlConsoleState *st = (ControlConsoleState *)heap_caps_calloc(
+        1, sizeof(ControlConsoleState), MALLOC_CAP_INTERNAL);
+    if (!st) { net::logf("[layout] control_console alloc failed"); return root; }
+    strncpy(st->last_current, "\xFF", sizeof(st->last_current));
+    strncpy(st->last_target, "\xFF", sizeof(st->last_target));
+
+    // Title.
+    if (spec.title && spec.title[0]) {
+        lv_obj_t *title = lv_label_create(root);
+        lv_label_set_text(title, spec.title);
+        lv_obj_set_style_text_font(title, &lv_font_montserrat_20, 0);
+        lv_obj_set_style_text_color(title, lv_color_hex(theme.accent), 0);
+        lv_obj_align(title, LV_ALIGN_TOP_MID, 0, 6);
+    }
+
+    // Mode row (4 buttons across) at y=70..130.
+    const char *names[4] = {"STANDBY", "AUTO", "WIND", "TRACK"};
+    autopilot::Mode modes[4] = {
+        autopilot::Mode::Standby, autopilot::Mode::Auto,
+        autopilot::Mode::Wind,    autopilot::Mode::Track,
+    };
+    int mode_w = (LCD_W - 16 - 12) / 4;  // 12px gaps
+    for (int i = 0; i < 4; ++i) {
+        int x = 8 + i * (mode_w + 4);
+        st->mode_btns[i] = cc_make_button(
+            root, x, 70, mode_w, 60, names[i],
+            theme.panel, theme.fg, cc_mode_btn_cb,
+            (void *)(uintptr_t)modes[i]);
+        st->mode_for[i] = modes[i];
+    }
+
+    // Current heading + target.
+    lv_obj_t *cap_cur = lv_label_create(root);
+    lv_label_set_text(cap_cur, "CURRENT");
+    lv_obj_set_style_text_font(cap_cur, &lv_font_montserrat_14, 0);
+    lv_obj_set_style_text_color(cap_cur, lv_color_hex(theme.fg_dim), 0);
+    lv_obj_align(cap_cur, LV_ALIGN_TOP_LEFT, 24, 152);
+
+    st->current_lbl = lv_label_create(root);
+    lv_label_set_text(st->current_lbl, "---");
+    lv_obj_set_style_text_font(st->current_lbl, &lv_font_montserrat_48, 0);
+    lv_obj_set_style_text_color(st->current_lbl, lv_color_hex(theme.fg), 0);
+    lv_obj_align(st->current_lbl, LV_ALIGN_TOP_LEFT, 24, 172);
+
+    lv_obj_t *cap_tgt = lv_label_create(root);
+    lv_label_set_text(cap_tgt, "TARGET");
+    lv_obj_set_style_text_font(cap_tgt, &lv_font_montserrat_14, 0);
+    lv_obj_set_style_text_color(cap_tgt, lv_color_hex(theme.fg_dim), 0);
+    lv_obj_align(cap_tgt, LV_ALIGN_TOP_RIGHT, -24, 152);
+
+    st->target_lbl = lv_label_create(root);
+    lv_label_set_text(st->target_lbl, "---");
+    lv_obj_set_style_text_font(st->target_lbl, &lv_font_montserrat_48, 0);
+    lv_obj_set_style_text_color(st->target_lbl, lv_color_hex(theme.accent), 0);
+    lv_obj_align(st->target_lbl, LV_ALIGN_TOP_RIGHT, -24, 172);
+
+    st->backend_lbl = lv_label_create(root);
+    lv_label_set_text(st->backend_lbl, "");
+    lv_obj_set_style_text_font(st->backend_lbl, &lv_font_montserrat_14, 0);
+    lv_obj_set_style_text_color(st->backend_lbl, lv_color_hex(theme.fg_dim), 0);
+    lv_obj_align(st->backend_lbl, LV_ALIGN_TOP_MID, 0, 240);
+
+    // Adjust row + silence at y=320..380.
+    const char *adj_names[4] = {"-10", "-1", "+1", "+10"};
+    int adj_vals[4] = {-10, -1, 1, 10};
+    int adj_w = 80;
+    int adj_y = 320;
+    int total_w = adj_w * 4 + 12;  // 4 buttons + 3 gaps of 4
+    int adj_x0 = (LCD_W - total_w) / 2;
+    for (int i = 0; i < 4; ++i) {
+        int x = adj_x0 + i * (adj_w + 4);
+        cc_make_button(root, x, adj_y, adj_w, 60, adj_names[i],
+                       theme.accent, 0x05101c, cc_adjust_btn_cb,
+                       (void *)(intptr_t)adj_vals[i]);
+    }
+    // Silence button across the full width at the bottom.
+    cc_make_button(root, 8, adj_y + 70, LCD_W - 16, 50, "SILENCE",
+                   theme.alarm, 0xffffff, cc_silence_btn_cb, nullptr);
+
+    lv_obj_set_user_data(root, st);
+    return root;
+}
+
+static void update_control_console(lv_obj_t *root, const ScreenVariantSpec &spec,
+                                    const sk::Data &data) {
+    (void)spec; (void)data;
+    if (!root) return;
+    auto *st = (ControlConsoleState *)lv_obj_get_user_data(root);
+    if (!st) return;
+
+    autopilot::State ap;
+    autopilot::copy_state(ap);
+
+    // Update mode-button highlights only when the mode actually changes.
+    if (ap.mode != st->last_mode) {
+        st->last_mode = ap.mode;
+        for (int i = 0; i < 4; ++i) {
+            bool active = (st->mode_for[i] == ap.mode);
+            uint32_t bg = active ? theme.accent : theme.panel;
+            uint32_t fg = active ? 0x05101c : theme.fg;
+            lv_obj_set_style_bg_color(st->mode_btns[i], lv_color_hex(bg), 0);
+            // child label is first child
+            lv_obj_t *lbl = lv_obj_get_child(st->mode_btns[i], 0);
+            if (lbl) lv_obj_set_style_text_color(lbl, lv_color_hex(fg), 0);
+        }
+    }
+
+    char cur[16], tgt[16];
+    if (isnan(ap.current_heading_rad)) snprintf(cur, sizeof(cur), "---");
+    else snprintf(cur, sizeof(cur), "%03d", (int)(ap.current_heading_rad * 180.0 / M_PI));
+    if (isnan(ap.target_heading_rad)) snprintf(tgt, sizeof(tgt), "---");
+    else snprintf(tgt, sizeof(tgt), "%03d", (int)(ap.target_heading_rad * 180.0 / M_PI));
+    ui::set_text_if_changed(st->current_lbl, st->last_current,
+                            sizeof(st->last_current), cur);
+    ui::set_text_if_changed(st->target_lbl, st->last_target,
+                            sizeof(st->last_target), tgt);
+    char bk[32];
+    snprintf(bk, sizeof(bk), "backend: %s", autopilot::backend_name(ap.backend));
+    lv_label_set_text(st->backend_lbl, bk);
+}
+
+// ---------------------------------------------------------------------------
 // Public factory entry points
 
 lv_obj_t *create(lv_obj_t *parent, const ScreenVariantSpec &spec) {
@@ -1157,6 +1355,7 @@ lv_obj_t *create(lv_obj_t *parent, const ScreenVariantSpec &spec) {
     case TemplateId::SplitPair:       return create_split_pair(parent, spec);
     case TemplateId::TrendChart:      return create_trend_chart(parent, spec);
     case TemplateId::AlertFocus:      return create_alert_focus(parent, spec);
+    case TemplateId::ControlConsole:  return create_control_console(parent, spec);
     default:
         net::logf("[layout] template %d not implemented yet", (int)spec.template_id);
         return nullptr;
@@ -1172,6 +1371,7 @@ void update(lv_obj_t *root, const ScreenVariantSpec &spec, const sk::Data &data)
     case TemplateId::SplitPair:       update_split_pair(root, spec, data); break;
     case TemplateId::TrendChart:      update_trend_chart(root, spec, data); break;
     case TemplateId::AlertFocus:      update_alert_focus(root, spec, data); break;
+    case TemplateId::ControlConsole:  update_control_console(root, spec, data); break;
     default: break;
     }
 }

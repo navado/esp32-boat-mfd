@@ -3,6 +3,7 @@
 #include <Preferences.h>
 #include <string.h>
 
+#include "app_events.h"
 #include "boat_data.h"
 #include "net.h"
 #include "signalk.h"
@@ -29,30 +30,37 @@ void save_prefs() {
     p.end();
 }
 
-// SignalK backend. Reuses the existing PUT path - same code that the
-// sk-ap-state / sk-ap-adjust CLIs drive. Caller runs on a non-LVGL
-// task (console handler is on the LVGL task today, but putValue runs
-// HTTPClient which is fast enough at 3 s timeout to be acceptable;
-// future revision should post to the net worker queue per spec).
+// SignalK backend. Posts to the net worker queue (app::post_net) so
+// callers on the LVGL task (button handlers, screen callbacks) never
+// block on HTTPClient. The net worker drains SignalKPut and runs
+// sk::putValue itself.
+//
+// Return is "queued" not "delivered" - the actual PUT status is
+// logged by the worker. UIs reflect actual state from the next
+// subscription update or heartbeat.
+Result post_sk_put(const char *path, const char *body) {
+    app::Command c;
+    c.type = app::CommandType::SignalKPut;
+    strncpy(c.a, path, sizeof(c.a) - 1);
+    strncpy(c.b, body, sizeof(c.b) - 1);
+    return app::post_net(c, 100) ? Result::Ok : Result::Failed;
+}
+
 Result sk_set_mode(Mode m) {
     const char *name = mode_name(m);
     if (!name || strcmp(name, "?") == 0) return Result::InvalidPayload;
     String body = String("\"") + name + "\"";
-    int rc = sk::putValue("steering/autopilot/state", body.c_str());
-    return (rc >= 200 && rc < 300) ? Result::Ok : Result::Failed;
+    return post_sk_put("steering/autopilot/state", body.c_str());
 }
 
 Result sk_adjust(int delta_deg) {
     char buf[16];
     snprintf(buf, sizeof(buf), "%d", delta_deg);
-    int rc = sk::putValue("steering/autopilot/actions/adjustHeading", buf);
-    return (rc >= 200 && rc < 300) ? Result::Ok : Result::Failed;
+    return post_sk_put("steering/autopilot/actions/adjustHeading", buf);
 }
 
 Result sk_silence() {
-    // SignalK alarm silence path: notifications.silence (V1 API).
-    int rc = sk::putValue("notifications/silence", "\"silenced\"");
-    return (rc >= 200 && rc < 300) ? Result::Ok : Result::Failed;
+    return post_sk_put("notifications/silence", "\"silenced\"");
 }
 
 #ifdef ENABLE_NMEA2000
