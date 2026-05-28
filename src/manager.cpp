@@ -3,12 +3,15 @@
 #include <ArduinoJson.h>
 #include <HTTPClient.h>
 #include <Preferences.h>
+#include <Update.h>
 #include <WiFi.h>
 #include <esp_heap_caps.h>
+#include <esp_ota_ops.h>
 #include <esp_task_wdt.h>
 #include <freertos/FreeRTOS.h>
 #include <freertos/semphr.h>
 #include <freertos/task.h>
+#include <mbedtls/sha256.h>
 
 #include "app_events.h"
 #include "device_identity.h"
@@ -43,6 +46,16 @@ volatile uint32_t s_last_heartbeat_ms = 0;
 volatile int s_last_heartbeat_code = 0;
 TaskHandle_t s_task = nullptr;
 volatile bool s_force_register = false;
+
+// F6 pull-OTA state. Single in-flight job at a time; if a second
+// command arrives while busy we ack busy.
+TaskHandle_t s_ota_task = nullptr;
+volatile bool s_ota_in_flight = false;
+String s_ota_job_id;
+String s_ota_url;
+String s_ota_sha256;
+String s_ota_version;
+size_t s_ota_size = 0;
 SemaphoreHandle_t s_state_mtx = nullptr;
 
 void lock_state() {
@@ -270,6 +283,177 @@ bool apply_config(JsonDocument &cfg) {
     return ok;
 }
 
+// F6 - post a state line to the OTA job progress endpoint. No-op if
+// no endpoint/token (we still try to install locally, but progress
+// is informational).
+void post_ota_progress(const String &job_id, const char *state,
+                       int progress_pct = -1, const char *detail = nullptr) {
+    if (!is_provisioned() || job_id.length() == 0) return;
+    HTTPClient http;
+    String url = build_url("/devices/") + device_identity::get().device_id +
+                 "/firmware/jobs/" + job_id + "/progress";
+    if (!http.begin(url)) return;
+    http.setConnectTimeout(3000);
+    http.setTimeout(3000);
+    http.addHeader("Content-Type", "application/json");
+    http.addHeader("Authorization", String("Bearer ") + s_token);
+    JsonDocument body;
+    body["state"] = state;
+    if (progress_pct >= 0) body["progress_pct"] = progress_pct;
+    if (detail) body["detail"] = detail;
+    String payload;
+    serializeJson(body, payload);
+    int code = http.POST(payload);
+    if (code != 200) {
+        net::logf("[mgr-ota] progress %s -> %d", state, code);
+    }
+    http.end();
+}
+
+// Convert a 32-byte SHA-256 digest into 64-char lowercase hex.
+void sha256_to_hex(const uint8_t *digest, char out[65]) {
+    static const char *hex = "0123456789abcdef";
+    for (int i = 0; i < 32; ++i) {
+        out[i * 2]     = hex[(digest[i] >> 4) & 0xF];
+        out[i * 2 + 1] = hex[digest[i] & 0xF];
+    }
+    out[64] = 0;
+}
+
+void ota_task(void *) {
+    esp_task_wdt_delete(NULL);
+    s_ota_in_flight = true;
+    String job_id = s_ota_job_id;
+    String url = s_ota_url;
+    String want_sha = s_ota_sha256;
+    size_t want_size = s_ota_size;
+    const char *failure_detail = nullptr;
+    int outcome_code = -1;
+
+    net::logf("[mgr-ota] start job=%s url=%s size=%u",
+              job_id.c_str(), url.c_str(), (unsigned)want_size);
+    post_ota_progress(job_id, "accepted", 0);
+
+    HTTPClient http;
+    if (!http.begin(url)) {
+        failure_detail = "http begin failed";
+        goto fail;
+    }
+    http.setConnectTimeout(5000);
+    http.setTimeout(15000);  // longer for big binaries
+    {
+        int code = http.GET();
+        if (code != 200) {
+            failure_detail = "GET non-200";
+            outcome_code = code;
+            http.end();
+            goto fail;
+        }
+    }
+    {
+        size_t actual_size = (size_t)http.getSize();
+        if (actual_size == 0 || (want_size && actual_size != want_size)) {
+            // Length-unknown servers return -1; only reject if known
+            // and mismatching.
+            if (actual_size && want_size && actual_size != want_size) {
+                failure_detail = "size mismatch";
+                http.end();
+                goto fail;
+            }
+        }
+        if (!Update.begin(want_size ? want_size : UPDATE_SIZE_UNKNOWN)) {
+            failure_detail = "Update.begin failed";
+            http.end();
+            goto fail;
+        }
+        post_ota_progress(job_id, "downloading", 0);
+
+        WiFiClient *stream = http.getStreamPtr();
+        mbedtls_sha256_context sha;
+        mbedtls_sha256_init(&sha);
+        mbedtls_sha256_starts(&sha, 0);
+        uint8_t buf[1024];
+        size_t written = 0;
+        uint32_t last_progress_ms = millis();
+        while (http.connected() && (written < want_size || want_size == 0)) {
+            size_t avail = stream->available();
+            if (!avail) {
+                vTaskDelay(pdMS_TO_TICKS(10));
+                continue;
+            }
+            size_t n = stream->readBytes(buf, avail > sizeof(buf) ? sizeof(buf) : avail);
+            if (!n) break;
+            mbedtls_sha256_update(&sha, buf, n);
+            size_t w = Update.write(buf, n);
+            if (w != n) {
+                failure_detail = "Update.write short";
+                mbedtls_sha256_free(&sha);
+                http.end();
+                Update.abort();
+                goto fail;
+            }
+            written += n;
+            // Periodic progress every ~2 s while downloading.
+            uint32_t now = millis();
+            if (now - last_progress_ms > 2000 && want_size > 0) {
+                int pct = (int)((written * 100UL) / want_size);
+                post_ota_progress(job_id, "downloading", pct);
+                last_progress_ms = now;
+            }
+        }
+        http.end();
+
+        uint8_t digest[32];
+        mbedtls_sha256_finish(&sha, digest);
+        mbedtls_sha256_free(&sha);
+        char got_sha[65];
+        sha256_to_hex(digest, got_sha);
+
+        post_ota_progress(job_id, "verifying", 100);
+        if (want_sha.length() == 64) {
+            String w(want_sha);
+            w.toLowerCase();
+            if (w != String(got_sha)) {
+                net::logf("[mgr-ota] sha mismatch want=%s got=%s",
+                          w.c_str(), got_sha);
+                failure_detail = "sha256 mismatch";
+                Update.abort();
+                goto fail;
+            }
+        }
+
+        post_ota_progress(job_id, "installing", 100);
+        if (!Update.end(true)) {
+            failure_detail = "Update.end failed";
+            goto fail;
+        }
+        if (Update.hasError()) {
+            failure_detail = "Update.hasError";
+            goto fail;
+        }
+    }
+
+    post_ota_progress(job_id, "rebooting", 100);
+    net::logf("[mgr-ota] job=%s installed, rebooting", job_id.c_str());
+    s_ota_in_flight = false;
+    delay(500);
+    ESP.restart();
+    // not reached
+    vTaskDelete(NULL);
+    return;
+
+fail:
+    net::logf("[mgr-ota] FAILED job=%s detail=%s code=%d",
+              job_id.c_str(),
+              failure_detail ? failure_detail : "?",
+              outcome_code);
+    post_ota_progress(job_id, "failed", -1,
+                      failure_detail ? failure_detail : "unknown");
+    s_ota_in_flight = false;
+    s_ota_task = nullptr;
+    vTaskDelete(NULL);
+}
+
 // F4 - execute a single queued command. Returns one of:
 //   "ok" | "unsupported_command" | "invalid_payload" | "failed"
 const char *execute_command(const char *type, JsonObject payload) {
@@ -313,6 +497,27 @@ const char *execute_command(const char *type, JsonObject payload) {
         app::Command c;
         c.type = app::CommandType::Reboot;
         return app::post(c, 100) ? "ok" : "busy";
+    }
+    if (strcmp(type, "firmware.update") == 0) {
+        if (s_ota_in_flight) return "busy";
+        const char *url = payload["url"] | "";
+        const char *sha = payload["sha256"] | "";
+        const char *ver = payload["version"] | "";
+        const char *job_id = payload["job_id"] | "";
+        size_t size = payload["size"] | 0;
+        if (!*url || !*job_id) return "invalid_payload";
+        if (size && size < 1024) return "invalid_payload";  // sanity
+        if (*sha && strlen(sha) != 64) return "invalid_payload";
+        s_ota_job_id = job_id;
+        s_ota_url = url;
+        s_ota_sha256 = sha;
+        s_ota_version = ver;
+        s_ota_size = size;
+        if (xTaskCreatePinnedToCore(ota_task, "mgr-ota", 8192, nullptr, 1,
+                                    &s_ota_task, 0) != pdPASS) {
+            return "failed";
+        }
+        return "ok";
     }
     if (strcmp(type, "beep") == 0) {
         // No beeper on this board; log and ack ok per spec.
@@ -534,6 +739,19 @@ void worker(void *) {
 void setup() {
     if (!s_state_mtx) s_state_mtx = xSemaphoreCreateMutex();
     load_prefs();
+    // F6: if we just booted from a new OTA partition, mark it valid.
+    // ESP32 keeps the new image in PENDING_VERIFY until something
+    // calls esp_ota_mark_app_valid; without that a hard reset rolls
+    // back. We do it unconditionally here - if the device booted to
+    // the point of running setup(), it's healthy enough to keep.
+    const esp_partition_t *running = esp_ota_get_running_partition();
+    esp_ota_img_states_t st;
+    if (running && esp_ota_get_state_partition(running, &st) == ESP_OK) {
+        if (st == ESP_OTA_IMG_PENDING_VERIFY) {
+            esp_ota_mark_app_valid_cancel_rollback();
+            net::logf("[mgr] post-OTA boot: marked partition valid");
+        }
+    }
     net::logf("[mgr] %s endpoint=%s token=%s",
               s_endpoint.length() ? "configured" : "idle",
               s_endpoint.c_str(),

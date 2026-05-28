@@ -88,9 +88,14 @@ class ManagerMock:
             web.get(r"/devices/{did}/config", self._config),
             web.get(r"/devices/{did}/commands", self._commands_get),
             web.post(r"/devices/{did}/commands/{cid}/ack", self._command_ack),
+            web.post(r"/devices/{did}/firmware/jobs/{jid}/progress",
+                     self._firmware_progress),
+            web.get("/firmware/artifacts/{name}", self._firmware_artifact),
             web.get("/devices", self._devices_list),
             web.get("/audit", self._audit),
         ])
+        self.firmware_artifacts: dict[str, bytes] = {}
+        self.firmware_progress: dict[str, list[dict]] = {}
         self.devices: dict[str, Device] = {}
         self.audit: list[dict] = []
         self.provisioning_token = "test-provision-" + pysecrets.token_hex(4)
@@ -280,6 +285,33 @@ class ManagerMock:
 
     async def _audit(self, request: web.Request) -> web.Response:
         return web.json_response({"events": self.audit})
+
+    # --- F6 OTA -------------------------------------------------------
+    async def _firmware_artifact(self, request: web.Request) -> web.Response:
+        name = request.match_info["name"]
+        data = self.firmware_artifacts.get(name)
+        if data is None:
+            return web.Response(status=404, text="unknown artifact")
+        return web.Response(body=data, content_type="application/octet-stream")
+
+    async def _firmware_progress(self, request: web.Request) -> web.Response:
+        did = request.match_info["did"]
+        jid = request.match_info["jid"]
+        if not self._check_auth(request, did):
+            return web.json_response({"error": "unauthorized"}, status=401)
+        body = await request.json()
+        self.firmware_progress.setdefault(jid, []).append(body)
+        self._log("ota.progress", device_id=did, job_id=jid,
+                  state=body.get("state"), pct=body.get("progress_pct"))
+        return web.json_response({"ok": True})
+
+    def serve_artifact(self, name: str, data: bytes) -> tuple[str, str]:
+        """Register a binary at GET /firmware/artifacts/<name>. Returns
+        (url, sha256_hex) for use in a firmware.update command."""
+        import hashlib
+        self.firmware_artifacts[name] = data
+        sha = hashlib.sha256(data).hexdigest()
+        return f"{self.base_url}/firmware/artifacts/{name}", sha
 
 
 def main() -> None:

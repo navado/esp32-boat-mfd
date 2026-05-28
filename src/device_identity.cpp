@@ -86,7 +86,7 @@ void setup() {
     s_caps.touch_irq = false;  // 4848s040 has no INT routed
     s_caps.ble_config = true;
     s_caps.arduino_ota = true;
-    s_caps.pull_ota = false;   // F6 future
+    s_caps.pull_ota = true;    // F6 implemented
     s_caps.nmea0183_wifi = true;
 #ifdef ENABLE_NMEA2000
     s_caps.nmea2000 = bc.nmea2000_can;
