@@ -29,6 +29,14 @@ AuthState s_auth = AuthState::Unprovisioned;
 HealthState s_health = HealthState::Idle;
 uint32_t s_heartbeat_interval_ms = DEFAULT_HEARTBEAT_MS;
 uint32_t s_command_poll_interval_ms = DEFAULT_COMMAND_POLL_MS;
+// F3 - last applied central config. When the plugin's heartbeat
+// response advertises a different desired_config_{version,hash},
+// the worker fetches /devices/:id/config and applies it.
+String s_applied_config_version = "v0";
+String s_applied_config_hash = "";
+String s_desired_config_version = "";
+String s_desired_config_hash = "";
+volatile bool s_config_fetch_pending = false;
 volatile uint32_t s_last_register_ms = 0;
 volatile int s_last_register_code = 0;
 volatile uint32_t s_last_heartbeat_ms = 0;
@@ -49,6 +57,8 @@ void load_prefs() {
     p.begin(NS, true);
     s_endpoint = p.getString("endpoint", "");
     s_token = p.getString("token", "");
+    s_applied_config_version = p.getString("cfg_ver", "v0");
+    s_applied_config_hash = p.getString("cfg_hash", "");
     p.end();
     s_auth = s_token.length() ? AuthState::Provisioned
                               : AuthState::Unprovisioned;
@@ -59,6 +69,8 @@ void save_prefs() {
     p.begin(NS, false);
     p.putString("endpoint", s_endpoint);
     p.putString("token", s_token);
+    p.putString("cfg_ver", s_applied_config_version);
+    p.putString("cfg_hash", s_applied_config_hash);
     p.end();
 }
 
@@ -154,8 +166,117 @@ void build_status_body(JsonDocument &doc) {
     touch["mode"] = "poll";  // 4848s040 board
 
     JsonObject cfg = doc["config"].to<JsonObject>();
-    cfg["version"] = "v0";   // F3 will populate this
-    cfg["hash"] = "";
+    cfg["version"] = s_applied_config_version;
+    cfg["hash"] = s_applied_config_hash;
+}
+
+// Apply a single config blob. Returns true on success, false if any
+// field was rejected. Persistent NVS writes are made directly; UI
+// state (theme, brightness) goes via app::post so the LVGL task owns
+// the mutation.
+bool apply_config(JsonDocument &cfg) {
+    bool ok = true;
+
+    if (cfg["ui"].is<JsonObject>()) {
+        JsonObject ui = cfg["ui"].as<JsonObject>();
+        if (ui["brightness"].is<int>()) {
+            int b = ui["brightness"].as<int>();
+            if (b < 0 || b > 255) {
+                net::logf("[mgr] reject ui.brightness=%d (out of 0..255)", b);
+                ok = false;
+            } else {
+                app::Command c;
+                c.type = app::CommandType::SetBrightness;
+                c.i = b;
+                app::post(c, 100);
+            }
+        }
+        if (ui["theme"].is<const char *>()) {
+            const char *t = ui["theme"].as<const char *>();
+            if (strcmp(t, "day") == 0 || strcmp(t, "night") == 0 ||
+                strcmp(t, "auto") == 0) {
+                app::Command c;
+                c.type = app::CommandType::SetTheme;
+                strncpy(c.a, t, sizeof(c.a) - 1);
+                app::post(c, 100);
+            } else {
+                net::logf("[mgr] reject ui.theme=%s (unknown)", t);
+                ok = false;
+            }
+        }
+    }
+
+    if (cfg["signalk"].is<JsonObject>()) {
+        JsonObject sk = cfg["signalk"].as<JsonObject>();
+        Preferences p;
+        p.begin("sk", false);
+        if (sk["host"].is<const char *>()) {
+            const char *host = sk["host"].as<const char *>();
+            p.putString("host", host);
+            net::logf("[mgr] applied sk.host=%s", host);
+        }
+        if (sk["port"].is<unsigned int>()) {
+            uint16_t port = sk["port"].as<unsigned int>();
+            p.putUInt("port", port);
+            net::logf("[mgr] applied sk.port=%u", port);
+        }
+        if (sk["token"].is<const char *>()) {
+            const char *tok = sk["token"].as<const char *>();
+            p.putString("token", tok);
+            net::logf("[mgr] applied sk.token (len=%u)",
+                      (unsigned)strlen(tok));
+        }
+        p.end();
+        // SK reconnect picks up changes on next ws.begin via the
+        // existing sk-reconnect path - schedule it.
+        net::dispatchCommand("sk-reconnect");
+    }
+
+    return ok;
+}
+
+int fetch_config() {
+    if (!is_provisioned()) return -1;
+    if (WiFi.status() != WL_CONNECTED) return -2;
+
+    HTTPClient http;
+    String url = build_url("/devices/") + device_identity::get().device_id +
+                 "/config";
+    if (!http.begin(url)) return -3;
+    http.setConnectTimeout(3000);
+    http.setTimeout(3000);
+    http.addHeader("Authorization", String("Bearer ") + s_token);
+    int code = http.GET();
+    if (code == 200) {
+        String resp = http.getString();
+        JsonDocument r;
+        if (deserializeJson(r, resp) == DeserializationError::Ok) {
+            String new_version = r["version"] | "";
+            String new_hash = r["hash"] | "";
+            if (r["config"].is<JsonObject>()) {
+                JsonDocument cfg;
+                cfg.set(r["config"]);
+                bool ok = apply_config(cfg);
+                if (ok) {
+                    lock_state();
+                    s_applied_config_version = new_version;
+                    s_applied_config_hash = new_hash;
+                    save_prefs();
+                    unlock_state();
+                    net::logf("[mgr] config applied: version=%s hash=%s",
+                              new_version.c_str(), new_hash.c_str());
+                } else {
+                    net::logf("[mgr] config %s had invalid fields; "
+                              "applied valid subset only (not persisted)",
+                              new_version.c_str());
+                }
+            }
+        }
+    } else {
+        net::logf("[mgr] config fetch -> %d", code);
+    }
+    http.end();
+    return code;
 }
 
 int do_heartbeat() {
@@ -177,12 +298,30 @@ int do_heartbeat() {
     http.addHeader("Authorization", String("Bearer ") + s_token);
     int code = http.POST(payload);
     if (code == 401 || code == 403) {
-        // Treat auth failure as needing re-register, but never as
-        // fatal (per spec 17 §3 rules).
         net::logf("[mgr] heartbeat auth failed (%d) - will re-register", code);
+        lock_state();
         s_token = "";
         s_auth = AuthState::Unprovisioned;
         s_force_register = true;
+        unlock_state();
+    } else if (code == 200) {
+        // F3: check if the server wants a config update.
+        String resp = http.getString();
+        JsonDocument r;
+        if (deserializeJson(r, resp) == DeserializationError::Ok) {
+            String want_ver = r["desired_config_version"] | "";
+            String want_hash = r["desired_config_hash"] | "";
+            lock_state();
+            s_desired_config_version = want_ver;
+            s_desired_config_hash = want_hash;
+            bool drift = want_ver.length() && want_ver != s_applied_config_version;
+            unlock_state();
+            if (drift) {
+                net::logf("[mgr] config drift: have=%s want=%s -> fetching",
+                          s_applied_config_version.c_str(), want_ver.c_str());
+                s_config_fetch_pending = true;
+            }
+        }
     } else if (code < 200 || code >= 300) {
         net::logf("[mgr] heartbeat -> %d", code);
     }
@@ -231,6 +370,10 @@ void worker(void *) {
         if (prov && now >= next_heartbeat_ms) {
             do_heartbeat();
             next_heartbeat_ms = millis() + s_heartbeat_interval_ms;
+        }
+        if (prov && s_config_fetch_pending) {
+            s_config_fetch_pending = false;
+            fetch_config();
         }
         vTaskDelay(pdMS_TO_TICKS(500));
     }

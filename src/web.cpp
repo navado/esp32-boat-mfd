@@ -19,6 +19,7 @@
 #include "source_nmea_wifi.h"
 #include "source_nmea2000.h"
 #include "input_test.h"
+#include "cmd_catalog.h"
 #include "screenshot.h"
 #include "app_events.h"
 #include "config_runtime.h"
@@ -339,6 +340,94 @@ static void handle_boat() {
     }
 
     send_json(200, doc);
+}
+
+// ---- /api/commands -----------------------------------------------------
+// Machine-readable catalog of every console command the firmware
+// accepts. Useful for tooling, plugin auto-discovery, and the
+// /help/commands HTML page rendered below.
+
+static void handle_commands_json() {
+    JsonDocument doc;
+    JsonArray arr = doc["commands"].to<JsonArray>();
+    const auto *list = cmd_catalog::entries();
+    size_t n = cmd_catalog::entry_count();
+    for (size_t i = 0; i < n; ++i) {
+        JsonObject o = arr.add<JsonObject>();
+        o["category"] = list[i].category;
+        o["syntax"] = list[i].syntax;
+        o["summary"] = list[i].summary;
+        o["http"] = list[i].http;
+        o["ble_serial"] = list[i].ble_serial;
+    }
+    doc["count"] = n;
+    doc["note"] = "Commands with http=false are reachable only over BLE "
+                  "NUS / USB serial. /api/cmd returns 403 for those.";
+    send_json(200, doc);
+}
+
+// HTML help page - groups by category, marks BLE/serial-only commands.
+static void handle_commands_html() {
+    String html;
+    html.reserve(8 * 1024);
+    html += F("<!doctype html>\n<meta charset=\"utf-8\">\n"
+              "<title>esp32-boat-mfd - commands</title>\n"
+              "<style>"
+              "body{font:14px/1.5 system-ui,sans-serif;background:#05101c;"
+              "color:#eaf2ff;margin:0;padding:16px;max-width:1080px}"
+              "h1{margin:0 0 4px 0;font-size:20px;color:#9ec5fe}"
+              "h2{margin:18px 0 6px 0;font-size:14px;color:#7aa9d8;"
+              "text-transform:uppercase;letter-spacing:.08em}"
+              "p.note{color:#6c8bb1;margin:6px 0}"
+              "table{width:100%;border-collapse:collapse;background:#0a2540;"
+              "border:1px solid #223a55;border-radius:6px;overflow:hidden}"
+              "th,td{padding:6px 10px;border-bottom:1px solid #14304c;"
+              "text-align:left;vertical-align:top}"
+              "th{background:#11355a;font-weight:600;font-size:12px;"
+              "color:#9ec5fe;text-transform:uppercase;letter-spacing:.05em}"
+              "code{font-family:ui-monospace,monospace;color:#cae6ff;"
+              "background:#05101c;padding:1px 6px;border-radius:3px;"
+              "white-space:nowrap}"
+              "tr:last-child td{border-bottom:0}"
+              ".no-http{color:#ff9b8a}"
+              "a{color:#9ec5fe}"
+              "</style>\n"
+              "<h1>esp32-boat-mfd commands</h1>\n"
+              "<p class=\"note\">Reachable from BLE Nordic UART, USB serial, "
+              "and (where marked) HTTP <code>POST /api/cmd</code>. "
+              "Machine-readable: <a href=\"/api/commands\">/api/commands</a></p>\n");
+
+    const auto *list = cmd_catalog::entries();
+    size_t n = cmd_catalog::entry_count();
+    const char *cur_cat = nullptr;
+    for (size_t i = 0; i < n; ++i) {
+        const auto &e = list[i];
+        if (cur_cat == nullptr || strcmp(cur_cat, e.category) != 0) {
+            if (cur_cat) html += F("</table>\n");
+            cur_cat = e.category;
+            html += F("<h2>");
+            html += e.category;
+            html += F("</h2>\n<table><tr><th>Command</th><th>Description</th>"
+                      "<th>Transports</th></tr>\n");
+        }
+        html += F("<tr><td><code>");
+        html += e.syntax;
+        html += F("</code></td><td>");
+        html += e.summary;
+        html += F("</td><td>");
+        if (e.http) {
+            html += F("BLE / serial / HTTP");
+        } else {
+            html += F("<span class=\"no-http\">BLE / serial only</span>");
+        }
+        html += F("</td></tr>\n");
+    }
+    if (cur_cat) html += F("</table>\n");
+    html += F("<p class=\"note\">See <a href=\"/\">/</a> for the live state "
+              "view and <code>POST /api/cmd</code> for HTTP-allowed commands."
+              "</p>\n");
+
+    server.send(200, "text/html", html);
 }
 
 // ---- /api/layout (GET / PUT) -------------------------------------------
@@ -684,7 +773,7 @@ const char INDEX_HTML[] PROGMEM = R"HTML(<!doctype html>
     <input type=range id=brightSlider min=20 max=255 value=200 style="width:100%">
   </div>
   <div class=card>
-    <div class=k>COMMAND</div>
+    <div class=k>COMMAND  (<a href="/help/commands" style="color:#9ec5fe">catalog</a>)</div>
     <input id=cmd placeholder="e.g. sk-status"/>
     <button id=cmdSend>send</button>
     <pre id=cmdOut></pre>
@@ -911,6 +1000,8 @@ static void bind_routes() {
     server.on("/api/screens", HTTP_GET, handle_screens);
     server.on("/api/sk", HTTP_GET, handle_sk_data);
     server.on("/api/boat", HTTP_GET, handle_boat);
+    server.on("/api/commands", HTTP_GET, handle_commands_json);
+    server.on("/help/commands", HTTP_GET, handle_commands_html);
     server.on("/api/layout", HTTP_GET, handle_layout_get);
     server.on("/api/layout", HTTP_PUT, handle_layout_put);
     server.on("/api/cmd", HTTP_POST, handle_cmd);
