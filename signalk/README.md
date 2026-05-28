@@ -9,9 +9,21 @@ It is used for local firmware testing with:
 - official NMEA 0183 conversion plugin
 - official autopilot plugin in emulator mode
 - synthetic boat data from `tools/fake_boat.py`
+- repo-owned `espdisp-manager` plugin for display registry, presets,
+  generated config, command delivery, and firmware job testing
 
 Project-level manager concepts and screenshots are documented in
 [`docs/signalk-espdisp-manager.md`](../docs/signalk-espdisp-manager.md).
+
+Current manager UI screenshots are stored under `docs/images/`:
+
+```text
+signalk-manager-overview.png
+signalk-manager-devices.png
+signalk-manager-device-config.png
+signalk-manager-presets.png
+signalk-manager-preset-apply.png
+```
 
 ## Start
 
@@ -124,9 +136,33 @@ UI pages:
 /plugins/espdisp-manager/ui
 /plugins/espdisp-manager/ui/devices
 /plugins/espdisp-manager/ui/devices/:id
+/plugins/espdisp-manager/ui/devices/:id/config
 /plugins/espdisp-manager/ui/discovery
 /plugins/espdisp-manager/ui/profiles
+/plugins/espdisp-manager/ui/profiles/:id
 /plugins/espdisp-manager/ui/firmware
+```
+
+The operator UI is intentionally structured, not a raw JSON editor:
+
+- the device page shows current status, firmware jobs, and recent commands
+- the device config page edits preset assignment, display behavior, data
+  sources, autopilot flags, widget font sizes, and debug/touch options
+- `Save and send to device` saves the generated config inputs and queues a
+  `config.reload` command for the device to poll
+- `Save as preset` stores the same settings as a reusable profile/preset
+- the preset detail page applies one preset to multiple selected devices and
+  can clear device overrides before queuing reload commands
+
+Presets are implemented with the plugin profile store. A device's generated
+config is:
+
+```text
+selected preset/profile
+  + per-device overrides
+  + display/layout/widget variant selection
+  + unsupported widget filtering
+  + font-size resolution against device capabilities
 ```
 
 Implemented v1 endpoints:

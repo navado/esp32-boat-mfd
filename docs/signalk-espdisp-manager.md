@@ -4,6 +4,12 @@ The `espdisp-manager` plugin is the SignalK-side control plane for ESP display
 devices. It manages device registration, configuration, command delivery,
 display/layout variants, widget settings, firmware metadata, and OTA jobs.
 
+At a high level this plugin lets a SignalK server act as the fleet manager for
+small ESP displays. Operators register panels, group similar panels around
+shared presets, tune per-device overrides, and then queue commands that cause
+devices to pull the latest generated configuration. Firmware update metadata
+and OTA jobs use the same registry/command/status model.
+
 ## Concepts
 
 ```text
@@ -11,9 +17,15 @@ Device
   A physical ESP display. It reports identity, firmware, display geometry,
   touch support, widget support, font support, current UI state, and health.
 
-Profile
-  A reusable configuration bundle. Profiles can match a device by board,
-  display size, role, location, or capability flags.
+Preset / Profile
+  A reusable configuration bundle. The UI calls these presets; the API and
+  store call them profiles. Presets can match a device by board, display size,
+  role, location, or capability flags.
+
+Device Override
+  Per-device settings layered on top of the assigned preset. Overrides are used
+  for local differences such as brightness, font sizes, touch mode, or NMEA
+  host without cloning the entire preset.
 
 Generated Config
   The per-device config emitted by the plugin after merging profile defaults,
@@ -35,15 +47,54 @@ Firmware Job
   progress through confirmation.
 ```
 
+## Operator Workflow
+
+The built-in web UI is server-rendered and available inside SignalK:
+
+```text
+/plugins/espdisp-manager/ui
+/signalk-espdisp-manager/
+```
+
+It is also exposed as the `ESP Displays` App Dock tile in the repo-owned
+SignalK test configuration.
+
+Typical workflow:
+
+```text
+1. Start the SignalK lab stack with make demo-up.
+2. Register or discover one or more ESP displays.
+3. Open Devices and inspect health, display geometry, config drift, and
+   pending commands.
+4. Open a device config page to assign a preset and edit structured settings.
+5. Save per-device overrides or save the same settings as a reusable preset.
+6. Use "Save and send" or preset "Apply" to queue config.reload.
+7. Device polls commands, sees config.reload, fetches /devices/:id/config,
+   applies the generated config, and reports the applied hash in status.
+```
+
+The UI does not expose a raw JSON editor for generated config. Generated config
+is still available to firmware through the authenticated JSON API, but operator
+pages render structured sections for display, network, SignalK/NMEA, OTA,
+autopilot, debug, widgets, and screens.
+
 ## Screenshots
 
-Device overview concept:
+Manager overview:
 
-![ESP Display Manager overview](images/espdisp-manager-overview.svg)
+![ESP Display Manager overview](images/signalk-manager-overview.png)
 
-Profile and widget concept:
+Device configuration:
 
-![ESP Display Manager profile widgets](images/espdisp-manager-profile-widgets.svg)
+![ESP Display Manager device configuration](images/signalk-manager-device-config.png)
+
+Presets:
+
+![ESP Display Manager presets](images/signalk-manager-presets.png)
+
+Preset apply:
+
+![ESP Display Manager preset apply](images/signalk-manager-preset-apply.png)
 
 ## Device Lifecycle
 
@@ -86,8 +137,12 @@ GET  /dashboard
 GET  /ui
 GET  /ui/devices
 GET  /ui/devices/:id
+GET  /ui/devices/:id/config
+POST /ui/devices/:id/config
 GET  /ui/discovery
 GET  /ui/profiles
+GET  /ui/profiles/:id
+POST /ui/profiles/:id/apply
 GET  /ui/firmware
 GET  /discovery/devices
 POST /discovery/devices
@@ -233,6 +288,79 @@ Font sizes are resolved against the device-reported supported font sizes. If a
 profile requests `50` and the device supports `[12, 24, 48]`, the generated
 config uses `48`.
 
+## Presets And Device Configuration
+
+Presets are the main operator abstraction for managing several similar devices.
+A preset can hold:
+
+- screen/default behavior such as default screen, theme, brightness, and demo
+  mode
+- NMEA 0183 over WiFi settings
+- autopilot UI capability flags
+- widget defaults including font sizes
+- display layout and widget variants
+- debug/touch options
+
+The device config page supports four actions:
+
+```text
+Save device
+  Stores the selected preset plus per-device overrides. The device will pick
+  this up the next time it fetches config.
+
+Save and send to device
+  Stores the settings and queues config.reload with the generated config hash.
+
+Save as preset
+  Stores the current structured settings as a reusable preset/profile.
+
+Save preset and send
+  Creates or updates a preset, assigns it to the device, and queues reload.
+```
+
+The preset detail page lists all registered devices with checkboxes. Applying a
+preset can optionally clear existing device overrides and queue `config.reload`
+for every selected device. This is the path for making several panels of the
+same size or role converge on the same configuration.
+
+Generated config is deterministic apart from `generatedAt`. The config hash is
+computed without `generatedAt`, so devices can compare hashes to detect drift.
+
+## Command Flow
+
+Commands are durable until delivered, acknowledged, cancelled, failed, or
+expired.
+
+```text
+Operator/UI/API
+  POST command or save config with "send"
+    -> plugin stores command as pending
+Device
+  GET /devices/:id/commands
+    -> plugin marks returned commands as delivered
+Device
+  execute command
+Device
+  POST /devices/:id/commands/:commandId/ack
+    -> plugin records acknowledged/failed result
+```
+
+For config changes the command type is currently:
+
+```json
+{
+  "type": "config.reload",
+  "payload": {
+    "version": 1,
+    "hash": "sha256:...",
+    "url": "/plugins/espdisp-manager/devices/<device-id>/config"
+  }
+}
+```
+
+Firmware jobs follow the same command pattern using `firmware.update`, plus
+job progress and boot confirmation endpoints.
+
 ## Dashboard API
 
 `GET /dashboard` returns an operator summary:
@@ -266,8 +394,9 @@ config uses `48`.
 
 `GET /ui` renders a lightweight HTML operator console backed by the same JSON
 APIs. It has server-rendered pages for overview, registered devices, device
-detail, discovery, profiles, and firmware jobs. A richer SignalK webapp can
-replace it later without changing the API.
+detail, structured device config, discovery, presets, preset detail/apply, and
+firmware jobs. A richer SignalK webapp can replace it later without changing
+the API.
 
 ## Test Commands
 
