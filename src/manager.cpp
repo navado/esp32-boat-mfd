@@ -21,6 +21,7 @@
 #include "font_resolver.h"
 #include "manager_config.h"
 #include "manager_screens.h"
+#include "manager_url.h"
 #include "net.h"
 #include "signalk.h"
 #include "source_nmea2000.h"
@@ -156,31 +157,24 @@ void add_auth_headers(HTTPClient &http) {
     }
 }
 
+// Firmware-facing wrappers around manager_url::* (which are pure
+// std::string and host-tested in test/test_manager_url). Keeping the
+// Arduino String signatures here means callers don't have to convert
+// at every site.
 String build_url(const char *path) {
-    String url = s_endpoint;
-    if (url.endsWith("/")) url.remove(url.length() - 1);
-    url += path;
-    return url;
+    return String(manager_url::join_url(s_endpoint.c_str(), path).c_str());
 }
 
 String build_url_from_base(const String &base, const char *path) {
-    String url = base;
-    if (url.endsWith("/")) url.remove(url.length() - 1);
-    url += path;
-    return url;
+    return String(manager_url::join_url(base.c_str(), path).c_str());
 }
 
 String plugin_base_from_root(const String &endpoint) {
-    String base = endpoint;
-    if (base.endsWith("/")) base.remove(base.length() - 1);
-    if (base.indexOf("/plugins/espdisp-manager") >= 0) return base;
-    return base + "/plugins/espdisp-manager";
+    return String(manager_url::plugin_base_from_root(endpoint.c_str()).c_str());
 }
 
 bool endpoint_has_path(const String &endpoint) {
-    int scheme = endpoint.indexOf("://");
-    int start = scheme >= 0 ? scheme + 3 : 0;
-    return endpoint.indexOf('/', start) >= 0;
+    return manager_url::endpoint_has_path(endpoint.c_str());
 }
 
 // GET /.well-known/espdisp-management for a given base. Best-effort: if
