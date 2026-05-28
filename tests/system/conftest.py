@@ -271,3 +271,58 @@ def console():
         c.close()
     except Exception:
         pass
+
+
+@dataclass
+class RealManager:
+    """Thin client for the real signalk-espdisp-manager plugin.
+
+    Skipped when ESPDISP_MGR_URL / ESPDISP_MGR_SK_TOKEN aren't set, so
+    tests that talk to the real plugin remain opt-in. The device must
+    already be provisioned (manager-register / manager-sk-token /
+    manager-token via BLE or USB serial) - this fixture only drives the
+    plugin side.
+    """
+    base: str
+    sk_token: str
+
+    def _hdrs(self) -> dict:
+        return {
+            "Content-Type": "application/json",
+            "Authorization": f"Bearer {self.sk_token}",
+        }
+
+    def devices(self) -> list[dict]:
+        r = requests.get(f"{self.base}/devices",
+                         headers=self._hdrs(), timeout=5)
+        r.raise_for_status()
+        return r.json().get("devices", [])
+
+    def device(self, device_id: str) -> dict:
+        r = requests.get(f"{self.base}/devices/{device_id}",
+                         headers=self._hdrs(), timeout=5)
+        r.raise_for_status()
+        return r.json()
+
+    def profiles(self) -> list[dict]:
+        r = requests.get(f"{self.base}/profiles",
+                         headers=self._hdrs(), timeout=5)
+        r.raise_for_status()
+        return r.json().get("profiles", [])
+
+    def assign_profile(self, device_id: str, profile_id: str) -> dict:
+        r = requests.post(f"{self.base}/devices/{device_id}/profile",
+                          headers=self._hdrs(),
+                          json={"profile": profile_id}, timeout=5)
+        r.raise_for_status()
+        return r.json()
+
+
+@pytest.fixture(scope="session")
+def real_manager() -> RealManager:
+    base = os.environ.get("ESPDISP_MGR_URL")
+    token = os.environ.get("ESPDISP_MGR_SK_TOKEN")
+    if not base or not token:
+        pytest.skip("set ESPDISP_MGR_URL and ESPDISP_MGR_SK_TOKEN to "
+                    "run tests against the real plugin")
+    return RealManager(base=base.rstrip("/"), sk_token=token)

@@ -155,6 +155,30 @@ static void test_variant_matching_picks_compatible() {
     TEST_ASSERT_EQUAL_STRING("y", plan.screens[0].id);
 }
 
+// Spec 19 D6: 800x480 wide variant must be picked when the device
+// reports 800x480 geometry (e.g. the simulator / future widescreen
+// board). Same config as `picks_compatible` but with the device side
+// flipped.
+static void test_variant_matching_picks_wide_for_800x480() {
+    auto cfg = parse_json(R"({
+        "widgets": {"items": {"a": {"type": "numeric"}}},
+        "layout": {
+            "variants": [
+                {"id": "wide", "match": {"display": {"width": 800, "height": 480}}, "screens": [{"id":"x","type":"grid","tiles":[]}]},
+                {"id": "sq",   "match": {"display": {"width": 480, "height": 480}}, "screens": [{"id":"y","type":"grid","tiles":[]}]}
+            ]
+        }
+    })");
+    RenderPlan plan;
+    ParseError err;
+    TEST_ASSERT_TRUE(parse(cfg, 800, 480, plan, err));
+    TEST_ASSERT_EQUAL_STRING("wide", plan.layout_variant);
+    TEST_ASSERT_EQUAL_UINT8(1, plan.screen_count);
+    TEST_ASSERT_EQUAL_STRING("x", plan.screens[0].id);
+    TEST_ASSERT_EQUAL_UINT16(800, plan.display_width);
+    TEST_ASSERT_EQUAL_UINT16(480, plan.display_height);
+}
+
 static void test_too_many_widgets_rejected() {
     // Construct a payload with 33 widgets (over MAX_WIDGETS=32).
     std::string body = "{\"widgets\":{\"items\":{";
@@ -301,6 +325,7 @@ int main(int, char **) {
     RUN_TEST(test_screen_with_grid_layout_accepted);
     RUN_TEST(test_unsupported_layout_type_rejected);
     RUN_TEST(test_variant_matching_picks_compatible);
+    RUN_TEST(test_variant_matching_picks_wide_for_800x480);
     RUN_TEST(test_too_many_widgets_rejected);
     RUN_TEST(test_oversized_widget_id_truncates_safely);
     RUN_TEST(test_oversized_path_truncates_safely);
