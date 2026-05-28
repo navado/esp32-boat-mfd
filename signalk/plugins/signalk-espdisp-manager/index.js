@@ -257,6 +257,18 @@ function registerRoutes (router, getManager) {
     res.end(renderUi(manager, 'profiles', req))
   }))
 
+  router.get('/ui/profiles/:id', wrap(getManager, (manager, req, res) => {
+    res.setHeader('content-type', 'text/html; charset=utf-8')
+    res.end(renderUi(manager, 'preset', req))
+  }))
+
+  router.post('/ui/profiles/:id/apply', wrap(getManager, (manager, req, res) => {
+    const result = applyPresetForm(manager, req.params.id, req.body || {})
+    res.statusCode = 303
+    res.setHeader('location', `/plugins/espdisp-manager/ui/profiles/${encodeURIComponent(req.params.id)}?status=${encodeURIComponent(result.status)}&count=${result.count}`)
+    res.end()
+  }))
+
   router.get('/ui/firmware', wrap(getManager, (manager, req, res) => {
     res.setHeader('content-type', 'text/html; charset=utf-8')
     res.end(renderUi(manager, 'firmware', req))
@@ -436,7 +448,7 @@ function jsonBody (req, res, next) {
       try {
         const contentType = req.headers['content-type'] || ''
         if (contentType.includes('application/x-www-form-urlencoded')) {
-          req.body = Object.fromEntries(new URLSearchParams(body))
+          req.body = parseUrlEncodedForm(body)
         } else {
           req.body = JSON.parse(body)
         }
@@ -449,6 +461,20 @@ function jsonBody (req, res, next) {
   })
 }
 
+function parseUrlEncodedForm (body) {
+  const parsed = {}
+  for (const [key, value] of new URLSearchParams(body)) {
+    if (Object.prototype.hasOwnProperty.call(parsed, key)) {
+      parsed[key] = Array.isArray(parsed[key])
+        ? parsed[key].concat(value)
+        : [parsed[key], value]
+    } else {
+      parsed[key] = value
+    }
+  }
+  return parsed
+}
+
 function renderUi (manager, page, req) {
   const dashboard = manager.dashboard()
   const title = {
@@ -458,6 +484,7 @@ function renderUi (manager, page, req) {
     deviceConfig: 'Device config',
     discovery: 'Discovery',
     profiles: 'Profiles',
+    preset: 'Preset',
     firmware: 'Firmware'
   }[page] || 'Overview'
   return `<!doctype html>
@@ -528,6 +555,7 @@ function renderPage (manager, dashboard, page, req) {
   if (page === 'deviceConfig') return renderDeviceConfigPage(manager, req.params.id)
   if (page === 'discovery') return renderDiscoveryPage(manager.listDiscoveredDevices().devices)
   if (page === 'profiles') return renderProfilesPage(manager.listProfiles().profiles, dashboard.devices)
+  if (page === 'preset') return renderPresetPage(manager, req.params.id, dashboard.devices)
   if (page === 'firmware') return renderFirmwarePage(manager.listFirmware(), dashboard.recentFirmwareJobs)
   return renderOverviewPage(dashboard)
 }
@@ -646,6 +674,33 @@ function saveDeviceConfigForm (manager, id, body) {
   }
 
   return { status: body.action || 'saved' }
+}
+
+function applyPresetForm (manager, profileId, body) {
+  const profile = manager.store.profiles.profiles[profileId]
+  if (!profile) throw statusError(404, 'preset not found')
+  const deviceIds = arrayValue(body.deviceIds)
+  if (deviceIds.length === 0) throw statusError(400, 'select at least one device')
+
+  deviceIds.forEach((deviceId) => {
+    manager.assignProfile(deviceId, {
+      profileId,
+      overrides: checkboxValue(body.clearOverrides) ? {} : manager.getDevice(deviceId).overrides
+    })
+    if (checkboxValue(body.sendReload)) {
+      const config = manager.generateConfig(deviceId)
+      manager.createCommand(deviceId, {
+        type: 'config.reload',
+        payload: {
+          version: config.version,
+          hash: config.hash,
+          url: `/plugins/espdisp-manager/devices/${deviceId}/config`
+        }
+      })
+    }
+  })
+
+  return { status: checkboxValue(body.sendReload) ? 'applied-and-sent' : 'applied', count: deviceIds.length }
 }
 
 function configOverridesFromForm (body) {
@@ -771,6 +826,12 @@ function cleanString (value) {
 
 function checkboxValue (value) {
   return value === '1' || value === 'on' || value === true
+}
+
+function arrayValue (value) {
+  if (Array.isArray(value)) return value.filter((item) => item != null && item !== '')
+  if (value == null || value === '') return []
+  return [value]
 }
 
 function numberValue (value, fallback) {
@@ -960,7 +1021,7 @@ function renderDiscoveryPage (devices) {
 function renderProfilesPage (profiles, devices) {
   const rows = profiles.map((profile) => `
         <tr>
-          <td><strong>${escapeHtml(profile.name || profile.id)}</strong><br><span>${escapeHtml(profile.id)}</span></td>
+          <td><strong><a href="/plugins/espdisp-manager/ui/profiles/${encodeURIComponent(profile.id)}">${escapeHtml(profile.name || profile.id)}</a></strong><br><span>${escapeHtml(profile.id)}</span></td>
           <td>${escapeHtml(profile.version)}</td>
           <td>${escapeHtml(profile.updatedAt || '')}</td>
           <td>${escapeHtml(devices.filter((device) => device.profile === profile.id).length)}</td>
@@ -975,6 +1036,54 @@ function renderProfilesPage (profiles, devices) {
         <thead><tr><th>Preset</th><th>Version</th><th>Updated</th><th>Devices</th><th>Summary</th><th>Hash</th></tr></thead>
         <tbody>${rows || '<tr><td colspan="6">No presets configured.</td></tr>'}</tbody>
       </table>
+    </section>`
+}
+
+function renderPresetPage (manager, profileId, devices) {
+  const profile = manager.store.profiles.profiles[profileId]
+  if (!profile) throw statusError(404, 'preset not found')
+  const assigned = devices.filter((device) => device.profile === profile.id)
+  const rows = devices.map((device) => {
+    const checked = device.profile === profile.id ? ' checked' : ''
+    return `
+      <tr>
+        <td><input type="checkbox" name="deviceIds" value="${escapeHtml(device.id)}"${checked}></td>
+        <td><strong><a href="/plugins/espdisp-manager/ui/devices/${encodeURIComponent(device.id)}/config">${escapeHtml(device.name || device.id)}</a></strong><br><span>${escapeHtml(device.id)}</span></td>
+        <td>${escapeHtml(device.profile)}</td>
+        <td>${escapeHtml(`${device.display.width}x${device.display.height}`)}</td>
+        <td>${device.configDrift ? 'yes' : 'no'}</td>
+        <td>${device.pendingCommands}</td>
+      </tr>`
+  }).join('')
+  return `
+    <section class="panel">
+      <h2>${escapeHtml(profile.name || profile.id)}</h2>
+      <p class="muted">${escapeHtml(profile.id)} · version ${escapeHtml(profile.version)} · ${escapeHtml(assigned.length)} device(s)</p>
+      <p><a href="/plugins/espdisp-manager/ui/profiles">Back to presets</a></p>
+      <table>
+        <tbody>
+          <tr><th>Updated</th><td>${escapeHtml(profile.updatedAt || '')}</td></tr>
+          <tr><th>Summary</th><td>${escapeHtml(configSummary(profile.config || {}))}</td></tr>
+          <tr><th>Hash</th><td><code>${escapeHtml(profile.hash || '')}</code></td></tr>
+        </tbody>
+      </table>
+      <form class="config-form" method="post" action="/plugins/espdisp-manager/ui/profiles/${encodeURIComponent(profile.id)}/apply">
+        <h2>Apply preset</h2>
+        <table>
+          <thead><tr><th></th><th>Device</th><th>Current preset</th><th>Display</th><th>Drift</th><th>Pending</th></tr></thead>
+          <tbody>${rows || '<tr><td colspan="6">No devices registered.</td></tr>'}</tbody>
+        </table>
+        <fieldset>
+          <legend>Apply options</legend>
+          <div class="form-grid">
+            ${field('Clear device overrides', checkbox('clearOverrides', true))}
+            ${field('Send reload command', checkbox('sendReload', true))}
+          </div>
+        </fieldset>
+        <div class="actions">
+          <button type="submit">Apply to selected devices</button>
+        </div>
+      </form>
     </section>`
 }
 
