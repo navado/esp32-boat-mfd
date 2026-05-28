@@ -10,7 +10,41 @@ module.exports = function espdispManagerPlugin (app) {
     schema: () => ({
       type: 'object',
       title: 'ESP Display Manager',
+      description: 'Open the manager at /signalk-espdisp-manager/ or /plugins/espdisp-manager/ui. It is also discoverable from SignalK Admin > Webapps after the server is restarted.',
       properties: {
+        links: {
+          type: 'object',
+          title: 'Operator Links',
+          readOnly: true,
+          default: {
+            webapp: '/signalk-espdisp-manager/',
+            pluginUi: '/plugins/espdisp-manager/ui',
+            devices: '/plugins/espdisp-manager/ui/devices',
+            discovery: '/plugins/espdisp-manager/ui/discovery'
+          },
+          properties: {
+            webapp: {
+              type: 'string',
+              title: 'SignalK webapp',
+              default: '/signalk-espdisp-manager/'
+            },
+            pluginUi: {
+              type: 'string',
+              title: 'Plugin UI',
+              default: '/plugins/espdisp-manager/ui'
+            },
+            devices: {
+              type: 'string',
+              title: 'Devices',
+              default: '/plugins/espdisp-manager/ui/devices'
+            },
+            discovery: {
+              type: 'string',
+              title: 'Discovery',
+              default: '/plugins/espdisp-manager/ui/discovery'
+            }
+          }
+        },
         serverId: {
           type: 'string',
           title: 'Server ID',
@@ -199,6 +233,11 @@ function registerRoutes (router, getManager) {
   router.get('/ui/devices/:id', wrap(getManager, (manager, req, res) => {
     res.setHeader('content-type', 'text/html; charset=utf-8')
     res.end(renderUi(manager, 'device', req))
+  }))
+
+  router.get('/ui/devices/:id/config', wrap(getManager, (manager, req, res) => {
+    res.setHeader('content-type', 'text/html; charset=utf-8')
+    res.end(renderUi(manager, 'deviceConfig', req))
   }))
 
   router.get('/ui/discovery', wrap(getManager, (manager, req, res) => {
@@ -404,6 +443,7 @@ function renderUi (manager, page, req) {
     overview: 'Overview',
     devices: 'Devices',
     device: 'Device detail',
+    deviceConfig: 'Device config',
     discovery: 'Discovery',
     profiles: 'Profiles',
     firmware: 'Firmware'
@@ -457,6 +497,7 @@ function renderUi (manager, page, req) {
 function renderPage (manager, dashboard, page, req) {
   if (page === 'devices') return renderDevicesPage(dashboard.devices)
   if (page === 'device') return renderDevicePage(manager, req.params.id)
+  if (page === 'deviceConfig') return renderDeviceConfigPage(manager, req.params.id)
   if (page === 'discovery') return renderDiscoveryPage(manager.listDiscoveredDevices().devices)
   if (page === 'profiles') return renderProfilesPage(manager.listProfiles().profiles)
   if (page === 'firmware') return renderFirmwarePage(manager.listFirmware(), dashboard.recentFirmwareJobs)
@@ -502,6 +543,7 @@ function renderDevicePage (manager, id) {
     <section class="panel">
       <h2>${escapeHtml(device.name || device.id)}</h2>
       <p class="muted">${escapeHtml(device.id)} · ${escapeHtml(device.role)} · ${escapeHtml(device.location || 'unassigned')}</p>
+      <p><a href="/plugins/espdisp-manager/ui/devices/${encodeURIComponent(id)}/config">Open generated config</a></p>
       <table>
         <tbody>
           <tr><th>Profile</th><td>${escapeHtml(device.assignedProfile || 'default')}</td></tr>
@@ -517,6 +559,32 @@ function renderDevicePage (manager, id) {
       <h2>Firmware jobs</h2>
       ${firmwareJobTable(jobs)}
       <h2>Generated config preview</h2>
+      <pre>${escapeHtml(JSON.stringify(config, null, 2))}</pre>
+    </section>`
+}
+
+function renderDeviceConfigPage (manager, id) {
+  const device = manager.getDevice(id)
+  const config = manager.generateConfig(id)
+  return `
+    <section class="panel">
+      <h2>${escapeHtml(device.name || device.id)} config</h2>
+      <p class="muted">
+        Operator preview for ${escapeHtml(device.id)}. The device pull endpoint
+        still requires <code>X-EspDisp-Authorization</code>.
+      </p>
+      <p>
+        <a href="/plugins/espdisp-manager/ui/devices/${encodeURIComponent(id)}">Back to device</a>
+      </p>
+      <table>
+        <tbody>
+          <tr><th>Profile</th><td>${escapeHtml(config.profile)}</td></tr>
+          <tr><th>Version</th><td>${escapeHtml(config.version)}</td></tr>
+          <tr><th>Hash</th><td><code>${escapeHtml(config.hash)}</code></td></tr>
+          <tr><th>Layout variant</th><td>${escapeHtml(config.layout && config.layout.variant)}</td></tr>
+          <tr><th>Widget variant</th><td>${escapeHtml(config.widgets && config.widgets.variant)}</td></tr>
+        </tbody>
+      </table>
       <pre>${escapeHtml(JSON.stringify(config, null, 2))}</pre>
     </section>`
 }
@@ -591,7 +659,7 @@ function deviceTable (devices) {
           <td>${escapeHtml(device.desiredConfig.layoutVariant || '')}</td>
           <td>${escapeHtml(device.desiredConfig.widgetVariant || '')}</td>
           <td>${device.configDrift ? 'yes' : 'no'}</td>
-          <td>${device.pendingCommands}</td>
+          <td>${device.pendingCommands}<br><span><a href="/plugins/espdisp-manager/ui/devices/${encodeURIComponent(device.id)}/config">config</a></span></td>
         </tr>`).join('')
   return `
     <table>
