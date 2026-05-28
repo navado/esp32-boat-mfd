@@ -475,10 +475,16 @@ function renderUi (manager, page, req) {
     a { color: #116078; }
     code { background: #eef3f5; padding: 1px 4px; border-radius: 3px; }
     pre { overflow: auto; background: #172026; color: #e8f1f4; padding: 14px; border-radius: 6px; }
+    .config-grid { display: grid; grid-template-columns: repeat(2, minmax(240px, 1fr)); gap: 14px; margin-bottom: 20px; }
+    .config-section { background: white; border: 1px solid #d9e0e3; border-radius: 6px; padding: 14px; }
+    .config-section.full { grid-column: 1 / -1; }
+    .config-section table { margin-bottom: 0; border: 0; }
+    .config-section th { width: 38%; }
+    .pill { display: inline-block; padding: 2px 7px; border-radius: 999px; background: #eef3f5; color: #40515a; font-size: 12px; }
     .status { display: inline-block; min-width: 64px; padding: 2px 7px; border-radius: 999px; background: #eef3f5; text-align: center; }
     .ok { background: #d9f2e3; color: #145d32; }
     .bad { background: #ffe0df; color: #8a1f18; }
-    @media (max-width: 850px) { .grid { grid-template-columns: repeat(2, minmax(120px, 1fr)); } table { font-size: 12px; } }
+    @media (max-width: 850px) { .grid, .config-grid { grid-template-columns: 1fr; } table { font-size: 12px; } }
   </style>
 </head>
 <body>
@@ -558,8 +564,8 @@ function renderDevicePage (manager, id) {
       ${commandTable(commands)}
       <h2>Firmware jobs</h2>
       ${firmwareJobTable(jobs)}
-      <h2>Generated config preview</h2>
-      <pre>${escapeHtml(JSON.stringify(config, null, 2))}</pre>
+      <h2>Generated config</h2>
+      ${renderDeviceConfigWidget(config)}
     </section>`
 }
 
@@ -576,17 +582,146 @@ function renderDeviceConfigPage (manager, id) {
       <p>
         <a href="/plugins/espdisp-manager/ui/devices/${encodeURIComponent(id)}">Back to device</a>
       </p>
-      <table>
-        <tbody>
-          <tr><th>Profile</th><td>${escapeHtml(config.profile)}</td></tr>
-          <tr><th>Version</th><td>${escapeHtml(config.version)}</td></tr>
-          <tr><th>Hash</th><td><code>${escapeHtml(config.hash)}</code></td></tr>
-          <tr><th>Layout variant</th><td>${escapeHtml(config.layout && config.layout.variant)}</td></tr>
-          <tr><th>Widget variant</th><td>${escapeHtml(config.widgets && config.widgets.variant)}</td></tr>
-        </tbody>
-      </table>
-      <pre>${escapeHtml(JSON.stringify(config, null, 2))}</pre>
+      ${renderDeviceConfigWidget(config)}
     </section>`
+}
+
+function renderDeviceConfigWidget (config) {
+  const services = (((config.network || {}).mdns || {}).services || [])
+    .map((service) => `${service.type}:${service.port}`)
+    .join(', ')
+  return `
+    <div class="config-grid">
+      ${configSection('Config', keyValueTable([
+        ['Profile', config.profile],
+        ['Version', config.version],
+        ['Hash', code(config.hash)],
+        ['Generated', config.generatedAt]
+      ]))}
+      ${configSection('Display', keyValueTable([
+        ['Size', `${valueOr(config.display && config.display.width, '?')}x${valueOr(config.display && config.display.height, '?')}`],
+        ['Shape', config.display && config.display.shape],
+        ['Rotation', config.display && config.display.rotation],
+        ['Selected variant', config.display && config.display.selectedVariant]
+      ]))}
+      ${configSection('Settings', keyValueTable([
+        ['Default screen', config.settings && config.settings.defaultScreen],
+        ['Theme', config.settings && config.settings.theme],
+        ['Brightness', config.settings && config.settings.brightness],
+        ['Demo mode', yesNo(config.settings && config.settings.demoMode)]
+      ]))}
+      ${configSection('Network', keyValueTable([
+        ['Hostname', config.network && config.network.hostname],
+        ['Domain', config.network && config.network.domain],
+        ['FQDN', config.network && config.network.fqdn],
+        ['mDNS', yesNo(config.network && config.network.mdns && config.network.mdns.enabled)],
+        ['Services', services || 'none']
+      ]))}
+      ${configSection('SignalK and NMEA', keyValueTable([
+        ['SignalK host', config.signalk && `${config.signalk.host}:${config.signalk.port}`],
+        ['SignalK mDNS', yesNo(config.signalk && config.signalk.useMdns)],
+        ['Source priority', config.sources && Array.isArray(config.sources.priority) ? config.sources.priority.join(', ') : ''],
+        ['NMEA 0183 WiFi', nmeaLabel(config.nmea0183Wifi)]
+      ]))}
+      ${configSection('OTA', keyValueTable([
+        ['Enabled', yesNo(config.ota && config.ota.enabled)],
+        ['Mode', config.ota && config.ota.mode],
+        ['Address', config.ota && `${config.ota.address}:${config.ota.port}`],
+        ['Password set', yesNo(config.ota && config.ota.passwordSet)]
+      ]))}
+      ${configSection('Autopilot', keyValueTable([
+        ['Enabled', yesNo(config.autopilot && config.autopilot.enabled)],
+        ['Backend', config.autopilot && config.autopilot.backend],
+        ['Engage allowed', yesNo(config.autopilot && config.autopilot.allowEngage)],
+        ['Standby allowed', yesNo(config.autopilot && config.autopilot.allowStandby)],
+        ['Heading adjust', yesNo(config.autopilot && config.autopilot.allowHeadingAdjust)]
+      ]))}
+      ${configSection('Debug', keyValueTable([
+        ['Log level', config.debug && config.debug.logLevel],
+        ['Touch mode', config.debug && config.debug.touchMode],
+        ['Heartbeat', config.management && `${config.management.heartbeatMs} ms`],
+        ['Command poll', config.management && `${config.management.commandPollMs} ms`]
+      ]))}
+      ${configSection('Widgets', renderWidgetsTable(config.widgets), true)}
+      ${configSection('Screens', renderScreensTable(config.layout), true)}
+    </div>`
+}
+
+function configSection (title, body, full) {
+  return `<section class="config-section${full ? ' full' : ''}"><h2>${escapeHtml(title)}</h2>${body}</section>`
+}
+
+function keyValueTable (rows) {
+  return `<table><tbody>${rows.map(([key, value]) => `
+    <tr><th>${escapeHtml(key)}</th><td>${formatConfigValue(value)}</td></tr>`).join('')}</tbody></table>`
+}
+
+function renderWidgetsTable (widgets) {
+  const items = widgets && widgets.items ? Object.entries(widgets.items) : []
+  const rows = items.map(([id, widget]) => `
+    <tr>
+      <td><strong>${escapeHtml(widget.title || id)}</strong><br><span>${escapeHtml(id)}</span></td>
+      <td><span class="pill">${escapeHtml(widget.type || '')}</span></td>
+      <td>${escapeHtml(widget.path || '')}</td>
+      <td>${fontSummary(widget)}</td>
+    </tr>`).join('')
+  const defaults = widgets && widgets.defaults ? `Defaults: ${escapeHtml(fontSummary(widgets.defaults))}` : ''
+  return `
+    <p class="muted">Variant ${escapeHtml(widgets && widgets.variant ? widgets.variant : 'default')}. ${defaults}</p>
+    <table>
+      <thead><tr><th>Widget</th><th>Type</th><th>SignalK path</th><th>Fonts</th></tr></thead>
+      <tbody>${rows || '<tr><td colspan="4">No widgets selected for this device.</td></tr>'}</tbody>
+    </table>`
+}
+
+function renderScreensTable (layout) {
+  const screens = layout && Array.isArray(layout.screens) ? layout.screens : []
+  const rows = screens.map((screen) => {
+    const tiles = Array.isArray(screen.tiles) ? screen.tiles : []
+    return `
+      <tr>
+        <td><strong>${escapeHtml(screen.id || '')}</strong><br><span>${escapeHtml(screen.type || '')}</span></td>
+        <td>${escapeHtml(tiles.length)}</td>
+        <td>${escapeHtml(tiles.map((tile) => tile.widget).filter(Boolean).join(', '))}</td>
+      </tr>`
+  }).join('')
+  return `
+    <p class="muted">Variant ${escapeHtml(layout && layout.variant ? layout.variant : 'default')}.</p>
+    <table>
+      <thead><tr><th>Screen</th><th>Tiles</th><th>Widgets</th></tr></thead>
+      <tbody>${rows || '<tr><td colspan="3">No screens selected for this device.</td></tr>'}</tbody>
+    </table>`
+}
+
+function formatConfigValue (value) {
+  if (value && value.__html) return value.__html
+  if (Array.isArray(value)) return escapeHtml(value.join(', '))
+  if (value == null || value === '') return '<span class="muted">unset</span>'
+  return escapeHtml(value)
+}
+
+function code (value) {
+  return { __html: `<code>${escapeHtml(value)}</code>` }
+}
+
+function valueOr (value, fallback) {
+  return value == null || value === '' ? fallback : value
+}
+
+function yesNo (value) {
+  return value ? 'yes' : 'no'
+}
+
+function nmeaLabel (nmea) {
+  if (!nmea) return 'disabled'
+  return `${nmea.enabled ? 'enabled' : 'disabled'} ${nmea.mode || ''} ${nmea.host || ''}:${nmea.port || ''}`.trim()
+}
+
+function fontSummary (settings) {
+  return ['fontSize', 'labelFontSize', 'valueFontSize', 'unitFontSize', 'titleFontSize', 'buttonFontSize']
+    .filter((key) => settings && settings[key] != null)
+    .map((key) => `${key.replace('FontSize', '')}: ${settings[key]}`)
+    .join(', ') || 'defaults'
 }
 
 function renderDiscoveryPage (devices) {
@@ -720,7 +855,7 @@ function displayLabel (display) {
 
 function firmwareLabel (firmware) {
   if (!firmware) return ''
-  return firmware.version || firmware.name || JSON.stringify(firmware)
+  return firmware.version || firmware.name || firmware.id || 'custom firmware'
 }
 
 function metric (value, label) {
