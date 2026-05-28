@@ -801,9 +801,10 @@ int fetch_config() {
                     net::logf("[mgr] render plan alloc failed");
                 } else {
                     manager_config::ParseError perr;
-                    if (manager_config::parse(cfg.as<JsonObjectConst>(),
-                                              g.width_px, g.height_px,
-                                              *plan_p, perr)) {
+                    bool parsed = manager_config::parse(
+                        cfg.as<JsonObjectConst>(),
+                        g.width_px, g.height_px, *plan_p, perr);
+                    if (parsed) {
                         s_render_plan = *plan_p;
                         s_render_plan_valid = true;
                         net::logf("[mgr] render plan: widgets=%u screens=%u "
@@ -813,15 +814,28 @@ int fetch_config() {
                                   plan_p->layout_variant[0]
                                       ? plan_p->layout_variant
                                       : "(none)");
-                        if (plan_p->screen_count > 0) {
-                            manager_screens::apply(*plan_p);
-                        }
                     } else {
                         net::logf("[mgr] render plan parse failed: %s at %s",
                                   manager_config::parse_code_to_string(perr.code),
                                   perr.path[0] ? perr.path : "(root)");
                     }
-                    heap_caps_free(plan_p);
+                    if (parsed && plan_p->screen_count > 0) {
+                        // Hand the plan off to the LVGL/UI task - all
+                        // lv_obj_* calls in manager_screens::apply() must
+                        // run there. The pump() consumer frees the blob
+                        // after handling.
+                        app::Command c;
+                        c.type = app::CommandType::ApplyManagedScreens;
+                        c.blob = plan_p;
+                        c.blob_len = sizeof(manager_config::RenderPlan);
+                        if (!app::post(c, 100)) {
+                            net::logf("[mgr] ApplyManagedScreens post failed");
+                            heap_caps_free(plan_p);
+                        }
+                        // ownership transferred to the queue on success
+                    } else {
+                        heap_caps_free(plan_p);
+                    }
                 }
                 bool ok = apply_config(cfg);
                 if (ok) {
@@ -1149,7 +1163,7 @@ bool handleSerialCommand(const String &line) {
             return true;
         }
         net::logf("[mgr] layout variant=%s widgets=%u screens=%u "
-                  "(%ux%u) hash=%s",
+                  "(%ux%u) hash=%s mgr_screens_built=%u",
                   s_render_plan.layout_variant[0] ? s_render_plan.layout_variant
                                                   : "(none)",
                   (unsigned)s_render_plan.widget_count,
@@ -1157,7 +1171,8 @@ bool handleSerialCommand(const String &line) {
                   (unsigned)s_render_plan.display_width,
                   (unsigned)s_render_plan.display_height,
                   s_applied_config_hash.length() ?
-                      s_applied_config_hash.c_str() : "(none)");
+                      s_applied_config_hash.c_str() : "(none)",
+                  (unsigned)manager_screens::managed_count());
         for (uint8_t i = 0; i < s_render_plan.screen_count; ++i) {
             const auto &sc = s_render_plan.screens[i];
             net::logf("[mgr]   screen[%u] id=%s tiles=%u",

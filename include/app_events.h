@@ -27,6 +27,8 @@ enum class CommandType : uint8_t {
     RunCommand,      // a = console command line (legacy dispatchCommand)
     SignalKPut,      // a = SK dotted path, b = JSON value (sent to net queue)
     SaveWifi,        // a = ssid, b = password (sent to net queue, reboots)
+    ApplyManagedScreens,  // blob = manager_config::RenderPlan*; consumer
+                          // calls manager_screens::apply() then frees.
 };
 
 struct Command {

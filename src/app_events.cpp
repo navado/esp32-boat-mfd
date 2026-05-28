@@ -16,6 +16,8 @@
 #include "ui_screens.h"
 #include "ui_theme.h"
 #include "layout_loader.h"
+#include "manager_config.h"
+#include "manager_screens.h"
 
 namespace app {
 
@@ -223,6 +225,17 @@ void pump() {
                 break;
             }
             net::dispatchCommand(String(cmd.a));
+            break;
+        }
+        case CommandType::ApplyManagedScreens: {
+            // LVGL must only be touched on the UI task. The manager
+            // worker heap-allocates a RenderPlan and posts here; we
+            // hand it to manager_screens::apply() and free below.
+            if (cmd.blob) {
+                const auto *plan_p =
+                    static_cast<const manager_config::RenderPlan *>(cmd.blob);
+                manager_screens::apply(*plan_p);
+            }
             break;
         }
         case CommandType::SignalKPut:
