@@ -74,6 +74,8 @@ make ota DEVICE_IP=10.0.0.42
 ```
 
 For a no-boat demo run, see [Running with synthetic data](#running-with-synthetic-data).
+For managed-display registry/config/command concepts, see
+[SignalK ESP Display Manager](docs/signalk-espdisp-manager.md).
 
 ## Make targets
 
@@ -180,6 +182,77 @@ make demo-down
 `fake_boat.py` connects to SignalK as an authenticated provider and emits
 deltas for navigation, wind, depth, water temperature, battery, and tanks
 once per second.
+
+### NMEA 0183 over WiFi
+
+The demo SignalK server can also expose NMEA 0183 over WiFi using the official
+SignalK plugin `@signalk/signalk-to-nmea0183`.
+
+Configured service ports:
+
+```text
+SignalK HTTP/WebSocket: 3000/tcp
+NMEA 0183 TCP:         10110/tcp
+```
+
+The plugin converts SignalK deltas to NMEA 0183 and publishes them through
+SignalK's built-in `nmea-tcp` interface. In the local test server, the plugin
+is configured with every supported conversion enabled at a 1000 ms minimum
+interval; sentences only emit when their required SignalK paths have data.
+
+Useful test:
+
+```sh
+nc localhost 10110
+```
+
+Expected demo output includes `GGA`, `RMC`, `HDT`, `MWV`, `VWR`, `VWT`, `DBT`,
+and `MTW` when `tools/fake_boat.py` is pushing data.
+
+If rebuilding the local SignalK container from scratch, install and enable:
+
+```sh
+./signalk/scripts/run.sh
+```
+
+The repo-owned config in `signalk/config` installs and enables:
+
+```text
+@signalk/signalk-to-nmea0183
+Server setting: interfaces.nmea-tcp = true
+```
+
+### Autopilot command simulator
+
+SignalK can run an autopilot simulator using the official plugin
+`@signalk/signalk-autopilot` with its `emulator` backend. This gives the
+firmware a queryable endpoint for testing autopilot commands without a real
+pilot on the network.
+
+Install and enable it with the repo-owned SignalK test config:
+
+```sh
+./signalk/scripts/run.sh
+```
+
+The config in `signalk/config/plugin-config-data/autopilot.json` enables:
+
+```text
+@signalk/signalk-autopilot
+type: emulator
+```
+
+Useful query paths:
+
+```text
+/signalk/v1/api/vessels/self/steering/autopilot/state/value
+/signalk/v1/api/vessels/self/steering/autopilot/target/headingMagnetic/value
+```
+
+Authenticated PUTs to `steering.autopilot.state` can be verified by reading
+the state path back. The emulator also supports `actions.adjustHeading`; the
+current firmware target-heading command uses `target.headingTrue`, which is
+not the emulator's writable heading target.
 
 ## Layout configuration (work in progress)
 

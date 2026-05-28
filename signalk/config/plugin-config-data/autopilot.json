@@ -1,0 +1,7 @@
+{
+  "enabled": true,
+  "configuration": {
+    "type": "emulator",
+    "enableV2API": true
+  }
+}

@@ -1,0 +1,84 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="760" viewBox="0 0 1200 760" role="img" aria-labelledby="title desc">
+  <title id="title">ESP Display Manager overview screenshot</title>
+  <desc id="desc">Concept screenshot of the ESP Display Manager device overview.</desc>
+  <rect width="1200" height="760" fill="#f5f7f8"/>
+  <rect width="1200" height="86" fill="#15323b"/>
+  <text x="36" y="52" font-family="Arial, sans-serif" font-size="30" fill="#ffffff" font-weight="700">ESP Display Manager</text>
+  <text x="36" y="74" font-family="Arial, sans-serif" font-size="14" fill="#d6e2e6">SignalK device registry, config, commands, and firmware operations</text>
+  <g transform="translate(36 118)">
+    <g>
+      <rect width="205" height="104" rx="8" fill="#ffffff" stroke="#d9e0e3"/>
+      <text x="18" y="42" font-family="Arial, sans-serif" font-size="34" fill="#172026" font-weight="700">4</text>
+      <text x="18" y="72" font-family="Arial, sans-serif" font-size="16" fill="#60717a">Devices</text>
+    </g>
+    <g transform="translate(225 0)">
+      <rect width="205" height="104" rx="8" fill="#ffffff" stroke="#d9e0e3"/>
+      <text x="18" y="42" font-family="Arial, sans-serif" font-size="34" fill="#19734d" font-weight="700">3</text>
+      <text x="18" y="72" font-family="Arial, sans-serif" font-size="16" fill="#60717a">Online</text>
+    </g>
+    <g transform="translate(450 0)">
+      <rect width="205" height="104" rx="8" fill="#ffffff" stroke="#d9e0e3"/>
+      <text x="18" y="42" font-family="Arial, sans-serif" font-size="34" fill="#9d5b00" font-weight="700">1</text>
+      <text x="18" y="72" font-family="Arial, sans-serif" font-size="16" fill="#60717a">Config drift</text>
+    </g>
+    <g transform="translate(675 0)">
+      <rect width="205" height="104" rx="8" fill="#ffffff" stroke="#d9e0e3"/>
+      <text x="18" y="42" font-family="Arial, sans-serif" font-size="34" fill="#172026" font-weight="700">2</text>
+      <text x="18" y="72" font-family="Arial, sans-serif" font-size="16" fill="#60717a">Pending commands</text>
+    </g>
+    <g transform="translate(900 0)">
+      <rect width="205" height="104" rx="8" fill="#ffffff" stroke="#d9e0e3"/>
+      <text x="18" y="42" font-family="Arial, sans-serif" font-size="34" fill="#172026" font-weight="700">1</text>
+      <text x="18" y="72" font-family="Arial, sans-serif" font-size="16" fill="#60717a">Firmware jobs</text>
+    </g>
+  </g>
+  <g transform="translate(36 260)">
+    <rect width="1128" height="420" fill="#ffffff" stroke="#d9e0e3"/>
+    <rect width="1128" height="48" fill="#eef3f5"/>
+    <text x="18" y="30" font-family="Arial, sans-serif" font-size="14" fill="#40515a" font-weight="700">Device</text>
+    <text x="330" y="30" font-family="Arial, sans-serif" font-size="14" fill="#40515a" font-weight="700">Health</text>
+    <text x="455" y="30" font-family="Arial, sans-serif" font-size="14" fill="#40515a" font-weight="700">Profile</text>
+    <text x="620" y="30" font-family="Arial, sans-serif" font-size="14" fill="#40515a" font-weight="700">Display</text>
+    <text x="760" y="30" font-family="Arial, sans-serif" font-size="14" fill="#40515a" font-weight="700">Layout</text>
+    <text x="915" y="30" font-family="Arial, sans-serif" font-size="14" fill="#40515a" font-weight="700">Drift</text>
+    <text x="1015" y="30" font-family="Arial, sans-serif" font-size="14" fill="#40515a" font-weight="700">Pending</text>
+    <g font-family="Arial, sans-serif" font-size="15" fill="#172026">
+      <line x1="0" y1="112" x2="1128" y2="112" stroke="#e5eaed"/>
+      <text x="18" y="82" font-weight="700">Cockpit Display</text>
+      <text x="18" y="102" font-size="12" fill="#60717a">espdisp-aabbccddeeff</text>
+      <text x="330" y="90" fill="#19734d">ok</text>
+      <text x="455" y="90">wide-helm</text>
+      <text x="620" y="90">800x480</text>
+      <text x="760" y="90">wide-800x480</text>
+      <text x="915" y="90">no</text>
+      <text x="1015" y="90">0</text>
+      <line x1="0" y1="176" x2="1128" y2="176" stroke="#e5eaed"/>
+      <text x="18" y="146" font-weight="700">Helm Square</text>
+      <text x="18" y="166" font-size="12" fill="#60717a">espdisp-112233445566</text>
+      <text x="330" y="154" fill="#19734d">ok</text>
+      <text x="455" y="154">default</text>
+      <text x="620" y="154">480x480</text>
+      <text x="760" y="154">square-480</text>
+      <text x="915" y="154">no</text>
+      <text x="1015" y="154">1</text>
+      <line x1="0" y1="240" x2="1128" y2="240" stroke="#e5eaed"/>
+      <text x="18" y="210" font-weight="700">Nav Station</text>
+      <text x="18" y="230" font-size="12" fill="#60717a">espdisp-223344556677</text>
+      <text x="330" y="218" fill="#9d5b00">pending</text>
+      <text x="455" y="218">night-watch</text>
+      <text x="620" y="218">480x480</text>
+      <text x="760" y="218">square-480</text>
+      <text x="915" y="218">yes</text>
+      <text x="1015" y="218">1</text>
+      <line x1="0" y1="304" x2="1128" y2="304" stroke="#e5eaed"/>
+      <text x="18" y="274" font-weight="700">Bench Device</text>
+      <text x="18" y="294" font-size="12" fill="#60717a">espdisp-testbench</text>
+      <text x="330" y="282" fill="#8a1f17">offline</text>
+      <text x="455" y="282">small-test</text>
+      <text x="620" y="282">320x240</text>
+      <text x="760" y="282">small-320x240</text>
+      <text x="915" y="282">no</text>
+      <text x="1015" y="282">0</text>
+    </g>
+  </g>
+</svg>

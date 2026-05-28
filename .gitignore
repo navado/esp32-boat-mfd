@@ -28,4 +28,5 @@ __pycache__/
 # macOS / IDE
 .DS_Store
 .idea/
+.claude/
 *.swp

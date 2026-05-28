@@ -28,6 +28,18 @@ Files:
   autopilot, board support, beeper, and adopted visual design concepts.
 - `13-board-display-portability.md` - board/display abstraction, layout
   geometry classes, generalized settings, and multi-board migration plan.
+- `14-touch-interrupt-testing.md` - GT911 touch interrupt support and
+  validation procedure.
+- `15-signalk-nmea0183-wifi.md` - official SignalK NMEA 0183 over TCP test
+  output.
+- `16-signalk-autopilot-emulator.md` - official SignalK autopilot emulator
+  setup and command verification.
+- `17-espdisp-management-firmware-plan.md` - firmware-side plan for managed
+  device identity, config, commands, discovery, and OTA.
+- `18-signalk-espdisp-manager-plugin-plan.md` - SignalK plugin plan for
+  registry, auth, profiles, commands, firmware catalog, and admin UI.
+- `19-device-display-widget-management.md` - device-side display geometry,
+  layout variant, widget, and font-size management contract.
 
 Use these specs when implementing the data-driven renderer, refining individual
 screens, or adding Signal K plugin/device-management features.

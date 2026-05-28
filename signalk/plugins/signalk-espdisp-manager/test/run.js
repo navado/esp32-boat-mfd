@@ -1,0 +1,6 @@
+require('./plugin.test')
+require('./firmware-contract.test')
+require('./mock-firmware.test')
+require('./display-widgets.test')
+require('./dashboard.test')
+console.log('espdisp-manager test suite passed')

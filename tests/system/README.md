@@ -18,6 +18,7 @@ The tests exercise every data path that ships today:
 | Rendering perf      | FPS, RenderLatency, idle quietness (unattended) |
 | Command latency     | Tap-to-screen-switch RTT (unattended)          |
 | Data scenarios      | No data, SK only, conflict, stale fallback, mixed routing |
+| ESP manager         | Opt-in future contract for SignalK plugin registration, config, commands |
 | Stress              | Gesture spam, tap flood, NMEA flood, heap stability |
 | Settings UI         | Brightness, theme, screen pick (attended)      |
 | WiFi captive portal | First-boot provisioning (attended)             |
@@ -43,6 +44,10 @@ requires Bonjour / Avahi on the host). Optional:
 
 - `ESPDISP_SK_HOST` — SignalK server (default: `localhost`)
 - `ESPDISP_NMEA_WIFI_PORT` — default `10110`
+- `ESPDISP_MANAGER_CONTRACT=1` — enable future ESP manager firmware
+  contract tests
+- `SIGNALK_URL` — manager plugin URL base (default: `http://localhost:3000`)
+- `SIGNALK_USERNAME` / `SIGNALK_PASSWORD` — defaults `admin` / `admin`
 - `ARTIFACTS_DIR` — screenshot output dir (default: `tests/system/artifacts`)
 
 ## What screens look like after each test

@@ -1,0 +1,20 @@
+{
+  "name": "signalk-espdisp-manager",
+  "version": "0.1.0",
+  "private": true,
+  "description": "SignalK plugin for managing ESP display devices.",
+  "main": "index.js",
+  "keywords": [
+    "signalk-node-server-plugin"
+  ],
+  "license": "UNLICENSED",
+  "scripts": {
+    "test": "node test/run.js"
+  },
+  "signalk": {
+    "displayName": "ESP Display Manager"
+  },
+  "engines": {
+    "node": ">=20.10"
+  }
+}

@@ -1,0 +1,10 @@
+{
+  "interfaces": {
+    "nmea-tcp": true
+  },
+  "ssl": false,
+  "security": {
+    "strategy": "./tokensecurity"
+  },
+  "pipedProviders": []
+}

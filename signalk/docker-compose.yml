@@ -1,0 +1,10 @@
+services:
+  signalk:
+    image: signalk/signalk-server:latest
+    container_name: signalk-server
+    ports:
+      - "3000:3000"
+      - "10110:10110"
+    volumes:
+      - ./config:/home/node/.signalk
+      - ./plugins:/home/node/plugins

@@ -3,6 +3,11 @@
 Each screen should be optimized for a single underway decision. Secondary values
 are allowed only when they help that decision.
 
+Where possible, screens should be implemented as variants of the reusable
+templates in `11-layout-templates-screen-variants.md`. Per-screen requirements
+below define the behavior and data priorities; the template spec defines the
+shared layout and interaction mechanics.
+
 ## Dashboard
 
 Purpose: quick scan of the boat state.
@@ -345,16 +350,22 @@ Best reference pattern:
 
 Controls:
 
-- Brightness slider.
-- Day/night theme.
-- Position format.
-- Demo on/off.
+- Brightness as five discrete buckets.
+- Day/night theme as one segmented selection control.
+- Position format as one DDM/DD/DMS selection control.
+- Demo as one off/on selection control.
+- Depth alarm threshold selection.
+- Battery low-voltage threshold selection.
 - Trip reset.
 - Open WiFi setup.
 
 Visual requirements:
 
 - Controls must be large enough for wet fingers.
+- Bi-state settings must use a single control that shows the active state, not
+  separate on/off buttons.
+- Numeric settings with bounded operational choices should use discrete
+  buckets before free-form entry.
 - Settings should apply immediately where safe.
 - Persistent settings must write to NVS.
 
@@ -392,4 +403,3 @@ Requirements:
 - Bearing and distance back to MOB.
 - Elapsed time.
 - Long-press clear.
-

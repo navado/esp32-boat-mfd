@@ -24,6 +24,8 @@ input modalities beyond touch.
 - Keep GT911 I2C polling asynchronous and off the LVGL/rendering task.
 - Recognize gestures from raw touch samples, not LVGL screen callbacks.
 - Route gestures through the app event queue.
+- Keep screen/overlay-specific gesture policy on the UI task so the touch task
+  does not read LVGL or screen-manager state directly.
 - Allow global gestures and screen-local gestures.
 - Allow overlays such as MOB/alarm/settings to consume or block gestures.
 - Preserve normal LVGL touch/click behavior for buttons, sliders, lists, and
@@ -392,4 +394,3 @@ Example `/api/state` shape:
 - Global gestures are consistent on every screen.
 - Screen-specific gesture policies can be added without editing the recognizer.
 - `make test` and `make build` pass.
-

@@ -1,0 +1,55 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="760" viewBox="0 0 1200 760" role="img" aria-labelledby="title desc">
+  <title id="title">ESP Display Manager profile and widgets screenshot</title>
+  <desc id="desc">Concept screenshot of profile matching, layout variants, and widget font settings.</desc>
+  <rect width="1200" height="760" fill="#f5f7f8"/>
+  <rect width="1200" height="86" fill="#15323b"/>
+  <text x="36" y="52" font-family="Arial, sans-serif" font-size="30" fill="#ffffff" font-weight="700">Profile: wide-helm</text>
+  <text x="36" y="74" font-family="Arial, sans-serif" font-size="14" fill="#d6e2e6">Display matching, layout variants, widgets, and font sizes</text>
+  <g transform="translate(36 120)">
+    <rect width="345" height="560" rx="8" fill="#ffffff" stroke="#d9e0e3"/>
+    <text x="22" y="38" font-family="Arial, sans-serif" font-size="18" fill="#172026" font-weight="700">Match Rules</text>
+    <text x="22" y="78" font-family="Arial, sans-serif" font-size="15" fill="#40515a">priority</text>
+    <text x="180" y="78" font-family="Arial, sans-serif" font-size="15" fill="#172026">50</text>
+    <text x="22" y="112" font-family="Arial, sans-serif" font-size="15" fill="#40515a">display.width</text>
+    <text x="180" y="112" font-family="Arial, sans-serif" font-size="15" fill="#172026">800</text>
+    <text x="22" y="146" font-family="Arial, sans-serif" font-size="15" fill="#40515a">display.height</text>
+    <text x="180" y="146" font-family="Arial, sans-serif" font-size="15" fill="#172026">480</text>
+    <text x="22" y="180" font-family="Arial, sans-serif" font-size="15" fill="#40515a">role</text>
+    <text x="180" y="180" font-family="Arial, sans-serif" font-size="15" fill="#172026">display</text>
+    <line x1="22" y1="218" x2="323" y2="218" stroke="#e5eaed"/>
+    <text x="22" y="258" font-family="Arial, sans-serif" font-size="18" fill="#172026" font-weight="700">Selected Variant</text>
+    <rect x="22" y="286" width="300" height="58" rx="6" fill="#eef3f5" stroke="#d9e0e3"/>
+    <text x="42" y="322" font-family="Arial, sans-serif" font-size="16" fill="#172026">wide-800x480</text>
+  </g>
+  <g transform="translate(418 120)">
+    <rect width="345" height="560" rx="8" fill="#ffffff" stroke="#d9e0e3"/>
+    <text x="22" y="38" font-family="Arial, sans-serif" font-size="18" fill="#172026" font-weight="700">Layout Tiles</text>
+    <rect x="22" y="72" width="300" height="150" rx="6" fill="#eef3f5" stroke="#d9e0e3"/>
+    <line x1="172" y1="72" x2="172" y2="222" stroke="#c8d3d8"/>
+    <line x1="22" y1="147" x2="322" y2="147" stroke="#c8d3d8"/>
+    <text x="48" y="118" font-family="Arial, sans-serif" font-size="15" fill="#172026">sog</text>
+    <text x="198" y="118" font-family="Arial, sans-serif" font-size="15" fill="#172026">heading</text>
+    <text x="48" y="193" font-family="Arial, sans-serif" font-size="15" fill="#172026">windRose</text>
+    <text x="198" y="193" font-family="Arial, sans-serif" font-size="15" fill="#60717a">map filtered</text>
+    <line x1="22" y1="258" x2="323" y2="258" stroke="#e5eaed"/>
+    <text x="22" y="298" font-family="Arial, sans-serif" font-size="18" fill="#172026" font-weight="700">Generated Config</text>
+    <text x="22" y="334" font-family="Arial, sans-serif" font-size="15" fill="#40515a">unsupported widgets are removed</text>
+    <text x="22" y="366" font-family="Arial, sans-serif" font-size="15" fill="#40515a">tiles referencing them are removed</text>
+  </g>
+  <g transform="translate(800 120)">
+    <rect width="345" height="560" rx="8" fill="#ffffff" stroke="#d9e0e3"/>
+    <text x="22" y="38" font-family="Arial, sans-serif" font-size="18" fill="#172026" font-weight="700">Widget Fonts</text>
+    <text x="22" y="82" font-family="Arial, sans-serif" font-size="15" fill="#40515a">default value font</text>
+    <text x="220" y="82" font-family="Arial, sans-serif" font-size="15" fill="#172026">48</text>
+    <text x="22" y="116" font-family="Arial, sans-serif" font-size="15" fill="#40515a">requested SOG font</text>
+    <text x="220" y="116" font-family="Arial, sans-serif" font-size="15" fill="#172026">50</text>
+    <text x="22" y="150" font-family="Arial, sans-serif" font-size="15" fill="#40515a">resolved SOG font</text>
+    <text x="220" y="150" font-family="Arial, sans-serif" font-size="15" fill="#19734d">48</text>
+    <line x1="22" y1="190" x2="323" y2="190" stroke="#e5eaed"/>
+    <text x="22" y="230" font-family="Arial, sans-serif" font-size="18" fill="#172026" font-weight="700">Supported Types</text>
+    <text x="22" y="266" font-family="Arial, sans-serif" font-size="15" fill="#172026">numeric, text, gauge</text>
+    <text x="22" y="296" font-family="Arial, sans-serif" font-size="15" fill="#172026">compass, windRose, trend</text>
+    <text x="22" y="326" font-family="Arial, sans-serif" font-size="15" fill="#172026">bar, button, autopilot</text>
+    <text x="22" y="356" font-family="Arial, sans-serif" font-size="15" fill="#8a1f17">map: unsupported</text>
+  </g>
+</svg>

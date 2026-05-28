@@ -1,0 +1,192 @@
+# SignalK Test Server
+
+This directory contains the repo-owned SignalK test server configuration.
+
+It is used for local firmware testing with:
+
+- SignalK HTTP/WebSocket on `localhost:3000`
+- NMEA 0183 TCP output on `localhost:10110`
+- official NMEA 0183 conversion plugin
+- official autopilot plugin in emulator mode
+- synthetic boat data from `tools/fake_boat.py`
+
+Project-level manager concepts and screenshots are documented in
+[`docs/signalk-espdisp-manager.md`](../docs/signalk-espdisp-manager.md).
+
+## Start
+
+```sh
+make demo-up
+```
+
+or directly:
+
+```sh
+./signalk/scripts/run.sh
+```
+
+## Stop
+
+```sh
+make demo-down
+```
+
+or directly:
+
+```sh
+./signalk/scripts/stop.sh
+```
+
+## Verify SignalK
+
+```sh
+curl http://localhost:3000/signalk
+```
+
+## Verify NMEA 0183 TCP
+
+After the fake boat producer is running:
+
+```sh
+nc localhost 10110
+```
+
+Expected sentences include `GGA`, `RMC`, `HDT`, `MWV`, `VWR`, `VWT`, `DBT`,
+and `MTW` when the required SignalK paths have data.
+
+## Verify Autopilot Emulator
+
+```sh
+curl http://localhost:3000/signalk/v1/api/vessels/self/steering/autopilot/state/value
+```
+
+Expected default:
+
+```text
+"standby"
+```
+
+Authenticated state command example:
+
+```sh
+TOKEN=$(curl -s -H 'Content-Type: application/json' \
+  -d '{"username":"admin","password":"admin"}' \
+  http://localhost:3000/signalk/v1/auth/login | jq -r .token)
+
+curl -s -X PUT \
+  -H "Authorization: Bearer $TOKEN" \
+  -H 'Content-Type: application/json' \
+  -d '{"value":"auto"}' \
+  http://localhost:3000/signalk/v1/api/vessels/self/steering/autopilot/state
+```
+
+Then query the state path again.
+
+## Verify ESP Display Manager
+
+SignalK protects plugin routes with its normal HTTP auth. Device management
+auth is carried separately with `X-EspDisp-Authorization`.
+
+```sh
+TOKEN=$(curl -s -H 'Content-Type: application/json' \
+  -d '{"username":"admin","password":"admin"}' \
+  http://localhost:3000/signalk/v1/auth/login | jq -r .token)
+
+curl -s \
+  -H "Authorization: Bearer $TOKEN" \
+  http://localhost:3000/plugins/espdisp-manager/.well-known/espdisp-management
+
+curl -s -X POST \
+  -H "Authorization: Bearer $TOKEN" \
+  -H "X-EspDisp-Authorization: Bearer espdisp-dev" \
+  -H 'Content-Type: application/json' \
+  -d '{"device":{"id":"espdisp-aabbccddeeff","board":"esp32-4848s040"}}' \
+  http://localhost:3000/plugins/espdisp-manager/devices/register
+```
+
+Implemented v1 endpoints:
+
+```text
+GET  /plugins/espdisp-manager/.well-known/espdisp-management
+GET  /plugins/espdisp-manager/capabilities
+GET  /plugins/espdisp-manager/devices
+GET  /plugins/espdisp-manager/groups
+GET  /plugins/espdisp-manager/provisioning/tokens
+POST /plugins/espdisp-manager/provisioning/tokens
+POST /plugins/espdisp-manager/devices/register
+GET  /plugins/espdisp-manager/devices/:id
+PATCH /plugins/espdisp-manager/devices/:id
+GET  /plugins/espdisp-manager/devices/:id/auth/status
+POST /plugins/espdisp-manager/devices/:id/profile
+POST /plugins/espdisp-manager/devices/:id/status
+GET  /plugins/espdisp-manager/devices/:id/config
+GET  /plugins/espdisp-manager/profiles
+POST /plugins/espdisp-manager/profiles
+POST /plugins/espdisp-manager/devices/:id/command
+GET  /plugins/espdisp-manager/devices/:id/commands
+GET  /plugins/espdisp-manager/devices/:id/commands/:commandId
+POST /plugins/espdisp-manager/devices/:id/commands/:commandId/ack
+POST /plugins/espdisp-manager/devices/:id/commands/:commandId/cancel
+POST /plugins/espdisp-manager/devices/:id/tokens/rotate
+POST /plugins/espdisp-manager/devices/:id/tokens/revoke
+POST /plugins/espdisp-manager/groups/:groupId/command
+POST /plugins/espdisp-manager/automation/event
+GET  /plugins/espdisp-manager/firmware/catalog
+POST /plugins/espdisp-manager/firmware/artifacts
+GET  /plugins/espdisp-manager/firmware/artifacts/:artifactId
+GET  /plugins/espdisp-manager/firmware/download/:jobId
+GET  /plugins/espdisp-manager/devices/:id/firmware/jobs
+POST /plugins/espdisp-manager/devices/:id/firmware/jobs
+GET  /plugins/espdisp-manager/devices/:id/firmware/jobs/:jobId
+POST /plugins/espdisp-manager/devices/:id/firmware/jobs/:jobId/progress
+POST /plugins/espdisp-manager/devices/:id/firmware/confirm
+```
+
+Device registration may include display geometry and widget capabilities. The
+plugin uses those fields to select layout and widget variants:
+
+```json
+{
+  "display": {
+    "width": 480,
+    "height": 480,
+    "rotation": 0,
+    "colorDepth": 16,
+    "shape": "square"
+  },
+  "capabilities": {
+    "widgets": {
+      "numeric": true,
+      "text": true,
+      "map": false
+    },
+    "fonts": {
+      "sizes": [12, 14, 16, 18, 24, 32, 42, 48]
+    }
+  }
+}
+```
+
+Profiles can provide `layout.variants` and `widgets.variants` keyed by
+display match rules. Generated configs contain only the selected layout plus
+supported widgets, with font sizes resolved to the device's supported font
+list.
+
+Profiles may also include a `match` object. On first registration, the plugin
+assigns the highest-priority matching profile before falling back to `default`:
+
+```json
+{
+  "id": "wide-helm",
+  "priority": 50,
+  "match": {
+    "display": {
+      "width": 800,
+      "height": 480
+    }
+  }
+}
+```
+
+If unsupported widgets are filtered out, layout tiles referencing those widget
+ids are removed from the generated config before the device sees it.

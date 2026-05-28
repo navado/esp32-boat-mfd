@@ -45,6 +45,8 @@ The existing JSON shape remains the base:
   "id": "wind",
   "title": "Wind",
   "type": "wind",
+  "template": "round_instrument",
+  "variant": "wind_round",
   "hidden": false,
   "paths": {},
   "widgets": [],
@@ -56,9 +58,15 @@ Rules:
 
 - `id` is stable and used for navigation and widget addressing.
 - `type` selects one of the native screen renderers.
+- `template` optionally selects a reusable layout template. Missing values fall
+  back to the native `type` renderer.
+- `variant` optionally selects the concrete screen variant within the template.
 - `hidden` means reachable by command/API but skipped by swipe cycle.
 - `paths` binds screen-level Signal K values.
 - `widgets` is optional for future per-widget customization.
+
+See `11-layout-templates-screen-variants.md` for the template catalog, screen
+variant map, and tap-to-detail command model.
 
 ## Widget Addressing
 
@@ -160,4 +168,3 @@ Recommended additions:
 - Reject layouts above a fixed maximum.
 - Apply layout only on the LVGL/UI task.
 - Provide snapshot-copy APIs for web/BLE reads.
-

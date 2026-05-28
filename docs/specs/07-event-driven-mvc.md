@@ -67,6 +67,8 @@ View rules:
 
 - A view may create, own, and refresh LVGL objects for its screen.
 - A view reads model snapshots or receives refresh data.
+- A view should avoid LVGL setters when the displayed value has not changed;
+  rendering performance guidance lives in `09-rendering-performance-interactivity.md`.
 - A view does not perform HTTP, WiFi scans, BLE notifications, NVS writes, or
   reboots directly.
 - User interactions inside a view emit events instead of mutating global state
