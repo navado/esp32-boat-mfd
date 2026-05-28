@@ -7,6 +7,7 @@
 #include <Update.h>
 #include <WiFi.h>
 #include <esp_heap_caps.h>
+#include <esp_log.h>
 #include <esp_ota_ops.h>
 #include <esp_task_wdt.h>
 #include <freertos/FreeRTOS.h>
@@ -852,6 +853,36 @@ const char *execute_command(const char *type, JsonObject payload) {
         app::Command c;
         c.type = app::CommandType::ClearOverlay;
         return app::post(c, 100) ? "ok" : "busy";
+    }
+    if (strcmp(type, "log.level") == 0) {
+        // Spec 17 §8 log.level. Accepts a string ("trace"|"debug"|
+        // "info"|"warn"|"error"|"none") or a numeric ESP_LOG_* enum
+        // value (0..5). Applied globally via esp_log_level_set("*").
+        // We log a confirmation at INFO so the operator sees the
+        // change even when the new level silences themselves.
+        const char *lvl_s = payload["level"] | "";
+        esp_log_level_t lvl = ESP_LOG_INFO;
+        bool ok = true;
+        if (*lvl_s) {
+            if      (!strcmp(lvl_s, "none"))    lvl = ESP_LOG_NONE;
+            else if (!strcmp(lvl_s, "error"))   lvl = ESP_LOG_ERROR;
+            else if (!strcmp(lvl_s, "warn"))    lvl = ESP_LOG_WARN;
+            else if (!strcmp(lvl_s, "info"))    lvl = ESP_LOG_INFO;
+            else if (!strcmp(lvl_s, "debug"))   lvl = ESP_LOG_DEBUG;
+            else if (!strcmp(lvl_s, "trace") ||
+                     !strcmp(lvl_s, "verbose")) lvl = ESP_LOG_VERBOSE;
+            else ok = false;
+        } else if (payload["level"].is<int>()) {
+            int n = payload["level"].as<int>();
+            if (n < ESP_LOG_NONE || n > ESP_LOG_VERBOSE) ok = false;
+            else lvl = (esp_log_level_t)n;
+        } else {
+            ok = false;
+        }
+        if (!ok) return "invalid_payload";
+        esp_log_level_set("*", lvl);
+        net::logf("[mgr] log.level -> %d", (int)lvl);
+        return "ok";
     }
     return "unsupported_command";
 }
