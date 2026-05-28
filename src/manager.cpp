@@ -1,6 +1,7 @@
 #include "manager.h"
 
 #include <ArduinoJson.h>
+#include <ESPmDNS.h>
 #include <HTTPClient.h>
 #include <Preferences.h>
 #include <Update.h>
@@ -1335,10 +1336,42 @@ bool handleSerialCommand(const String &line) {
         return true;
     }
     if (line == "manager-discover") {
-        // F2 mDNS discovery placeholder. mDNS query for
-        // _espdisp-mgmt._tcp.local. lands in a follow-up; for now
-        // just log so the CLI is wired.
-        net::logf("[mgr] mDNS discovery TBD (use manager-register <url>)");
+        // Spec 18 §4: query the LAN for _espdisp-mgmt._tcp services.
+        // The plugin advertises the same service when running on a
+        // SignalK host with mDNS enabled. We log every hit; if exactly
+        // one is found, auto-set the endpoint and trigger a register.
+        if (WiFi.status() != WL_CONNECTED) {
+            net::logf("[mgr] discover: wifi not connected");
+            return true;
+        }
+        int n = MDNS.queryService("espdisp-mgmt", "tcp");
+        net::logf("[mgr] discover: %d hit(s) for _espdisp-mgmt._tcp", n);
+        for (int i = 0; i < n; ++i) {
+            String host = MDNS.hostname(i);
+            uint16_t port = MDNS.port(i);
+            IPAddress ip = MDNS.IP(i);
+            net::logf("[mgr]   [%d] %s @ %s:%u",
+                      i, host.c_str(), ip.toString().c_str(), (unsigned)port);
+        }
+        if (n == 1) {
+            IPAddress ip = MDNS.IP(0);
+            uint16_t port = MDNS.port(0);
+            // Prefer the resolved IP - .local hostnames re-resolve at
+            // every HTTP call which is wasteful and flaky on iOS hot-
+            // spots that filter mDNS.
+            String url = String("http://") + ip.toString() + ":" + String(port);
+            lock_state();
+            s_endpoint = url;
+            if (!s_token.length()) s_auth = AuthState::Unprovisioned;
+            save_prefs();
+            s_force_register = true;
+            unlock_state();
+            net::logf("[mgr] discover: endpoint set to %s; will register",
+                      url.c_str());
+        } else if (n > 1) {
+            net::logf("[mgr] discover: multiple hits - pick one via "
+                      "`manager-register http://<host>:<port>`");
+        }
         return true;
     }
     // ---- spec 19 D7 diagnostic commands -------------------------------
