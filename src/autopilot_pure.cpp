@@ -43,8 +43,24 @@ const char *result_name(Result r) {
         case Result::InvalidPayload:     return "invalid";
         case Result::BackendUnavailable: return "backend-unavailable";
         case Result::Failed:             return "failed";
+        case Result::Forbidden:          return "forbidden";
     }
     return "?";
+}
+
+bool mode_allowed(Mode m, const Permissions &p) {
+    switch (m) {
+        case Mode::Unknown:  return false;
+        case Mode::Standby:  return p.allow_standby;
+        // Auto/Wind/PreTrack/Track all engage the autopilot, so they
+        // share the engage permission - operators expect a single
+        // big-red-button gate, not per-mode gates.
+        case Mode::Auto:
+        case Mode::Wind:
+        case Mode::PreTrack:
+        case Mode::Track:    return p.allow_engage;
+    }
+    return false;
 }
 
 }  // namespace autopilot

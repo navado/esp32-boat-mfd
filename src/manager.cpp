@@ -18,6 +18,7 @@
 #include <stdio.h>
 
 #include "app_events.h"
+#include "autopilot.h"
 #include "beeper.h"
 #include "board.h"
 #include "boat_data.h"
@@ -681,6 +682,32 @@ bool apply_config(JsonDocument &cfg) {
                 // external transceiver and wants the worker up regardless.
             }
             net::dispatchCommand(want_en ? "n2k enable" : "n2k disable");
+        }
+    }
+
+    // ---- 3d. Autopilot permissions ----------------------------------------
+    // Spec 17 §6 "autopilot permissions". The plugin / operator can
+    // lock out dangerous actions remotely (engage, heading adjust).
+    // Backend selection is included here too because it lives next
+    // to the permissions in the plugin's default profile.
+    if (cfg["autopilot"].is<JsonObject>()) {
+        JsonObject ap = cfg["autopilot"].as<JsonObject>();
+        autopilot::Permissions p = autopilot::get_permissions();
+        if (ap["allowEngage"].is<bool>())        p.allow_engage = ap["allowEngage"];
+        if (ap["allowStandby"].is<bool>())       p.allow_standby = ap["allowStandby"];
+        if (ap["allowHeadingAdjust"].is<bool>()) p.allow_heading_adjust = ap["allowHeadingAdjust"];
+        autopilot::set_permissions(p);
+
+        if (ap["backend"].is<const char *>()) {
+            const char *b = ap["backend"].as<const char *>();
+            if (strcmp(b, "signalk") == 0) {
+                autopilot::set_default_backend(autopilot::Backend::SignalK);
+            } else if (strcmp(b, "nmea2000") == 0) {
+                autopilot::set_default_backend(autopilot::Backend::NMEA2000Raymarine);
+            } else {
+                record_error("[mgr] reject autopilot.backend=%s (want signalk/nmea2000)", b);
+                ok = false;
+            }
         }
     }
 

@@ -49,6 +49,17 @@ enum class Result : uint8_t {
     InvalidPayload,
     BackendUnavailable,
     Failed,
+    Forbidden,        // spec 17 §6: action gated off by permissions
+};
+
+// Spec 17 §6 autopilot permissions. The plugin/operator can lock out
+// dangerous actions remotely. Defaults are conservative: engage is
+// disabled, standby and heading adjust are allowed (so a user can
+// safely return the AP to standby without having to enable engage).
+struct Permissions {
+    bool allow_engage = false;
+    bool allow_standby = true;
+    bool allow_heading_adjust = true;
 };
 
 struct State {
@@ -69,6 +80,11 @@ Mode mode_from_string(const char *s);
 const char *backend_name(Backend b);
 const char *result_name(Result r);
 
+// True iff the given mode is allowed under the supplied permissions.
+// Engage covers Auto / Wind / PreTrack / Track; Standby covers Standby;
+// Unknown is never allowed. Pure - host-testable.
+bool mode_allowed(Mode m, const Permissions &p);
+
 // The rest of the API is Arduino-only (touches NVS, HTTPClient,
 // the SK module). Host tests cover the pure helpers above.
 
@@ -81,6 +97,12 @@ Result set_mode(Mode m);
 Result adjust_heading_deg(int delta);
 Result silence_alarm();
 void setup();
+
+// Spec 17 §6 autopilot permissions - thread-safe at the set/get
+// boundary; set_mode / adjust_heading_deg consult them before
+// dispatching to a backend.
+Permissions get_permissions();
+void set_permissions(const Permissions &p);
 
 // Console: autopilot | autopilot status | autopilot mode <m> |
 //          autopilot heading <delta> | autopilot silence |

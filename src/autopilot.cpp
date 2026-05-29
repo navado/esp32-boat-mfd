@@ -14,12 +14,18 @@ namespace {
 
 constexpr const char *NS = "ap";
 Backend s_default_backend = Backend::SignalK;
+// Spec 17 §6 permissions - conservative defaults match the plugin's
+// default profile: engage off, standby+heading on.
+Permissions s_perms;
 
 void load_prefs() {
     Preferences p;
     p.begin(NS, true);
     s_default_backend = static_cast<Backend>(
         p.getUChar("backend", static_cast<uint8_t>(Backend::SignalK)));
+    s_perms.allow_engage         = p.getUChar("eng", 0) != 0;
+    s_perms.allow_standby        = p.getUChar("sby", 1) != 0;
+    s_perms.allow_heading_adjust = p.getUChar("hdg", 1) != 0;
     p.end();
 }
 
@@ -27,6 +33,9 @@ void save_prefs() {
     Preferences p;
     p.begin(NS, false);
     p.putUChar("backend", static_cast<uint8_t>(s_default_backend));
+    p.putUChar("eng", s_perms.allow_engage ? 1 : 0);
+    p.putUChar("sby", s_perms.allow_standby ? 1 : 0);
+    p.putUChar("hdg", s_perms.allow_heading_adjust ? 1 : 0);
     p.end();
 }
 
@@ -87,6 +96,15 @@ void set_default_backend(Backend b) {
     net::logf("[ap] backend = %s", backend_name(b));
 }
 
+Permissions get_permissions() { return s_perms; }
+void set_permissions(const Permissions &p) {
+    s_perms = p;
+    save_prefs();
+    net::logf("[ap] permissions: engage=%d standby=%d heading=%d",
+              s_perms.allow_engage, s_perms.allow_standby,
+              s_perms.allow_heading_adjust);
+}
+
 void copy_state(State &out) {
     boat::Snapshot s;
     boat::copy_snapshot(s);
@@ -107,6 +125,7 @@ void copy_state(State &out) {
 }
 
 Result set_mode(Mode m) {
+    if (!mode_allowed(m, s_perms)) return Result::Forbidden;
     switch (s_default_backend) {
         case Backend::SignalK:           return sk_set_mode(m);
 #ifdef ENABLE_NMEA2000
@@ -120,6 +139,7 @@ Result set_mode(Mode m) {
 
 Result adjust_heading_deg(int delta) {
     if (delta < -90 || delta > 90) return Result::InvalidPayload;
+    if (!s_perms.allow_heading_adjust) return Result::Forbidden;
     switch (s_default_backend) {
         case Backend::SignalK:           return sk_adjust(delta);
 #ifdef ENABLE_NMEA2000
