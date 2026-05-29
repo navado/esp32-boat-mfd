@@ -7,6 +7,7 @@
 #include <WebSocketsClient.h>
 #include <HTTPClient.h>
 #include <WiFi.h>
+#include <WiFiUdp.h>
 #include <ESPmDNS.h>
 #include <ArduinoJson.h>
 #include <freertos/FreeRTOS.h>
@@ -48,6 +49,9 @@ static bool s_ws_started = false;
 // long it spends inside. Exposed via /api/state.sk for profiling.
 static volatile uint32_t s_loop_iters = 0;
 static volatile uint32_t s_loop_max_us = 0;
+
+static constexpr uint16_t DISCOVERY_PORT = 34300;
+static constexpr const char *DISCOVERY_QUERY = "espdisp.signalk.discover.v1";
 
 static void subscribe() {
     if (subscribed) return;
@@ -173,17 +177,95 @@ static void start_ws() {
 
 bool isAutoMode() { return s_auto_mode; }
 
+static bool probe_discovered_target(const String &host, uint16_t port) {
+    WiFiClient client;
+    client.setTimeout(1500);
+    bool ok = client.connect(host.c_str(), port);
+    if (ok) client.stop();
+    net::logf("[sk] discovery probe %s:%u -> %s", host.c_str(), port,
+              ok ? "ok" : "failed");
+    return ok;
+}
+
+static bool tryUdpDiscover() {
+    WiFiUDP udp;
+    if (!udp.begin(0)) {
+        net::logf("[sk] UDP discovery: bind failed");
+        return false;
+    }
+
+    IPAddress broadcast = WiFi.localIP();
+    IPAddress mask = WiFi.subnetMask();
+    for (uint8_t i = 0; i < 4; ++i) {
+        broadcast[i] = broadcast[i] | ~mask[i];
+    }
+
+    udp.beginPacket(broadcast, DISCOVERY_PORT);
+    udp.write((const uint8_t *)DISCOVERY_QUERY, strlen(DISCOVERY_QUERY));
+    udp.endPacket();
+    net::logf("[sk] UDP discovery query -> %s:%u",
+              broadcast.toString().c_str(), DISCOVERY_PORT);
+
+    uint32_t deadline = millis() + 1500;
+    while ((int32_t)(deadline - millis()) > 0) {
+        int packet_size = udp.parsePacket();
+        if (packet_size <= 0) {
+            delay(25);
+            continue;
+        }
+        char buf[512];
+        int n = udp.read(buf, sizeof(buf) - 1);
+        if (n <= 0) continue;
+        buf[n] = 0;
+
+        JsonDocument doc;
+        if (deserializeJson(doc, buf) != DeserializationError::Ok) {
+            net::logf("[sk] UDP discovery: ignored non-json reply");
+            continue;
+        }
+        const char *protocol = doc["protocol"] | "";
+        if (strcmp(protocol, "espdisp.signalk.discovery.v1") != 0) {
+            net::logf("[sk] UDP discovery: ignored protocol=%s", protocol);
+            continue;
+        }
+        const char *host = doc["host"] | "";
+        uint16_t port = doc["port"] | 3000;
+        IPAddress remote = udp.remoteIP();
+        String target = host;
+        if (target.length() == 0 || target == "signalk.local" ||
+            target == "auto") {
+            target = remote.toString();
+        }
+        if (port == 0) port = 3000;
+        net::logf("[sk] UDP discovered signalk at %s:%u",
+                  target.c_str(), port);
+        if (!probe_discovered_target(target, port)) {
+            continue;
+        }
+        s_host = target;
+        s_port = port;
+        udp.stop();
+        return true;
+    }
+
+    udp.stop();
+    net::logf("[sk] UDP discovery: no reply");
+    return false;
+}
+
 bool tryAutoDiscover(uint32_t now_ms) {
     if (!s_auto_mode) return false;
     if (s_ws_started) return false;
-    if (WiFi.status() != WL_CONNECTED) return false;
+    if (net::wifiState() != net::WifiState::StaUp) return false;
     // Throttle to one attempt per 15s; mDNS query is blocking ~1s.
     if (s_last_discover_ms && (now_ms - s_last_discover_ms) < 15000) return false;
     s_last_discover_ms = now_ms;
     int n = MDNS.queryService("signalk-ws", "tcp");
     if (n <= 0) {
         net::logf("[sk] mDNS: no _signalk-ws._tcp record found");
-        return false;
+        if (!tryUdpDiscover()) return false;
+        start_ws();
+        return true;
     }
     String host = MDNS.hostname(0);
     IPAddress ip = MDNS.IP(0);
@@ -194,6 +276,11 @@ bool tryAutoDiscover(uint32_t now_ms) {
     s_port = port ? port : 3000;
     net::logf("[sk] mDNS discovered signalk-ws at %s:%u (%d records)",
               s_host.c_str(), s_port, n);
+    if (!probe_discovered_target(s_host, s_port)) {
+        s_host = "";
+        s_port = 3000;
+        return false;
+    }
     start_ws();
     return true;
 }
@@ -377,7 +464,8 @@ bool handleSerialCommand(const String &line) {
                   s_auto_mode ? "auto" : "manual",
                   s_host.c_str(), s_port,
                   (unsigned)s_token.length(),
-                  data.connected, data.lastUpdateMs ? (millis() - data.lastUpdateMs) : 0);
+                  data.connected,
+                  (unsigned long)(data.lastUpdateMs ? (millis() - data.lastUpdateMs) : 0));
         return true;
     }
     if (line == "sk-dump") {

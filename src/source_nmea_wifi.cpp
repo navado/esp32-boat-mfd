@@ -249,8 +249,10 @@ bool handleSerialCommand(const String &line) {
                   st.enabled,
                   st.proto == Protocol::Tcp ? "tcp" : "udp",
                   st.host.c_str(), st.port, st.connected,
-                  st.bytes_in, st.sentences_ok, st.sentences_bad,
-                  st.last_rx_ms ? (millis() - st.last_rx_ms) : 0);
+                  (unsigned long)st.bytes_in,
+                  (unsigned long)st.sentences_ok,
+                  (unsigned long)st.sentences_bad,
+                  (unsigned long)(st.last_rx_ms ? (millis() - st.last_rx_ms) : 0));
         return true;
     }
     if (rest == "enable") {

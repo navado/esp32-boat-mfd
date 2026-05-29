@@ -27,7 +27,8 @@ bool handleSerialCommand(const String &line) {
     }
     if (line.startsWith("board bright ")) {
         int v = line.substring(13).toInt();
-        if (v < 0) v = 0; if (v > 255) v = 255;
+        if (v < 0) v = 0;
+        if (v > 255) v = 255;
         set_backlight((uint8_t)v);
         net::logf("[board] backlight set %d", v);
         return true;

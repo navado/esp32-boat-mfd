@@ -12,7 +12,7 @@ void dump_field(const char *name, const Field &f, uint32_t now,
     bool is_fresh = fresh(f, now, timeout);
     net::logf("  %-22s = %12.4f  %-9s  age=%lums %s",
               name, f.value, source_name(f.source),
-              f.updated_ms ? (now - f.updated_ms) : 0,
+              (unsigned long)(f.updated_ms ? (now - f.updated_ms) : 0),
               is_fresh ? "" : "(STALE)");
 }
 
@@ -34,7 +34,10 @@ bool handleSerialCommand(const String &line) {
         net::logf("[boat] priority: %s", order.c_str());
         Timeouts t = get_timeouts();
         net::logf("[boat] timeouts: n2k=%lums wifi=%lums sk=%lums demo=%lums",
-                  t.nmea2000_ms, t.nmea_wifi_ms, t.signalk_ms, t.demo_ms);
+                  (unsigned long)t.nmea2000_ms,
+                  (unsigned long)t.nmea_wifi_ms,
+                  (unsigned long)t.signalk_ms,
+                  (unsigned long)t.demo_ms);
         return true;
     }
     if (rest == "reset") {
@@ -62,7 +65,7 @@ bool handleSerialCommand(const String &line) {
             return true;
         }
         set_timeouts(t);
-        net::logf("[boat] timeout %s = %lums", src.c_str(), ms);
+        net::logf("[boat] timeout %s = %lums", src.c_str(), (unsigned long)ms);
         return true;
     }
     if (rest.length() == 0 || rest == "snapshot") {
@@ -70,7 +73,7 @@ bool handleSerialCommand(const String &line) {
         copy_snapshot(s);
         Timeouts t = get_timeouts();
         uint32_t now = millis();
-        net::logf("[boat] snapshot @ %lums:", now);
+        net::logf("[boat] snapshot @ %lums:", (unsigned long)now);
         dump_field("lat_deg",          s.lat_deg,             now, timeout_for(t, s.lat_deg.source));
         dump_field("lon_deg",          s.lon_deg,             now, timeout_for(t, s.lon_deg.source));
         dump_field("sog_mps",          s.sog_mps,             now, timeout_for(t, s.sog_mps.source));
@@ -90,7 +93,8 @@ bool handleSerialCommand(const String &line) {
         dump_field("dtw_m",            s.dtw_m,               now, timeout_for(t, s.dtw_m.source));
         net::logf("  autopilot_state        = '%s'   %s   age=%lums",
                   s.autopilot_state, source_name(s.autopilot_state_source),
-                  s.autopilot_state_updated_ms ? (now - s.autopilot_state_updated_ms) : 0);
+                  (unsigned long)(s.autopilot_state_updated_ms
+                                  ? (now - s.autopilot_state_updated_ms) : 0));
         return true;
     }
     net::logf("[boat] usage: boat [snapshot|priority|reset|timeout <src> <ms>]");
