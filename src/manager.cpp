@@ -24,6 +24,7 @@
 #include "font_resolver.h"
 #include "error_log.h"
 #include "hostname_check.h"
+#include "ui_config_check.h"
 #include "manager_config.h"
 #include "manager_screens.h"
 #include "manager_url.h"
@@ -553,7 +554,7 @@ bool apply_config(JsonDocument &cfg) {
         JsonObject ui = cfg["ui"].as<JsonObject>();
         if (ui["brightness"].is<int>()) {
             int b = ui["brightness"].as<int>();
-            if (b < 0 || b > 255) {
+            if (!ui_config::is_valid_brightness(b)) {
                 record_error("[mgr] reject ui.brightness=%d (out of 0..255)", b);
                 ok = false;
             } else {
@@ -565,8 +566,7 @@ bool apply_config(JsonDocument &cfg) {
         }
         if (ui["theme"].is<const char *>()) {
             const char *t = ui["theme"].as<const char *>();
-            if (strcmp(t, "day") == 0 || strcmp(t, "night") == 0 ||
-                strcmp(t, "auto") == 0) {
+            if (ui_config::is_valid_theme(t)) {
                 app::Command c;
                 c.type = app::CommandType::SetTheme;
                 strncpy(c.a, t, sizeof(c.a) - 1);
@@ -820,7 +820,7 @@ const char *execute_command(const char *type, JsonObject payload) {
     if (strcmp(type, "brightness.set") == 0) {
         if (!payload["value"].is<int>()) return "invalid_payload";
         int v = payload["value"].as<int>();
-        if (v < 0 || v > 255) return "invalid_payload";
+        if (!ui_config::is_valid_brightness(v)) return "invalid_payload";
         app::Command c;
         c.type = app::CommandType::SetBrightness;
         c.i = v;
