@@ -100,6 +100,13 @@ size_t s_ota_size = 0;
 // /firmware/confirm to the manager so the plugin can mark the OTA job
 // complete, then clear the flag.
 volatile bool s_ota_confirm_pending = false;
+// Spec 17 §6 OTA policy. Defaults: pull-OTA enabled, no max size
+// (0 == unbounded), sha256 required. These can be tightened by the
+// operator via cfg["ota"]. Persisted in NVS under the manager
+// namespace so a policy survives reboot.
+bool s_ota_enabled = true;
+uint32_t s_ota_max_size = 0;
+bool s_ota_require_sha = true;
 SemaphoreHandle_t s_state_mtx = nullptr;
 
 void lock_state() {
@@ -117,6 +124,9 @@ void load_prefs() {
     s_sk_token = p.getString("sk_token", "");
     s_applied_config_version = p.getString("cfg_ver", "v0");
     s_applied_config_hash = p.getString("cfg_hash", "");
+    s_ota_enabled = p.getUChar("ota_en", 1) != 0;
+    s_ota_max_size = p.getUInt("ota_max", 0);
+    s_ota_require_sha = p.getUChar("ota_sha", 1) != 0;
     p.end();
     s_auth = s_token.length() ? AuthState::Provisioned
                               : AuthState::Unprovisioned;
@@ -130,6 +140,9 @@ void save_prefs() {
     p.putString("sk_token", s_sk_token);
     p.putString("cfg_ver", s_applied_config_version);
     p.putString("cfg_hash", s_applied_config_hash);
+    p.putUChar("ota_en", s_ota_enabled ? 1 : 0);
+    p.putUInt("ota_max", s_ota_max_size);
+    p.putUChar("ota_sha", s_ota_require_sha ? 1 : 0);
     p.end();
 }
 
@@ -430,6 +443,12 @@ void build_status_body(JsonDocument &doc) {
     ota["passwordSet"] = false;
     ota["pullInFlight"] = s_ota_in_flight;
     ota["pendingConfirm"] = s_ota_confirm_pending;
+    // Spec 17 §6 OTA policy snapshot so the plugin can see what the
+    // device is enforcing.
+    JsonObject otaPolicy = ota["policy"].to<JsonObject>();
+    otaPolicy["enabled"] = s_ota_enabled;
+    otaPolicy["requireSha256"] = s_ota_require_sha;
+    otaPolicy["maxSizeBytes"] = s_ota_max_size;
 
     Preferences web_prefs;
     web_prefs.begin("web", true);
@@ -741,6 +760,34 @@ bool apply_config(JsonDocument &cfg) {
         }
     }
 
+    // ---- 4b. OTA policy ---------------------------------------------------
+    // Spec 17 §6 "OTA metadata". Lock the policy via the config so an
+    // operator can disable updates remotely or require sha256 on every
+    // job. Defaults remain permissive (enabled, sha required, no max).
+    if (cfg["ota"].is<JsonObject>()) {
+        JsonObject ota = cfg["ota"].as<JsonObject>();
+        bool changed = false;
+        if (ota["enabled"].is<bool>()) {
+            s_ota_enabled = ota["enabled"];
+            changed = true;
+        }
+        if (ota["requireSha256"].is<bool>()) {
+            s_ota_require_sha = ota["requireSha256"];
+            changed = true;
+        }
+        if (ota["maxSizeBytes"].is<uint32_t>()) {
+            s_ota_max_size = ota["maxSizeBytes"].as<uint32_t>();
+            changed = true;
+        }
+        if (changed) {
+            save_prefs();
+            net::logf("[mgr] applied ota policy: enabled=%d "
+                      "require_sha=%d max=%u",
+                      (int)s_ota_enabled, (int)s_ota_require_sha,
+                      (unsigned)s_ota_max_size);
+        }
+    }
+
     // ---- 5. debug ---------------------------------------------------------
     // Spec 17 §6 "debug" config section. logLevel accepts the same
     // string ("trace"|"verbose"|"debug"|"info"|"warn"|"error"|"none")
@@ -1038,6 +1085,10 @@ const char *execute_command(const char *type, JsonObject payload) {
         return app::post(c, 100) ? "ok" : "busy";
     }
     if (strcmp(type, "firmware.update") == 0) {
+        if (!s_ota_enabled) {
+            record_error("[mgr-ota] policy: OTA disabled, refusing job");
+            return "forbidden";
+        }
         if (s_ota_in_flight) return "busy";
         const char *url = payload["url"] | "";
         const char *sha = payload["sha256"] | "";
@@ -1048,6 +1099,15 @@ const char *execute_command(const char *type, JsonObject payload) {
         if (!*url || !*job_id) return "invalid_payload";
         if (size && size < 1024) return "invalid_payload";  // sanity
         if (*sha && strlen(sha) != 64) return "invalid_payload";
+        if (s_ota_require_sha && !*sha) {
+            record_error("[mgr-ota] policy: sha256 required, refusing job");
+            return "invalid_payload";
+        }
+        if (s_ota_max_size && size > s_ota_max_size) {
+            record_error("[mgr-ota] policy: size %u > max %u, refusing job",
+                         (unsigned)size, (unsigned)s_ota_max_size);
+            return "invalid_payload";
+        }
         s_ota_job_id = job_id;
         s_ota_url = url;
         s_ota_sha256 = sha;
