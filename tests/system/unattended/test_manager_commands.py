@@ -78,3 +78,88 @@ def test_audit_log_records_command_lifecycle(device, manager):
     events = [e for e in manager.audit if e.get("cid") == cid]
     types = {e["event"] for e in events}
     assert {"command.created", "command.ack"}.issubset(types)
+
+
+# ---- spec 17 §8 v1 commands added later ----------------------------------
+
+def test_overlay_show_then_clear(device, manager):
+    """overlay.show pins the alarm banner with the operator message;
+    overlay.clear releases it. Both must ack ok."""
+    dev = _register(device, manager)
+    cid = manager.queue_command(dev.id, "overlay.show",
+                                {"message": "TESTING"})
+    cmd = _wait_ack(manager, dev, cid)
+    assert cmd.ack_result == "ok", cmd.ack_result
+    cid2 = manager.queue_command(dev.id, "overlay.clear", {})
+    cmd2 = _wait_ack(manager, dev, cid2)
+    assert cmd2.ack_result == "ok", cmd2.ack_result
+
+
+def test_overlay_show_accepts_text_fallback(device, manager):
+    """Plugins that use `text` instead of `message` must still work."""
+    dev = _register(device, manager)
+    cid = manager.queue_command(dev.id, "overlay.show",
+                                {"text": "FROM-TEXT-KEY"})
+    cmd = _wait_ack(manager, dev, cid)
+    assert cmd.ack_result == "ok"
+
+
+def test_overlay_show_empty_payload_rejected(device, manager):
+    dev = _register(device, manager)
+    cid = manager.queue_command(dev.id, "overlay.show", {})
+    cmd = _wait_ack(manager, dev, cid)
+    assert cmd.ack_result == "invalid_payload"
+
+
+def test_log_level_string_payload(device, manager):
+    dev = _register(device, manager)
+    cid = manager.queue_command(dev.id, "log.level", {"level": "warn"})
+    cmd = _wait_ack(manager, dev, cid)
+    assert cmd.ack_result == "ok", cmd.ack_result
+    # Restore default so subsequent tests still see info-level logs.
+    cid2 = manager.queue_command(dev.id, "log.level", {"level": "info"})
+    _wait_ack(manager, dev, cid2)
+
+
+def test_log_level_numeric_payload(device, manager):
+    dev = _register(device, manager)
+    cid = manager.queue_command(dev.id, "log.level", {"level": 3})  # ESP_LOG_INFO
+    cmd = _wait_ack(manager, dev, cid)
+    assert cmd.ack_result == "ok"
+
+
+def test_log_level_unknown_string_rejected(device, manager):
+    dev = _register(device, manager)
+    cid = manager.queue_command(dev.id, "log.level", {"level": "spammy"})
+    cmd = _wait_ack(manager, dev, cid)
+    assert cmd.ack_result == "invalid_payload"
+
+
+def test_log_level_out_of_range_rejected(device, manager):
+    dev = _register(device, manager)
+    cid = manager.queue_command(dev.id, "log.level", {"level": 99})
+    cmd = _wait_ack(manager, dev, cid)
+    assert cmd.ack_result == "invalid_payload"
+
+
+def test_touch_mode_poll_always_accepted(device, manager):
+    """touch.mode "poll" must succeed regardless of board wiring -
+    detaches the INT line if any, falls back to the polling timer."""
+    dev = _register(device, manager)
+    cid = manager.queue_command(dev.id, "touch.mode", {"mode": "poll"})
+    cmd = _wait_ack(manager, dev, cid)
+    assert cmd.ack_result == "ok"
+
+
+def test_touch_mode_unknown_value_rejected(device, manager):
+    dev = _register(device, manager)
+    cid = manager.queue_command(dev.id, "touch.mode", {"mode": "vibration"})
+    cmd = _wait_ack(manager, dev, cid)
+    assert cmd.ack_result == "invalid_payload"
+
+
+def test_touch_mode_missing_payload_rejected(device, manager):
+    dev = _register(device, manager)
+    cid = manager.queue_command(dev.id, "touch.mode", {})
+    cmd = _wait_ack(manager, dev, cid)
+    assert cmd.ack_result == "invalid_payload"
