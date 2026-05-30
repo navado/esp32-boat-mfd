@@ -45,5 +45,7 @@ uint32_t loopMaxUs();
 //   `sk-host manual <host> [port]` - pin to this host (no discovery)
 bool isAutoMode();
 bool tryAutoDiscover(uint32_t now_ms);  // safe to call from sk_task; returns true if a host was set
+String targetHost();
+uint16_t targetPort();
 
 }  // namespace sk
