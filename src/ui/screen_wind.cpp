@@ -272,7 +272,7 @@ static lv_obj_t *make_wind_marker(lv_obj_t *parent, const char *letter, uint32_t
     lv_obj_set_size(m, 28, 32);
     lv_obj_set_style_bg_color(m, lv_color_hex(bg), 0);
     lv_obj_set_style_bg_opa(m, LV_OPA_COVER, 0);
-    lv_obj_set_style_border_color(m, lv_color_hex(0x0a1a2b), 0);
+    lv_obj_set_style_border_color(m, lv_color_hex(theme.panel_edge), 0);
     lv_obj_set_style_border_width(m, 1, 0);
     lv_obj_set_style_radius(m, 6, 0);
     lv_obj_set_style_pad_all(m, 0, 0);
@@ -319,7 +319,7 @@ static void build_tide(lv_obj_t *parent) {
     lv_obj_set_pos(head, 0, 0);
     lv_obj_set_style_bg_color(head, lv_color_hex(0x288cff), 0);
     lv_obj_set_style_bg_opa(head, LV_OPA_COVER, 0);
-    lv_obj_set_style_border_color(head, lv_color_hex(0xb4dcff), 0);
+    lv_obj_set_style_border_color(head, lv_color_hex(theme.fg), 0);
     lv_obj_set_style_border_width(head, 1, 0);
     lv_obj_set_style_radius(head, 11, 0);
     lv_obj_set_style_pad_all(head, 0, 0);
@@ -335,7 +335,7 @@ static void build_waypoint(lv_obj_t *parent) {
     lv_obj_set_size(waypoint_marker, 14, 18);
     lv_obj_set_style_bg_color(waypoint_marker, lv_color_hex(0xffd21f), 0);
     lv_obj_set_style_bg_opa(waypoint_marker, LV_OPA_COVER, 0);
-    lv_obj_set_style_border_color(waypoint_marker, lv_color_hex(0x0a1a2b), 0);
+    lv_obj_set_style_border_color(waypoint_marker, lv_color_hex(theme.panel_edge), 0);
     lv_obj_set_style_border_width(waypoint_marker, 1, 0);
     lv_obj_set_style_radius(waypoint_marker, 4, 0);
     lv_obj_set_style_pad_all(waypoint_marker, 0, 0);
@@ -347,22 +347,51 @@ static void build_waypoint(lv_obj_t *parent) {
 
 // ---- corner data boxes -------------------------------------------------
 
-static void make_data_box(lv_obj_t *parent, const char *label, int x, int y, int w, int h,
-                          lv_obj_t **out_value, uint32_t color) {
-    lv_obj_t *cap = lv_label_create(parent);
+static void make_data_box(lv_obj_t *parent, const char *label, const char *unit,
+                          int x, int y, int w, int h, lv_obj_t **out_value,
+                          uint32_t value_color, uint32_t accent_color) {
+    lv_obj_t *box = lv_obj_create(parent);
+    lv_obj_set_size(box, w, h);
+    lv_obj_set_pos(box, x, y);
+    lv_obj_set_style_bg_color(box, lv_color_hex(theme.panel), 0);
+    lv_obj_set_style_bg_opa(box, LV_OPA_80, 0);
+    lv_obj_set_style_border_color(box, lv_color_hex(theme.panel_edge), 0);
+    lv_obj_set_style_border_opa(box, LV_OPA_70, 0);
+    lv_obj_set_style_border_width(box, 1, 0);
+    lv_obj_set_style_radius(box, 6, 0);
+    lv_obj_set_style_pad_all(box, 6, 0);
+    lv_obj_clear_flag(box, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_clear_flag(box, LV_OBJ_FLAG_CLICKABLE);
+
+    lv_obj_t *rail = lv_obj_create(box);
+    lv_obj_set_size(rail, 3, h - 12);
+    lv_obj_set_pos(rail, 0, 6);
+    lv_obj_set_style_bg_color(rail, lv_color_hex(accent_color), 0);
+    lv_obj_set_style_bg_opa(rail, LV_OPA_COVER, 0);
+    lv_obj_set_style_border_width(rail, 0, 0);
+    lv_obj_set_style_radius(rail, 2, 0);
+    lv_obj_set_style_pad_all(rail, 0, 0);
+    lv_obj_clear_flag(rail, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_clear_flag(rail, LV_OBJ_FLAG_CLICKABLE);
+
+    lv_obj_t *cap = lv_label_create(box);
     lv_label_set_text(cap, label);
     lv_obj_set_style_text_font(cap, &lv_font_montserrat_14, 0);
-    lv_obj_set_style_text_color(cap, lv_color_hex(theme.accent), 0);
-    lv_obj_set_pos(cap, x, y);
+    lv_obj_set_style_text_color(cap, lv_color_hex(theme.fg_dim), 0);
+    lv_obj_set_pos(cap, 10, 3);
 
-    lv_obj_t *val = lv_label_create(parent);
+    lv_obj_t *unit_lbl = lv_label_create(box);
+    lv_label_set_text(unit_lbl, unit);
+    lv_obj_set_style_text_font(unit_lbl, &lv_font_montserrat_14, 0);
+    lv_obj_set_style_text_color(unit_lbl, lv_color_hex(theme.fg_dim), 0);
+    lv_obj_align(unit_lbl, LV_ALIGN_TOP_RIGHT, 0, 3);
+
+    lv_obj_t *val = lv_label_create(box);
     lv_label_set_text(val, "-");
     lv_obj_set_style_text_font(val, &lv_font_montserrat_28, 0);
-    lv_obj_set_style_text_color(val, lv_color_hex(color), 0);
-    lv_obj_set_pos(val, x, y + 14);
+    lv_obj_set_style_text_color(val, lv_color_hex(value_color), 0);
+    lv_obj_align(val, LV_ALIGN_BOTTOM_LEFT, 10, 0);
     *out_value = val;
-    (void)w;
-    (void)h;
 }
 
 lv_obj_t *build(lv_obj_t *parent) {
@@ -383,10 +412,10 @@ lv_obj_t *build(lv_obj_t *parent) {
     lv_obj_set_size(face, R_FACE * 2, R_FACE * 2);
     lv_obj_set_pos(face, CX - R_FACE, CY - R_FACE);
     lv_obj_set_style_radius(face, LV_RADIUS_CIRCLE, 0);
-    lv_obj_set_style_bg_color(face, lv_color_hex(0x13253a), 0);
+    lv_obj_set_style_bg_color(face, lv_color_hex(theme.panel), 0);
     lv_obj_set_style_bg_opa(face, LV_OPA_COVER, 0);
     lv_obj_set_style_border_color(face, lv_color_hex(theme.panel_edge), 0);
-    lv_obj_set_style_border_opa(face, LV_OPA_30, 0);
+    lv_obj_set_style_border_opa(face, LV_OPA_60, 0);
     lv_obj_set_style_border_width(face, 1, 0);
     lv_obj_set_style_pad_all(face, 0, 0);
     lv_obj_clear_flag(face, LV_OBJ_FLAG_SCROLLABLE);
@@ -401,7 +430,7 @@ lv_obj_t *build(lv_obj_t *parent) {
     lbl_tide_speed = lv_label_create(s_root);
     lv_label_set_text(lbl_tide_speed, "");
     lv_obj_set_style_text_font(lbl_tide_speed, &lv_font_montserrat_20, 0);
-    lv_obj_set_style_text_color(lbl_tide_speed, lv_color_hex(0xebf5ff), 0);
+    lv_obj_set_style_text_color(lbl_tide_speed, lv_color_hex(theme.fg), 0);
     lv_obj_set_pos(lbl_tide_speed, CX - 22, CY - 10);
 
     // Wind markers (T white, A amber). T below A in z-order so amber wins
@@ -417,14 +446,20 @@ lv_obj_t *build(lv_obj_t *parent) {
     // (LV_ALIGN_TOP_RIGHT -6, 6, 56x56, on lv_layer_top) so TWS is
     // shifted down below the safe zone. Keep visual pairing by also
     // pushing AWS slightly so they share a baseline.
-    make_data_box(s_root, "AWS", 16, 12, 90, 50, &lbl_aws_value, theme.fg);
-    make_data_box(s_root, "TWS", LCD_W - 90, 72, 90, 50, &lbl_tws_value, theme.fg);
+    make_data_box(s_root, "AWS", "kn", 14, 12, 96, 58, &lbl_aws_value,
+                  theme.fg, 0xf6a21a);
+    make_data_box(s_root, "TWS", "kn", LCD_W - 110, 72, 96, 58, &lbl_tws_value,
+                  theme.fg, theme.fg_dim);
     // Mid-left: AWA  /  Mid-right: TWA
-    make_data_box(s_root, "AWA", 16, 220, 90, 50, &lbl_awa_value, 0xf6a21a);
-    make_data_box(s_root, "TWA", LCD_W - 90, 220, 90, 50, &lbl_twa_value, theme.fg);
+    make_data_box(s_root, "AWA", "deg", 14, 211, 96, 58, &lbl_awa_value,
+                  0xf6a21a, 0xf6a21a);
+    make_data_box(s_root, "TWA", "deg", LCD_W - 110, 211, 96, 58, &lbl_twa_value,
+                  theme.fg, theme.fg_dim);
     // Bottom-left: HDG  /  Bottom-right: COG
-    make_data_box(s_root, "HDG", 16, LCD_H - 56, 90, 50, &lbl_hdg_value, theme.accent);
-    make_data_box(s_root, "COG", LCD_W - 90, LCD_H - 56, 90, 50, &lbl_cog_value, theme.fg);
+    make_data_box(s_root, "HDG", "T", 14, LCD_H - 68, 96, 58, &lbl_hdg_value,
+                  theme.accent, theme.accent);
+    make_data_box(s_root, "COG", "T", LCD_W - 110, LCD_H - 68, 96, 58,
+                  &lbl_cog_value, theme.fg, theme.fg_dim);
 
     return s_root;
 }

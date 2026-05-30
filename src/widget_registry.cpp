@@ -136,6 +136,11 @@ Widget *create(lv_obj_t *parent,
     return wd;
 }
 
+void destroy(Widget *w) {
+    if (!w) return;
+    heap_caps_free(w);
+}
+
 void update(Widget &w, const sk::Data &data) {
     char buf[64];
     switch (w.type) {

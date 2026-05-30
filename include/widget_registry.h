@@ -38,6 +38,10 @@ Widget *create(lv_obj_t *parent,
                const manager_config::WidgetDef &def,
                const manager_config::WidgetStyle &defaults);
 
+// Free the small runtime handle allocated by create(). The LVGL object tree is
+// owned by the parent/root and should be deleted separately.
+void destroy(Widget *w);
+
 // Re-read the widget's data path and update the LVGL tree.
 void update(Widget &w, const sk::Data &data);
 
