@@ -197,39 +197,31 @@ static void test_too_many_widgets_rejected() {
                           static_cast<int>(err.code));
 }
 
-static void test_oversized_widget_id_truncates_safely() {
+static void test_oversized_widget_id_rejected() {
     // 100-char widget id - well above MAX_WIDGET_ID=31. Must not
-    // overflow the destination buffer, must not crash; truncation is
-    // acceptable.
+    // overflow the destination buffer and must not be silently
+    // truncated because that can create ambiguous references.
     std::string id(100, 'a');
     std::string body = "{\"widgets\":{\"items\":{\"" + id +
                        "\":{\"type\":\"numeric\"}}}}";
     auto cfg = parse_json(body.c_str());
     RenderPlan plan;
     ParseError err;
-    bool ok = parse(cfg, 480, 480, plan, err);
-    // Either accepted with truncated id, or rejected gracefully - never
-    // a crash and never writes past the buffer.
-    if (ok) {
-        TEST_ASSERT_EQUAL_UINT8(1, plan.widget_count);
-        TEST_ASSERT_TRUE(strlen(plan.widgets[0].id) <= MAX_WIDGET_ID);
-    } else {
-        TEST_ASSERT_NOT_EQUAL(static_cast<int>(ParseCode::Ok),
-                              static_cast<int>(err.code));
-    }
+    TEST_ASSERT_FALSE(parse(cfg, 480, 480, plan, err));
+    TEST_ASSERT_EQUAL_INT(static_cast<int>(ParseCode::InvalidPath),
+                          static_cast<int>(err.code));
 }
 
-static void test_oversized_path_truncates_safely() {
+static void test_oversized_path_rejected() {
     std::string path(300, 'p');
     std::string body = "{\"widgets\":{\"items\":{\"w\":{\"type\":\"numeric\",\"path\":\""
                        + path + "\"}}}}";
     auto cfg = parse_json(body.c_str());
     RenderPlan plan;
     ParseError err;
-    bool ok = parse(cfg, 480, 480, plan, err);
-    if (ok) {
-        TEST_ASSERT_TRUE(strlen(plan.widgets[0].path) <= MAX_PATH);
-    }
+    TEST_ASSERT_FALSE(parse(cfg, 480, 480, plan, err));
+    TEST_ASSERT_EQUAL_INT(static_cast<int>(ParseCode::InvalidPath),
+                          static_cast<int>(err.code));
 }
 
 static void test_wrong_type_for_widgets_block_rejected() {
@@ -286,6 +278,20 @@ static void test_too_many_tiles_per_screen_rejected() {
                           static_cast<int>(err.code));
 }
 
+static void test_zero_tile_span_rejected() {
+    auto cfg = parse_json(R"({
+        "widgets": {"items": {"x": {"type": "numeric"}}},
+        "layout": {"screens": [{"id":"s","type":"grid","tiles":[
+            {"widget":"x","area":{"col":0,"row":0,"colSpan":0,"rowSpan":1}}
+        ]}]}
+    })");
+    RenderPlan plan;
+    ParseError err;
+    TEST_ASSERT_FALSE(parse(cfg, 480, 480, plan, err));
+    TEST_ASSERT_EQUAL_INT(static_cast<int>(ParseCode::InvalidPath),
+                          static_cast<int>(err.code));
+}
+
 static void test_null_and_empty_strings_safe() {
     auto cfg = parse_json(R"({"widgets":{"items":{"w":{
         "type": "numeric", "title": "", "path": "", "unit": ""
@@ -327,12 +333,13 @@ int main(int, char **) {
     RUN_TEST(test_variant_matching_picks_compatible);
     RUN_TEST(test_variant_matching_picks_wide_for_800x480);
     RUN_TEST(test_too_many_widgets_rejected);
-    RUN_TEST(test_oversized_widget_id_truncates_safely);
-    RUN_TEST(test_oversized_path_truncates_safely);
+    RUN_TEST(test_oversized_widget_id_rejected);
+    RUN_TEST(test_oversized_path_rejected);
     RUN_TEST(test_wrong_type_for_widgets_block_rejected);
     RUN_TEST(test_widget_with_non_string_type_rejected);
     RUN_TEST(test_too_many_screens_rejected);
     RUN_TEST(test_too_many_tiles_per_screen_rejected);
+    RUN_TEST(test_zero_tile_span_rejected);
     RUN_TEST(test_null_and_empty_strings_safe);
     RUN_TEST(test_negative_precision_clamped);
     RUN_TEST(test_empty_config_is_valid_empty_plan);

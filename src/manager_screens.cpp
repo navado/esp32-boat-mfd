@@ -120,14 +120,17 @@ bool build_screen(const manager_config::RenderPlan &plan,
     return true;
 }
 
+void free_widget_handles(ManagedScreen &screen) {
+    for (uint8_t i = 0; i < screen.widget_count; ++i) {
+        widget_registry::destroy(screen.widgets[i]);
+        screen.widgets[i] = nullptr;
+    }
+    screen.widget_count = 0;
+}
+
 }  // namespace
 
 bool apply(const manager_config::RenderPlan &plan) {
-    if (s_applied) {
-        net::logf("[mgr-screens] already applied; ignoring re-apply "
-                  "(reboot to swap layout)");
-        return false;
-    }
     if (plan.screen_count == 0) {
         net::logf("[mgr-screens] no screens in plan");
         return false;
@@ -140,8 +143,13 @@ bool apply(const manager_config::RenderPlan &plan) {
         limit = MAX_MANAGED_SCREENS;
     }
 
+    uint8_t previous_count = s_screen_count;
     s_screen_count = 0;
     for (uint8_t i = 0; i < limit; ++i) {
+        char replace_id[sizeof(s_screens[s_screen_count].id)];
+        strncpy(replace_id, s_screens[s_screen_count].id, sizeof(replace_id) - 1);
+        replace_id[sizeof(replace_id) - 1] = 0;
+        free_widget_handles(s_screens[s_screen_count]);
         if (!build_screen(plan, plan.screens[i], i, s_screens[s_screen_count])) {
             continue;
         }
@@ -152,11 +160,22 @@ bool apply(const manager_config::RenderPlan &plan) {
             refresh_cb,
             false,  // visible in carousel
         };
-        ui::register_screen(reg);
+        if (s_applied) {
+            if (!ui::replace_screen(replace_id, reg)) {
+                ui::register_screen(reg);
+            }
+        } else {
+            ui::register_screen(reg);
+        }
         net::logf("[mgr-screens] +%s widgets=%u",
                   s_screens[s_screen_count].id,
                   (unsigned)s_screens[s_screen_count].widget_count);
         s_screen_count++;
+    }
+
+    for (uint8_t i = s_screen_count; i < previous_count; ++i) {
+        if (s_screens[i].id[0]) ui::set_screen_hidden(s_screens[i].id, true);
+        free_widget_handles(s_screens[i]);
     }
 
     s_applied = s_screen_count > 0;

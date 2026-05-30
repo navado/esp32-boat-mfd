@@ -28,6 +28,12 @@ struct Screen {
 // has been created. Order of registration defines navigation order.
 void register_screen(const Screen &s);
 
+// Replace an already-registered screen in place. Useful for generated screens
+// whose LVGL root can change after a central config reload.
+bool replace_screen(const char *id, const Screen &s);
+
+bool set_screen_hidden(const char *id, bool hidden);
+
 // Show a specific screen by index. Out-of-range indices are clamped.
 void show(int index);
 

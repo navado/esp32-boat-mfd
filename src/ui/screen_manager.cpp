@@ -17,6 +17,31 @@ void register_screen(const Screen &s) {
     }
 }
 
+bool replace_screen(const char *id, const Screen &s) {
+    if (!id) return false;
+    for (size_t i = 0; i < s_count; ++i) {
+        if (strcmp(s_screens[i].id, id) != 0) continue;
+        bool active = (int)i == s_index;
+        lv_obj_t *old_root = s_screens[i].root;
+        s_screens[i] = s;
+        if (active) lv_screen_load(s.root);
+        if (old_root && old_root != s.root) lv_obj_delete(old_root);
+        net::logf("[ui] screen replaced: %s", id);
+        return true;
+    }
+    return false;
+}
+
+bool set_screen_hidden(const char *id, bool hidden) {
+    if (!id) return false;
+    for (size_t i = 0; i < s_count; ++i) {
+        if (strcmp(s_screens[i].id, id) != 0) continue;
+        s_screens[i].hidden = hidden;
+        return true;
+    }
+    return false;
+}
+
 void show(int index) {
     if (s_count == 0) return;
     if (index < 0) index = 0;

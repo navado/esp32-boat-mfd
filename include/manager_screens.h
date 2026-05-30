@@ -9,10 +9,10 @@
 // static slot so the refresh dispatcher can walk them on each
 // ui_refresh tick.
 //
-// Apply is one-shot in MVP: calling apply() a second time logs
-// "already applied" and ignores the new plan. A config-hash change at
-// runtime requires a reboot - the screen manager's underlying array
-// does not support unregister.
+// Re-applying replaces already-registered managed screen roots in place when
+// the generated screen ids still fit the managed screen slots. If a later plan
+// has fewer screens, stale extra managed screens remain registered but hidden
+// from refresh by this module.
 
 #include <lvgl.h>
 

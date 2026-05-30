@@ -35,6 +35,18 @@ bool copy_str(JsonVariantConst src, char *dst, size_t cap) {
     return true;
 }
 
+bool json_string_fits(JsonVariantConst src, size_t max_len) {
+    const char *s = src.as<const char *>();
+    return !s || strlen(s) <= max_len;
+}
+
+bool widget_id_exists(const RenderPlan &plan, const char *id) {
+    for (uint8_t i = 0; i < plan.widget_count; ++i) {
+        if (strcmp(plan.widgets[i].id, id) == 0) return true;
+    }
+    return false;
+}
+
 // "true" iff the variant's `match` block matches the device geometry.
 bool variant_matches(JsonObjectConst match, uint16_t w, uint16_t h) {
     if (!match["display"].is<JsonObjectConst>()) return false;
@@ -150,8 +162,18 @@ bool parse(JsonObjectConst cfg, uint16_t device_width, uint16_t device_height,
                     return false;
                 }
                 WidgetDef &wd = out.widgets[out.widget_count];
+                if (strlen(kv.key().c_str()) > MAX_WIDGET_ID) {
+                    set_err(err, ParseCode::InvalidPath, "widgets.items",
+                            "widget id too long");
+                    return false;
+                }
                 strncpy(wd.id, kv.key().c_str(), sizeof(wd.id) - 1);
                 wd.id[sizeof(wd.id) - 1] = 0;
+                if (widget_id_exists(out, wd.id)) {
+                    set_err(err, ParseCode::InvalidPath, "widgets.items",
+                            "duplicate widget id");
+                    return false;
+                }
 
                 JsonObjectConst item = kv.value().as<JsonObjectConst>();
                 const char *type_str = item["type"] | "";
@@ -161,6 +183,27 @@ bool parse(JsonObjectConst cfg, uint16_t device_width, uint16_t device_height,
                     snprintf(path, sizeof(path), "widgets.items.%s.type", wd.id);
                     set_err(err, ParseCode::UnsupportedWidgetType, path,
                             type_str);
+                    return false;
+                }
+                if (!json_string_fits(item["title"], MAX_TITLE)) {
+                    char path[64];
+                    snprintf(path, sizeof(path), "widgets.items.%s.title", wd.id);
+                    set_err(err, ParseCode::InvalidPath, path,
+                            "widget title too long");
+                    return false;
+                }
+                if (!json_string_fits(item["path"], MAX_PATH)) {
+                    char path[64];
+                    snprintf(path, sizeof(path), "widgets.items.%s.path", wd.id);
+                    set_err(err, ParseCode::InvalidPath, path,
+                            "widget path too long");
+                    return false;
+                }
+                if (!json_string_fits(item["unit"], MAX_UNIT)) {
+                    char path[64];
+                    snprintf(path, sizeof(path), "widgets.items.%s.unit", wd.id);
+                    set_err(err, ParseCode::InvalidPath, path,
+                            "widget unit too long");
                     return false;
                 }
                 copy_str(item["title"], wd.title, sizeof(wd.title));
@@ -213,6 +256,11 @@ bool parse(JsonObjectConst cfg, uint16_t device_width, uint16_t device_height,
                     return false;
                 }
                 ScreenPlan &sp = out.screens[out.screen_count];
+                if (!json_string_fits(sc["id"], MAX_WIDGET_ID)) {
+                    set_err(err, ParseCode::InvalidPath, "layout.screens.id",
+                            "screen id too long");
+                    return false;
+                }
                 copy_str(sc["id"], sp.id, sizeof(sp.id));
 
                 const char *layout_type = sc["type"] | "grid";
@@ -263,6 +311,16 @@ bool parse(JsonObjectConst cfg, uint16_t device_width, uint16_t device_height,
                             lt.row      = a["row"]     | 0;
                             lt.col_span = a["colSpan"] | 1;
                             lt.row_span = a["rowSpan"] | 1;
+                            if (lt.col_span == 0 || lt.row_span == 0) {
+                                char path[80];
+                                snprintf(path, sizeof(path),
+                                         "layout.screens[%u].tiles[%u].area",
+                                         (unsigned)out.screen_count,
+                                         (unsigned)sp.tile_count);
+                                set_err(err, ParseCode::InvalidPath, path,
+                                        "tile span must be at least 1");
+                                return false;
+                            }
                         }
                         sp.tile_count++;
                     }
