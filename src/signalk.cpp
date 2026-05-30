@@ -3,7 +3,7 @@
 #include "source_signalk.h"
 #include "net.h"
 
-#include <Preferences.h>
+#include "storage.h"
 #include <WebSocketsClient.h>
 #include <HTTPClient.h>
 #include <WiFi.h>
@@ -25,7 +25,6 @@ Data data;
 static SemaphoreHandle_t s_data_mtx = nullptr;
 
 static WebSocketsClient ws;
-static Preferences prefs;
 static String s_host = "";
 static uint16_t s_port = 3000;
 // Optional JWT for SignalK servers in token-security mode. Loaded
@@ -177,6 +176,10 @@ static void start_ws() {
 
 bool isAutoMode() { return s_auto_mode; }
 
+String targetHost() { return s_host; }
+
+uint16_t targetPort() { return s_port; }
+
 static bool probe_discovered_target(const String &host, uint16_t port) {
     WiFiClient client;
     client.setTimeout(1500);
@@ -308,10 +311,12 @@ static void sk_task(void *) {
 
 void setup(const String &host, uint16_t port) {
     if (!s_data_mtx) s_data_mtx = xSemaphoreCreateMutex();
-    prefs.begin("sk", false);
-    s_host = prefs.getString("host", host);
-    s_port = (uint16_t)prefs.getUInt("port", port);
-    s_token = prefs.getString("token", "");
+    {
+        storage::Namespace prefs("sk", true);
+        s_host = String(prefs.get_string("host", host.c_str()).c_str());
+        s_port = (uint16_t)prefs.get_u32("port", port);
+        s_token = String(prefs.get_string("token", "").c_str());
+    }
     // Auto mode iff no saved host. Manual mode persists across reboot
     // by virtue of a saved host being present.
     s_auto_mode = (s_host.length() == 0);
@@ -325,7 +330,7 @@ void setup(const String &host, uint16_t port) {
     if (!s_sk_task) {
         // Pin to core 0 (network/IO core). Stack 6 KB - WebSockets +
         // ArduinoJson subscribe doc need a few KB during connect.
-        xTaskCreatePinnedToCore(sk_task, "sk", 6144, nullptr, 1,
+        xTaskCreatePinnedToCore(sk_task, "sk", 6144, nullptr, 2,
                                 &s_sk_task, 0);
     }
 }
@@ -351,16 +356,22 @@ bool handleSerialCommand(const String &line) {
         String host = sp < 0 ? rest : rest.substring(0, sp);
         uint16_t port = sp < 0 ? 3000 : (uint16_t)rest.substring(sp + 1).toInt();
         if (port == 0) port = 3000;
-        prefs.putString("host", host);
-        prefs.putUInt("port", port);
+        {
+            storage::Namespace prefs("sk", false);
+            prefs.put_string("host", host.c_str());
+            prefs.put_u32("port", port);
+        }
         net::logf("[sk] saved host=%s port=%u - rebooting", host.c_str(), port);
         delay(200);
         ESP.restart();
         return true;
     }
     if (line == "sk-host auto") {
-        prefs.remove("host");
-        prefs.remove("port");
+        {
+            storage::Namespace prefs("sk", false);
+            prefs.remove("host");
+            prefs.remove("port");
+        }
         net::logf("[sk] auto-discovery enabled - rebooting");
         delay(200);
         ESP.restart();
@@ -375,7 +386,10 @@ bool handleSerialCommand(const String &line) {
             return true;
         }
         if (rest == "clear") {
-            prefs.remove("token");
+            {
+                storage::Namespace prefs("sk", false);
+                prefs.remove("token");
+            }
             net::logf("[sk] token cleared - rebooting");
             delay(200);
             ESP.restart();
@@ -383,7 +397,10 @@ bool handleSerialCommand(const String &line) {
         }
         // Anything else is the JWT itself. Save + reboot so the WS
         // reconnects with the new credential.
-        prefs.putString("token", rest);
+        {
+            storage::Namespace prefs("sk", false);
+            prefs.put_string("token", rest.c_str());
+        }
         net::logf("[sk] token saved (len=%u) - rebooting",
                   (unsigned)rest.length());
         delay(200);
