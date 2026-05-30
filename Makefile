@@ -11,6 +11,7 @@ PORT      ?= auto
 DEVICE_IP ?=
 SK_HOST   ?= localhost
 SK_PORT   ?= 3000
+PROJECT_VERSION ?= $(shell cat VERSION)
 
 PIO ?= pio
 
@@ -31,6 +32,7 @@ help:  ## Show this help
 	@printf "  PORT        serial port for USB flash (default: auto-detect)\n"
 	@printf "  DEVICE_IP   target IP for OTA flash (required for 'make ota')\n"
 	@printf "  SK_HOST     SignalK server host for 'make demo' (default: localhost)\n"
+	@printf "  PROJECT_VERSION firmware/plugin version (default: $(PROJECT_VERSION))\n"
 
 setup:  ## First-time setup: copy secrets.h template, verify PlatformIO
 	@command -v $(PIO) >/dev/null 2>&1 || { \
@@ -38,10 +40,20 @@ setup:  ## First-time setup: copy secrets.h template, verify PlatformIO
 	@test -f include/secrets.h || cp include/secrets.h.example include/secrets.h
 	@echo "Setup complete. Edit include/secrets.h if you want to bake in WiFi credentials."
 
-build:  ## Build firmware
-	$(PIO) run -e $(ENV)
+version:  ## Print project version and verify metadata
+	@python3 tools/check_version.py
 
-test:  ## Run host-side unit tests
+version-check:  ## Verify project/plugin version metadata is consistent
+	@python3 tools/check_version.py
+
+version-set:  ## Set project/plugin version (use VERSION=0.1.0)
+	@test -n "$(VERSION)" || { echo "Usage: make version-set VERSION=0.1.0" >&2; exit 1; }
+	python3 tools/set_version.py $(VERSION)
+
+build: version-check  ## Build firmware
+	ESPDISP_VERSION=$(PROJECT_VERSION) $(PIO) run -e $(ENV)
+
+test: version-check  ## Run host-side unit tests
 	$(PIO) test -e native
 
 sys-test:  ## Run unattended system tests against ESPDISP_HOST (set env var)
@@ -57,11 +69,11 @@ sys-test-attended:  ## Open the attended-test checklist
 
 flash: setup  ## Flash via USB (uses PORT, auto-detected if not set)
 	@test -n "$(PORT)" || { echo "No USB serial port found. Set PORT=<path>." >&2; exit 1; }
-	$(PIO) run -e $(ENV) -t upload --upload-port $(PORT)
+	ESPDISP_VERSION=$(PROJECT_VERSION) $(PIO) run -e $(ENV) -t upload --upload-port $(PORT)
 
 ota: setup  ## Flash via WiFi (requires DEVICE_IP)
 	@test -n "$(DEVICE_IP)" || { echo "Usage: make ota DEVICE_IP=<ip>" >&2; exit 1; }
-	$(PIO) run -e ota -t upload --upload-port $(DEVICE_IP)
+	ESPDISP_VERSION=$(PROJECT_VERSION) $(PIO) run -e ota -t upload --upload-port $(DEVICE_IP)
 
 monitor:  ## Open serial monitor at 115200 baud
 	@test -n "$(PORT)" || { echo "No USB serial port found. Set PORT=<path>." >&2; exit 1; }
@@ -84,7 +96,7 @@ demo-up:  ## Start SignalK in Docker and push synthetic boat data
 demo-down:  ## Stop fake_boat and SignalK
 	@./signalk/scripts/stop.sh
 
-lint:  ## Check C++ formatting and Python syntax
+lint: version-check  ## Check C++ formatting and Python syntax
 	@find src include test -name '*.cpp' -o -name '*.h' | xargs clang-format --dry-run --Werror
 	@python3 -m py_compile tools/*.py
 
@@ -99,6 +111,8 @@ release-tag:  ## Tag a release locally (use VERSION=v0.1.0). Does NOT push.
 	@test -n "$(VERSION)" || { echo "Usage: make release-tag VERSION=v0.1.0" >&2; exit 1; }
 	@echo "$(VERSION)" | grep -Eq '^v[0-9]+\.[0-9]+\.[0-9]+(-[a-z0-9.]+)?$$' \
 	  || { echo "Version must look like v0.1.0 or v0.1.0-rc1" >&2; exit 1; }
+	@test "$$(cat VERSION)" = "$$(echo $(VERSION) | sed 's/^v//')" || { \
+	  echo "VERSION file must match tag $(VERSION)" >&2; exit 1; }
 	git tag -a $(VERSION) -m "Release $(VERSION)"
 	@echo "Tag $(VERSION) created locally. Push with: git push origin $(VERSION)"
 
@@ -106,5 +120,5 @@ clean:  ## Remove build artifacts (keeps include/secrets.h)
 	$(PIO) run -t clean 2>/dev/null || true
 	rm -rf .pio
 
-.PHONY: help setup build test flash ota monitor ble ble-cmd logs demo-up demo-down \
-        lint format backup release-tag clean
+.PHONY: help setup version version-check version-set build test flash ota monitor \
+        ble ble-cmd logs demo-up demo-down lint format backup release-tag clean

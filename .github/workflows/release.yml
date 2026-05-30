@@ -22,6 +22,12 @@ jobs:
         with:
           python-version: '3.11'
 
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20.10'
+          cache: npm
+          cache-dependency-path: signalk/plugins/signalk-espdisp-manager/package-lock.json
+
       - name: Cache PlatformIO
         uses: actions/cache@v4
         with:
@@ -33,11 +39,19 @@ jobs:
       - name: Install PlatformIO and esptool
         run: pip install --upgrade platformio esptool
 
+      - name: Check project version metadata
+        run: |
+          python3 tools/check_version.py
+          test "$(cat VERSION)" = "${TAG_NAME#v}" || {
+            echo "::error::VERSION must match release tag ${TAG_NAME}"
+            exit 1
+          }
+
       - name: Create placeholder secrets.h
         run: cp include/secrets.h.example include/secrets.h
 
       - name: Build firmware
-        run: pio run -e esp32-4848s040
+        run: ESPDISP_VERSION="${TAG_NAME#v}" pio run -e esp32-4848s040
 
       - name: Stage release artifacts
         run: |
@@ -60,8 +74,19 @@ jobs:
             0x8000  "$out/partitions.bin" \
             0xe000  "$BOOT_APP0" \
             0x10000 "$out/firmware.bin"
-          ( cd "$out" && sha256sum *.bin > SHA256SUMS )
           ls -la "$out"
+
+      - name: Package SignalK plugin
+        working-directory: signalk/plugins/signalk-espdisp-manager
+        run: |
+          npm ci
+          npm test
+          npm pack --pack-destination ../../../release-staging
+
+      - name: Generate checksums
+        run: |
+          ( cd release-staging && sha256sum *.bin *.tgz > SHA256SUMS )
+          ls -la release-staging
 
       - name: Generate release notes
         run: |
@@ -89,6 +114,12 @@ jobs:
             echo '```sh'
             echo "pio run -e ota -t upload --upload-port <device-ip>"
             echo '```'
+            echo ""
+            echo "## SignalK plugin"
+            echo ""
+            echo "Install the matching plugin package from:"
+            echo ""
+            echo '- `signalk-espdisp-manager-${TAG_NAME#v}.tgz`'
           } > release_notes.md
           cat release_notes.md
 
@@ -104,6 +135,7 @@ jobs:
             release-staging/bootloader.bin
             release-staging/partitions.bin
             release-staging/merged_firmware.bin
+            release-staging/*.tgz
             release-staging/SHA256SUMS
           draft: false
           prerelease: ${{ contains(github.ref, '-rc') || contains(github.ref, '-alpha') || contains(github.ref, '-beta') }}

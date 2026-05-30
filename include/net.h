@@ -11,6 +11,17 @@ void loop();   // call frequently from main loop
 // Safe to call before setup() - it falls through to Serial only.
 void logf(const char *fmt, ...) __attribute__((format(printf, 1, 2)));
 
+struct LogEntry {
+    uint32_t seq;
+    uint32_t ms;
+    char line[192];
+};
+
+// Copy the rotating in-memory device log. Returns number of entries copied
+// in chronological order. `since_seq` skips older entries when non-zero.
+size_t copyLogs(LogEntry *out, size_t cap, uint32_t since_seq = 0);
+void clearLogs();
+
 // Handle a line of input on Serial console (e.g. "wifi <ssid> <pass>").
 // Returns true if the line was consumed by net.
 bool handleSerialCommand(const String &line);
@@ -37,8 +48,13 @@ const char *wifiStateName();
 void saveWifi(const String &ssid, const String &pass);
 
 // User-configurable device identity (BLE name, mDNS host, OTA host).
-// Default = OTA_HOSTNAME from secrets.h.
+// Default = espdisp-<wifi-sta-mac>; legacy OTA_HOSTNAME values migrate to it.
 const String &deviceId();
+
+// Ask the Bonjour/mDNS responder to refresh the espdisp service TXT records.
+// Used after config/auth changes; boot and periodic refreshes are handled by
+// net::loop().
+void requestMdnsAdvertise();
 
 // Dispatch a command line through net / sk / layout / main handlers in
 // order. Returns true if any handler consumed it. BLE / serial / extra

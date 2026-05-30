@@ -35,6 +35,9 @@ jobs:
       - name: Install PlatformIO
         run: pip install --upgrade platformio
 
+      - name: Check project version metadata
+        run: python3 tools/check_version.py
+
       - name: Create placeholder secrets.h
         run: cp include/secrets.h.example include/secrets.h
 
@@ -74,8 +77,39 @@ jobs:
       - name: Install PlatformIO
         run: pip install --upgrade platformio
 
+      - name: Check project version metadata
+        run: python3 tools/check_version.py
+
       - name: Run host tests
         run: pio test -e native -v
+
+  plugin-test:
+    name: SignalK plugin tests
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: signalk/plugins/signalk-espdisp-manager
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20.10'
+          cache: npm
+          cache-dependency-path: signalk/plugins/signalk-espdisp-manager/package-lock.json
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Check project version metadata
+        run: python3 ../../../tools/check_version.py
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Run plugin tests
+        run: npm test
 
   lint:
     name: Lint
@@ -91,4 +125,6 @@ jobs:
           fallback-style: 'LLVM'
 
       - name: Python tools syntax
-        run: python3 -m py_compile tools/*.py
+        run: |
+          python3 -m py_compile tools/*.py
+          python3 tools/check_version.py

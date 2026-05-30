@@ -1,4 +1,5 @@
 const { EspDispManager } = require('./lib/manager')
+const pluginPackage = require('./package.json')
 
 module.exports = function espdispManagerPlugin (app) {
   let manager
@@ -131,7 +132,7 @@ module.exports = function espdispManagerPlugin (app) {
       openapi: '3.0.0',
       info: {
         title: 'ESP Display Manager',
-        version: '0.1.0'
+        version: pluginPackage.version
       },
       paths: {
         '/plugins/espdisp-manager/.well-known/espdisp-management': {

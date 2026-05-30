@@ -9,8 +9,18 @@
     "signalk-node-server-plugin"
   ],
   "license": "UNLICENSED",
+  "files": [
+    "index.js",
+    "lib",
+    "public",
+    "package.json"
+  ],
   "scripts": {
-    "test": "node test/run.js"
+    "test": "node test/run.js",
+    "test:playwright": "playwright test"
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.44.0"
   },
   "signalk": {
     "displayName": "ESP Display Manager",

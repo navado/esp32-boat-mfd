@@ -197,6 +197,34 @@ make release-tag   Tag a release locally (VERSION=v0.1.0)
 make clean         Remove build artifacts
 ```
 
+## Versioning
+
+`VERSION` is the project version source. `tools/check_version.py` verifies
+that it matches the SignalK plugin package metadata. PlatformIO runs
+`tools/version.py` before each build and injects:
+
+- `FW_VERSION` from `VERSION`, or `ESPDISP_VERSION` when set by release CI.
+- `FW_GIT_COMMIT` from `GITHUB_SHA` or local Git.
+- `PIO_ENV` from the active PlatformIO environment.
+
+The firmware exposes those fields through device identity, mDNS discovery,
+manager registration, `/api/state`, and OTA confirmation payloads. The
+SignalK plugin reports its version from its `package.json`.
+
+Local version commands:
+
+```sh
+make version-check
+make version-set VERSION=0.1.1
+make build
+make build PROJECT_VERSION=0.1.1-dev
+```
+
+Release tags must match the `VERSION` file, for example `v0.1.0`. Tagged
+GitHub releases build the production `esp32-4848s040` firmware, package the
+matching `signalk-espdisp-manager-<version>.tgz` plugin, and publish checksums
+for all release artifacts.
+
 ## Console commands
 
 Send these over the serial monitor (`make monitor`) or BLE (`make ble`):
@@ -206,6 +234,7 @@ Send these over the serial monitor (`make monitor`) or BLE (`make ble`):
 | `wifi <ssid> <pass>` | Save WiFi credentials and reboot |
 | `wifi-forget` | Clear credentials, fall back to AP `espdisp-setup` |
 | `ip` | Print current IP / mode / RSSI |
+| `id` / `id <name>` / `id auto` | Show, set, or restore the hardware-derived device id |
 | `scan` | List visible 2.4 GHz networks |
 | `sk <host> [port]` | Save SignalK server target and reboot |
 | `sk-status` | Print SignalK connection state + age of last delta |
@@ -486,6 +515,9 @@ Maintainers cut releases by tagging:
 make release-tag VERSION=v0.1.0
 git push origin v0.1.0
 ```
+
+For tagged releases, GitHub builds with `ESPDISP_VERSION=${TAG_NAME#v}` so
+firmware version `0.1.0` corresponds to Git tag `v0.1.0`.
 
 The `release.yml` workflow builds the firmware on push of a `v*` tag,
 attaches `firmware.bin`, `merged_firmware.bin`, ELF, and SHA-256 sums to
