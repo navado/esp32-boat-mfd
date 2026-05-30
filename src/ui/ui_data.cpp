@@ -41,7 +41,9 @@ void set_brightness(int value) {
     // Apply live to the LED driver immediately (RAM-first principle:
     // the panel responds the moment the user moves the slider). The
     // mutation queues a debounced NVS write so repeated taps coalesce.
-    ledcWrite(0, (uint8_t)value);
+    // Route through board::set_backlight so each board impl owns its
+    // LEDC channel rather than the UI layer driving channel 0 directly.
+    board::set_backlight((uint8_t)value);
     ::config::Mutation m;
     m.kind = ::config::MutationKind::SetBrightness;
     m.u8 = (uint8_t)value;

@@ -1,6 +1,7 @@
 #include "board.h"
 
-#include <Arduino.h>
+#include <driver/ledc.h>
+#include <stdint.h>
 
 // Sunton/Guition ESP32-4848S040 implementation of the board::* API.
 // First-phase impl: identity, geometry, capability flags, and backlight.
@@ -25,22 +26,36 @@ namespace board {
 namespace {
 
 constexpr int BACKLIGHT_PIN = 38;
-constexpr int LEDC_CHANNEL = 0;
+constexpr ledc_mode_t BL_MODE = LEDC_LOW_SPEED_MODE;
+constexpr ledc_timer_t BL_TIMER = LEDC_TIMER_0;
+constexpr ledc_channel_t BL_CHANNEL = LEDC_CHANNEL_0;
 constexpr int LEDC_FREQ_HZ = 5000;
-constexpr int LEDC_RES_BITS = 8;
 uint8_t s_backlight_value = 255;
 bool s_backlight_inited = false;
 
 void ensure_backlight() {
     if (s_backlight_inited) return;
     // Spec 13 §"Backlight And Power" - own the LEDC channel here so
-    // main.cpp doesn't drive the pin directly. Setup is idempotent;
-    // a redundant ledcSetup() in main.cpp before this lands is fine
-    // (same channel/freq), but the future move is to call
-    // board::set_backlight from setup() and remove the main.cpp path.
-    ledcSetup(LEDC_CHANNEL, LEDC_FREQ_HZ, LEDC_RES_BITS);
-    ledcAttachPin(BACKLIGHT_PIN, LEDC_CHANNEL);
-    ledcWrite(LEDC_CHANNEL, 255);
+    // main.cpp doesn't drive the pin directly. Spec 21 B: moved from
+    // Arduino's ledcSetup/ledcAttachPin to the IDF driver so the board
+    // layer no longer depends on the Arduino wrapper.
+    ledc_timer_config_t timer_cfg = {};
+    timer_cfg.speed_mode = BL_MODE;
+    timer_cfg.duty_resolution = LEDC_TIMER_8_BIT;
+    timer_cfg.timer_num = BL_TIMER;
+    timer_cfg.freq_hz = LEDC_FREQ_HZ;
+    timer_cfg.clk_cfg = LEDC_AUTO_CLK;
+    ledc_timer_config(&timer_cfg);
+
+    ledc_channel_config_t channel_cfg = {};
+    channel_cfg.gpio_num = BACKLIGHT_PIN;
+    channel_cfg.speed_mode = BL_MODE;
+    channel_cfg.channel = BL_CHANNEL;
+    channel_cfg.intr_type = LEDC_INTR_DISABLE;
+    channel_cfg.timer_sel = BL_TIMER;
+    channel_cfg.duty = 255;
+    channel_cfg.hpoint = 0;
+    ledc_channel_config(&channel_cfg);
     s_backlight_inited = true;
 }
 
@@ -75,7 +90,8 @@ Capabilities capabilities() {
 bool set_backlight(uint8_t value_0_255) {
     ensure_backlight();
     s_backlight_value = value_0_255;
-    ledcWrite(LEDC_CHANNEL, value_0_255);
+    ledc_set_duty(BL_MODE, BL_CHANNEL, value_0_255);
+    ledc_update_duty(BL_MODE, BL_CHANNEL);
     return true;
 }
 
