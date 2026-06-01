@@ -34,15 +34,31 @@ bool s_power = true;
 uint16_t s_width = FAKE_BOARD_WIDTH;
 uint16_t s_height = FAKE_BOARD_HEIGHT;
 uint16_t s_diag = FAKE_BOARD_DIAG_TENTHS;
+DisplayShape s_shape = FAKE_BOARD_WIDTH == FAKE_BOARD_HEIGHT ? DisplayShape::Square
+                                                             : DisplayShape::Rectangle;
 
 LayoutClass classify(uint16_t w, uint16_t h) {
     if (w == h) return LayoutClass::SquareCompact;
     if (w > h) {
-        // wide ratio: long side / short side >= 1.5 -> Wide
-        return (uint32_t)w * 10 / h >= 15 ? LayoutClass::LandscapeWide
-                                          : LayoutClass::LandscapeCompact;
+        return (w >= 1024 || h >= 600) ? LayoutClass::LandscapeWide
+                                       : LayoutClass::LandscapeCompact;
     }
     return (uint32_t)h * 10 / w >= 15 ? LayoutClass::PortraitTall : LayoutClass::PortraitCompact;
+}
+
+void fill_usable_area(Geometry &g) {
+    if (g.shape != DisplayShape::Round) {
+        g.usable_x = 0;
+        g.usable_y = 0;
+        g.usable_width = g.width_px;
+        g.usable_height = g.height_px;
+        return;
+    }
+    const uint16_t inset = g.width_px >= 480 ? 48 : 42;
+    g.usable_x = inset;
+    g.usable_y = inset;
+    g.usable_width = g.width_px > inset * 2 ? g.width_px - inset * 2 : g.width_px;
+    g.usable_height = g.height_px > inset * 2 ? g.height_px - inset * 2 : g.height_px;
 }
 
 }  // namespace
@@ -61,7 +77,11 @@ Geometry geometry() {
     g.diagonal_tenths_in = s_diag;
     g.rotation = 0;
     g.square = (g.width_px == g.height_px);
+    g.shape = s_shape;
     g.layout_class = classify(g.width_px, g.height_px);
+    g.density_class =
+        (g.width_px >= 1024 || g.height_px >= 600) ? DensityClass::Hdpi : DensityClass::Mdpi;
+    fill_usable_area(g);
     return g;
 }
 
@@ -74,6 +94,8 @@ Capabilities capabilities() {
     c.beeper = false;
     c.nmea2000_can = false;
     c.sd_card = false;
+    c.display_bus = DisplayBus::RgbParallel;
+    c.touch_interrupt = false;
     return c;
 }
 
@@ -94,15 +116,26 @@ bool set_power(bool on) {
 namespace native_fake {
 
 void set_geometry(uint16_t width_px, uint16_t height_px, uint16_t diagonal_tenths_in) {
+    const uint16_t next_w = width_px ? width_px : s_width;
+    const uint16_t next_h = height_px ? height_px : s_height;
+    set_geometry(width_px, height_px, diagonal_tenths_in,
+                 next_w == next_h ? DisplayShape::Square : DisplayShape::Rectangle);
+}
+
+void set_geometry(uint16_t width_px, uint16_t height_px, uint16_t diagonal_tenths_in,
+                  DisplayShape shape) {
     if (width_px) s_width = width_px;
     if (height_px) s_height = height_px;
     if (diagonal_tenths_in) s_diag = diagonal_tenths_in;
+    s_shape = shape;
 }
 
 void reset_geometry() {
     s_width = FAKE_BOARD_WIDTH;
     s_height = FAKE_BOARD_HEIGHT;
     s_diag = FAKE_BOARD_DIAG_TENTHS;
+    s_shape = FAKE_BOARD_WIDTH == FAKE_BOARD_HEIGHT ? DisplayShape::Square
+                                                    : DisplayShape::Rectangle;
 }
 
 }  // namespace native_fake

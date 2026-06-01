@@ -18,9 +18,7 @@
 // users without an explicit -D in platformio.ini still get a working
 // firmware. Once BOARD_ID_DEFINED is set anywhere in the build, this
 // file only compiles when the matching id is also set.
-#if defined(BOARD_ID_SUNTON_4848S040) ||                                                           \
-    (!defined(BOARD_ID_DEFINED) && !defined(BOARD_ID_WAVESHARE_TOUCH_LCD_4) &&                     \
-     !defined(BOARD_ID_NATIVE_FAKE))
+#if defined(BOARD_ID_SUNTON_4848S040) || (!defined(BOARD_ID_DEFINED) && !defined(BOARD_ID_NATIVE_FAKE))
 
 namespace board {
 
@@ -76,7 +74,13 @@ Geometry geometry() {
     g.diagonal_tenths_in = 40;
     g.rotation = 0;
     g.square = true;
+    g.shape = DisplayShape::Square;
     g.layout_class = LayoutClass::SquareCompact;
+    g.density_class = DensityClass::Mdpi;
+    g.usable_x = 0;
+    g.usable_y = 0;
+    g.usable_width = g.width_px;
+    g.usable_height = g.height_px;
     return g;
 }
 
@@ -89,6 +93,8 @@ Capabilities capabilities() {
     c.beeper = false;
     c.nmea2000_can = false;
     c.sd_card = true;
+    c.display_bus = DisplayBus::RgbParallel;
+    c.touch_interrupt = TOUCH_INT >= 0;
     return c;
 }
 

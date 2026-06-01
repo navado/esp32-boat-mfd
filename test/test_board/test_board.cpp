@@ -31,8 +31,15 @@ static void test_geometry_defaults_480_square() {
     TEST_ASSERT_EQUAL_UINT16(480, g.width_px);
     TEST_ASSERT_EQUAL_UINT16(480, g.height_px);
     TEST_ASSERT_TRUE(g.square);
+    TEST_ASSERT_EQUAL_INT(static_cast<int>(board::DisplayShape::Square), static_cast<int>(g.shape));
     TEST_ASSERT_EQUAL_INT(static_cast<int>(board::LayoutClass::SquareCompact),
                           static_cast<int>(g.layout_class));
+    TEST_ASSERT_EQUAL_INT(static_cast<int>(board::DensityClass::Mdpi),
+                          static_cast<int>(g.density_class));
+    TEST_ASSERT_EQUAL_UINT16(0, g.usable_x);
+    TEST_ASSERT_EQUAL_UINT16(0, g.usable_y);
+    TEST_ASSERT_EQUAL_UINT16(480, g.usable_width);
+    TEST_ASSERT_EQUAL_UINT16(480, g.usable_height);
 }
 
 static void test_capabilities_default_off() {
@@ -46,6 +53,9 @@ static void test_capabilities_default_off() {
     TEST_ASSERT_FALSE(c.nmea2000_can);
     TEST_ASSERT_FALSE(c.sd_card);
     TEST_ASSERT_EQUAL_INT(static_cast<int>(board::TouchKind::None), static_cast<int>(c.touch));
+    TEST_ASSERT_EQUAL_INT(static_cast<int>(board::DisplayBus::RgbParallel),
+                          static_cast<int>(c.display_bus));
+    TEST_ASSERT_FALSE(c.touch_interrupt);
     TEST_ASSERT_EQUAL_INT(static_cast<int>(board::BacklightKind::None),
                           static_cast<int>(c.backlight));
 }
@@ -90,15 +100,17 @@ static void test_layout_context_touch_targets_44_on_small() {
 // the layout-class classifier and the touch-target / margin / gap
 // heuristics on shapes we don't have hardware for yet.
 
-static void test_wide_800x480_picks_landscape_wide() {
+static void test_800x480_large_panel_uses_compact_class_but_wide_context() {
     board::native_fake::set_geometry(800, 480, 70);
     auto g = board::geometry();
     TEST_ASSERT_EQUAL_UINT16(800, g.width_px);
     TEST_ASSERT_EQUAL_UINT16(480, g.height_px);
     TEST_ASSERT_FALSE(g.square);
-    // 800/480 = 1.66 >= 1.5 -> Wide
-    TEST_ASSERT_EQUAL_INT(static_cast<int>(board::LayoutClass::LandscapeWide),
+    TEST_ASSERT_EQUAL_INT(static_cast<int>(board::DisplayShape::Rectangle), static_cast<int>(g.shape));
+    TEST_ASSERT_EQUAL_INT(static_cast<int>(board::LayoutClass::LandscapeCompact),
                           static_cast<int>(g.layout_class));
+    TEST_ASSERT_EQUAL_INT(static_cast<int>(board::DensityClass::Mdpi),
+                          static_cast<int>(g.density_class));
 
     auto ctx = ui::layout_context();
     TEST_ASSERT_FALSE(ctx.square);
@@ -111,14 +123,39 @@ static void test_wide_800x480_picks_landscape_wide() {
     TEST_ASSERT_EQUAL_UINT16(8, ctx.margin);
 }
 
-static void test_wide_short_side_800_uses_56px_touch() {
-    // Hypothetical 1024x800 board: short side >= 800 -> 56 px touch,
-    // 16 px margin, 8 px gap per ui::layout_context.
-    board::native_fake::set_geometry(1024, 800, 100);
+static void test_landscape_1024x600_uses_hdpi_spacing() {
+    board::native_fake::set_geometry(1024, 600, 70);
+    auto g = board::geometry();
+    TEST_ASSERT_EQUAL_INT(static_cast<int>(board::LayoutClass::LandscapeWide),
+                          static_cast<int>(g.layout_class));
+    TEST_ASSERT_EQUAL_INT(static_cast<int>(board::DensityClass::Hdpi),
+                          static_cast<int>(g.density_class));
     auto ctx = ui::layout_context();
     TEST_ASSERT_EQUAL_UINT16(56, ctx.touch_min);
     TEST_ASSERT_EQUAL_UINT16(16, ctx.margin);
     TEST_ASSERT_EQUAL_UINT16(8, ctx.gap);
+}
+
+static void test_round_480_safe_area_inset() {
+    board::native_fake::set_geometry(480, 480, 21, board::DisplayShape::Round);
+    auto g = board::geometry();
+    TEST_ASSERT_EQUAL_INT(static_cast<int>(board::DisplayShape::Round), static_cast<int>(g.shape));
+    TEST_ASSERT_EQUAL_UINT16(48, g.usable_x);
+    TEST_ASSERT_EQUAL_UINT16(48, g.usable_y);
+    TEST_ASSERT_EQUAL_UINT16(384, g.usable_width);
+    TEST_ASSERT_EQUAL_UINT16(384, g.usable_height);
+    auto ctx = ui::layout_context();
+    TEST_ASSERT_EQUAL_UINT16(384, ctx.short_side);
+}
+
+static void test_board_name_helpers() {
+    TEST_ASSERT_EQUAL_STRING("square", board::shape_name(board::DisplayShape::Square));
+    TEST_ASSERT_EQUAL_STRING("round", board::shape_name(board::DisplayShape::Round));
+    TEST_ASSERT_EQUAL_STRING("hdpi", board::density_class_name(board::DensityClass::Hdpi));
+    TEST_ASSERT_EQUAL_STRING("landscape-1024x600",
+                             board::layout_class_name(board::LayoutClass::LandscapeWide));
+    TEST_ASSERT_EQUAL_STRING("GT911", board::touch_kind_name(board::TouchKind::GT911));
+    TEST_ASSERT_EQUAL_STRING("rgb-parallel", board::display_bus_name(board::DisplayBus::RgbParallel));
 }
 
 static void test_landscape_compact_640x480() {
@@ -186,8 +223,10 @@ int main(int, char **) {
     RUN_TEST(test_set_power_does_not_crash);
     RUN_TEST(test_layout_context_square_matches_geometry);
     RUN_TEST(test_layout_context_touch_targets_44_on_small);
-    RUN_TEST(test_wide_800x480_picks_landscape_wide);
-    RUN_TEST(test_wide_short_side_800_uses_56px_touch);
+    RUN_TEST(test_800x480_large_panel_uses_compact_class_but_wide_context);
+    RUN_TEST(test_landscape_1024x600_uses_hdpi_spacing);
+    RUN_TEST(test_round_480_safe_area_inset);
+    RUN_TEST(test_board_name_helpers);
     RUN_TEST(test_landscape_compact_640x480);
     RUN_TEST(test_portrait_compact_480x640);
     RUN_TEST(test_portrait_tall_320x800);

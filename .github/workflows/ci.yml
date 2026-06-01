@@ -14,6 +14,18 @@ jobs:
   build:
     name: Build firmware
     runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        env:
+          - esp32-4848s040
+          - waveshare-touch-lcd-4
+          - waveshare-touch-lcd-4_3
+          - waveshare-touch-lcd-4_3b
+          - waveshare-touch-lcd-5_800x480
+          - waveshare-touch-lcd-5_1024x600
+          - waveshare-touch-lcd-7_800x480
+          - waveshare-touch-lcd-7b_1024x600
     steps:
       - uses: actions/checkout@v4
 
@@ -41,18 +53,18 @@ jobs:
       - name: Create placeholder secrets.h
         run: cp include/secrets.h.example include/secrets.h
 
-      - name: Build (esp32-4848s040)
-        run: pio run -e esp32-4848s040
+      - name: Build (${{ matrix.env }})
+        run: pio run -e ${{ matrix.env }}
 
       - name: Upload firmware artifact
         uses: actions/upload-artifact@v4
         with:
-          name: firmware-${{ github.sha }}
+          name: firmware-${{ matrix.env }}-latest
           path: |
-            .pio/build/esp32-4848s040/firmware.bin
-            .pio/build/esp32-4848s040/firmware.elf
-            .pio/build/esp32-4848s040/bootloader.bin
-            .pio/build/esp32-4848s040/partitions.bin
+            .pio/build/${{ matrix.env }}/firmware.bin
+            .pio/build/${{ matrix.env }}/firmware.elf
+            .pio/build/${{ matrix.env }}/bootloader.bin
+            .pio/build/${{ matrix.env }}/partitions.bin
           if-no-files-found: error
           retention-days: 14
 

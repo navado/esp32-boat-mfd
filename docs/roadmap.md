@@ -306,7 +306,12 @@ Potential later tracks:
 - Companion app support over BLE and/or local web.
 - More chart/history widgets and configurable data sources.
 - NMEA 2000 direct support where hardware permits.
-- Multiple board/display families with first-class geometry classes.
+- Multiple board/display families with first-class geometry classes. The
+  firmware now has compile-time Waveshare Tier 1 RGB profiles for 4.0, 4.3,
+  4.3B, 5.0, 7.0, and 7B panels, plus geometry/status metadata for shape,
+  density, usable area, touch, display bus, and layout class. Remaining work is
+  hardware validation and separate display/touch drivers for non-RGB, round,
+  portrait, SPI, QSPI, and AMOLED boards.
 - Optional real DNS provider integration after mDNS/hostname management is
   stable.
 
@@ -322,6 +327,9 @@ Potential later tracks:
   layout builder.
 - Hardware-in-the-loop coverage is still limited compared with host/plugin
   tests.
+- Waveshare profiles beyond the 4 inch RGB path are compile/profile support
+  until boot, backlight, touch coordinates, rotation, CAN/RS485, SignalK, OTA,
+  auth, logs, and dashboard rendering are checked on physical boards.
 
 ## Related Specs
 

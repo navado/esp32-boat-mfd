@@ -1,8 +1,10 @@
 # Board And Display Portability
 
-Status: proposed specification. This generalizes the firmware from one
-480x480 Sunton/Guition board toward a family of ESP32-S3 marine displays:
-square 4+ inch instruments and rectangular touch displays up to about 9 inch.
+Status: partially implemented. The firmware now has a board/display geometry
+contract, helper names for manager/status reporting, host tests for geometry
+classification, and a Tier 1 Waveshare RGB profile matrix. Board-specific
+display/touch drivers and hardware validation remain required before declaring
+the broader family fully supported.
 
 ## Goals
 
@@ -126,6 +128,12 @@ struct Geometry {
   uint16_t diagonal_tenths_in;
   uint8_t rotation;
   bool square;
+  DisplayShape shape;
+  DensityClass density_class;
+  uint16_t usable_x;
+  uint16_t usable_y;
+  uint16_t usable_width;
+  uint16_t usable_height;
 };
 
 struct Capabilities {
@@ -136,12 +144,19 @@ struct Capabilities {
   bool beeper;
   bool nmea2000_can;
   bool sd_card;
+  DisplayBus display_bus;
+  bool touch_interrupt;
 };
 
 const char *id();
 const char *display_name();
 Geometry geometry();
 Capabilities capabilities();
+const char *shape_name(DisplayShape shape);
+const char *density_class_name(DensityClass density);
+const char *layout_class_name(LayoutClass layout);
+const char *touch_kind_name(TouchKind touch);
+const char *display_bus_name(DisplayBus bus);
 
 bool begin();
 bool display_begin();
@@ -158,6 +173,32 @@ Board-specific files:
 - `include/boards/board_waveshare_touch_lcd_4.h`
 - `src/boards/board_waveshare_touch_lcd_4.cpp`
 - later: `board_makerfabs_7_parallel.cpp`, `board_qualia_rgb666.cpp`
+
+Implemented Waveshare Tier 1 build profiles:
+
+| PlatformIO env | Resolution | Shape | Density | Layout class |
+|----------------|------------|-------|---------|--------------|
+| `waveshare-touch-lcd-4` | 480x480 | square | `mdpi` | `square-480` |
+| `waveshare-touch-lcd-4_3` | 800x480 | rectangle | `mdpi` | `landscape-800x480` |
+| `waveshare-touch-lcd-4_3b` | 800x480 | rectangle | `mdpi` | `landscape-800x480` |
+| `waveshare-touch-lcd-5_800x480` | 800x480 | rectangle | `mdpi` | `landscape-800x480` |
+| `waveshare-touch-lcd-5_1024x600` | 1024x600 | rectangle | `hdpi` | `landscape-1024x600` |
+| `waveshare-touch-lcd-7_800x480` | 800x480 | rectangle | `mdpi` | `landscape-800x480` |
+| `waveshare-touch-lcd-7b_1024x600` | 1024x600 | rectangle | `hdpi` | `landscape-1024x600` |
+
+Derived Waveshare environments extend the production ESP32-S3 RGB baseline and
+reuse the 4 inch Waveshare build flags, then override board identity and panel
+size:
+
+```ini
+[env:waveshare-touch-lcd-7b_1024x600]
+extends = env:esp32-4848s040
+build_flags =
+  ${env:waveshare-touch-lcd-4.build_flags}
+  -DBOARD_ID_WAVESHARE_TOUCH_LCD_7B_1024X600
+  -DLCD_W=1024
+  -DLCD_H=600
+```
 
 ### Display Driver
 

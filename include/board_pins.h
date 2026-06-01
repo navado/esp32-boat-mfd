@@ -6,8 +6,12 @@
 // 4.0" 480x480 IPS, ST7701S RGB parallel panel
 // ESP32-S3-WROOM-1 N16R8 (16 MB flash + 8 MB octal PSRAM)
 
+#ifndef LCD_W
 #define LCD_W   480
+#endif
+#ifndef LCD_H
 #define LCD_H   480
+#endif
 
 // ST7701 init via 3-wire SPI (used only at boot, then RGB takes over)
 #define ST7701_CS    39

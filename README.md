@@ -148,9 +148,33 @@ Primary target:
 | Storage | microSD slot |
 | USB | USB-C with CH340 USB-UART |
 
-The codebase is structured so that adding another ESP32-S3 + RGB-panel + GT911
-board is mostly a matter of dropping in a new `include/board_pins_*.h`
-and a `[env:*]` block in `platformio.ini`.
+Additional ESP32-S3 RGB touch profiles now compile through the same board
+abstraction and report their geometry to the device identity/status APIs:
+
+| PlatformIO env | Board profile | Display | Layout class |
+|----------------|---------------|---------|--------------|
+| `waveshare-touch-lcd-4` | Waveshare Touch LCD 4 | 480x480 square | `square-480` |
+| `waveshare-touch-lcd-4_3` | Waveshare Touch LCD 4.3 | 800x480 landscape | `landscape-800x480` |
+| `waveshare-touch-lcd-4_3b` | Waveshare Touch LCD 4.3B | 800x480 landscape | `landscape-800x480` |
+| `waveshare-touch-lcd-5_800x480` | Waveshare Touch LCD 5 | 800x480 landscape | `landscape-800x480` |
+| `waveshare-touch-lcd-5_1024x600` | Waveshare Touch LCD 5 | 1024x600 landscape | `landscape-1024x600` |
+| `waveshare-touch-lcd-7_800x480` | Waveshare Touch LCD 7 | 800x480 landscape | `landscape-800x480` |
+| `waveshare-touch-lcd-7b_1024x600` | Waveshare Touch LCD 7B | 1024x600 landscape | `landscape-1024x600` |
+
+These profiles share the current RGB/LVGL initialization path. They are build
+profiles and geometry/layout contracts until each physical board passes the
+hardware checklist for panel timing, backlight, touch coordinates, rotation,
+CAN/RS485 exposure, SignalK connectivity, and dashboard rendering.
+
+```sh
+pio run -e waveshare-touch-lcd-4
+pio run -e waveshare-touch-lcd-7b_1024x600
+```
+
+The firmware reports board metadata including resolution, shape, density,
+layout class, usable area, display bus, touch controller, touch interrupt, and
+NMEA 2000 CAN capability so the SignalK manager can select presets by geometry
+instead of hardcoded board names.
 
 ## Quick start
 

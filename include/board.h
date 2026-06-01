@@ -9,7 +9,7 @@
 //
 // Selection at compile time via build_flags:
 //   -D BOARD_ID_SUNTON_4848S040    (default if no flag)
-//   -D BOARD_ID_WAVESHARE_TOUCH_LCD_4   (future)
+//   -D BOARD_ID_WAVESHARE_TOUCH_LCD_4
 //
 // Common headers / code pull in this file. Board impls live under
 // src/boards/board_<id>.cpp.
@@ -23,6 +23,8 @@ namespace board {
 enum class DisplayBus : uint8_t { RgbParallel, Spi, Qspi, DsiBridge };
 enum class TouchKind : uint8_t { None, GT911, FT5x06, CST816, XPT2046, BoardSpecific };
 enum class BacklightKind : uint8_t { None, LedcPwm, IoExpanderPwm, PanelCommand };
+enum class DisplayShape : uint8_t { Rectangle, Square, Round };
+enum class DensityClass : uint8_t { Mdpi, Hdpi };
 enum class LayoutClass : uint8_t {
     SquareCompact,
     LandscapeCompact,
@@ -37,7 +39,13 @@ struct Geometry {
     uint16_t diagonal_tenths_in;
     uint8_t rotation;
     bool square;
+    DisplayShape shape;
     LayoutClass layout_class;
+    DensityClass density_class;
+    uint16_t usable_x;
+    uint16_t usable_y;
+    uint16_t usable_width;
+    uint16_t usable_height;
 };
 
 struct Capabilities {
@@ -48,6 +56,8 @@ struct Capabilities {
     bool beeper;
     bool nmea2000_can;
     bool sd_card;
+    DisplayBus display_bus;
+    bool touch_interrupt;
 };
 
 const char *id();            // stable id string, e.g. "sunton_4848s040"
@@ -64,6 +74,12 @@ uint8_t backlight();
 // Optional power gate (for boards that route panel power through a GPIO
 // or expander). No-op on boards without it.
 bool set_power(bool on);
+
+const char *shape_name(DisplayShape shape);
+const char *density_class_name(DensityClass density);
+const char *layout_class_name(LayoutClass layout);
+const char *touch_kind_name(TouchKind touch);
+const char *display_bus_name(DisplayBus bus);
 
 // Console handler - "board" or "board bright <0-255>".
 bool handleSerialCommand(const class String &line);

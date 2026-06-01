@@ -39,6 +39,7 @@
 // where the GT911 worker + INT pin are owned. Forward-declared with C
 // linkage to match main.cpp's extern "C" block.
 extern "C" bool main_set_touch_mode(const char *mode);
+extern "C" const char *main_touch_mode();
 #include "signalk.h"
 #include "source_nmea2000.h"
 #include "source_nmea_wifi.h"
@@ -381,6 +382,7 @@ void build_status_body(JsonDocument &doc) {
     doc["device_id"] = id.device_id;
 
     board::Geometry g = board::geometry();
+    board::Capabilities bc = board::capabilities();
     String theme_name;
     {
         storage::Namespace ui_prefs("ui", true);
@@ -425,6 +427,14 @@ void build_status_body(JsonDocument &doc) {
     display_o["height"] = g.height_px;
     display_o["rotation"] = g.rotation;
     display_o["brightness"] = ui::brightness();
+    display_o["shape"] = board::shape_name(g.shape);
+    display_o["density"] = board::density_class_name(g.density_class);
+    display_o["layoutClass"] = board::layout_class_name(g.layout_class);
+    JsonObject usable = display_o["usableArea"].to<JsonObject>();
+    usable["x"] = g.usable_x;
+    usable["y"] = g.usable_y;
+    usable["width"] = g.usable_width;
+    usable["height"] = g.usable_height;
 
     JsonObject mem = doc["memory"].to<JsonObject>();
     mem["heap_free_kb"] = (uint32_t)(ESP.getFreeHeap() / 1024);
@@ -436,7 +446,9 @@ void build_status_body(JsonDocument &doc) {
     fw["git_commit"] = id.git_commit;
 
     JsonObject touch = doc["touch"].to<JsonObject>();
-    touch["mode"] = "poll";  // 4848s040 board
+    touch["mode"] = main_touch_mode();
+    touch["controller"] = board::touch_kind_name(bc.touch);
+    touch["interrupt"] = bc.touch_interrupt;
 
     nmea_wifi::Status nw = nmea_wifi::status();
     JsonObject n0183 = doc["nmea0183Wifi"].to<JsonObject>();
@@ -454,6 +466,7 @@ void build_status_body(JsonDocument &doc) {
     JsonObject n2k_o = doc["nmea2000"].to<JsonObject>();
     n2k_o["compiledIn"] = n2k.compiled_in;
     n2k_o["enabled"] = n2k.enabled;
+    n2k_o["hardwareCan"] = bc.nmea2000_can;
     n2k_o["framesRx"] = n2k.frames_rx;
     n2k_o["pgnsDecoded"] = n2k.pgns_decoded;
     n2k_o["lastRxMs"] = n2k.last_rx_ms;

@@ -6,6 +6,18 @@ uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Added
+- Waveshare Tier 1 PlatformIO profiles for Touch LCD 4, 4.3, 4.3B, 5
+  800x480, 5 1024x600, 7 800x480, and 7B 1024x600.
+- Board geometry metadata for display shape, density class, usable area,
+  display bus, touch interrupt support, and manager-facing string names.
+- Host tests for geometry classification, HDPI layout spacing, round safe-area
+  handling, and board metadata helper names.
+
+### Changed
+- Device identity, manager status, board CLI, and layout context now use the
+  board geometry/capability contract instead of assuming one square panel.
+
 ## [0.2.0] - 2026-05-24
 
 ### Added

@@ -93,7 +93,7 @@ void setup() {
 
     board::Capabilities bc = board::capabilities();
     s_caps.touch = bc.touch != board::TouchKind::None;
-    s_caps.touch_irq = false;  // 4848s040 has no INT routed
+    s_caps.touch_irq = bc.touch_interrupt;
     s_caps.ble_config = true;
     s_caps.arduino_ota = true;
     s_caps.pull_ota = true;  // F6 implemented
@@ -126,6 +126,7 @@ const Capabilities &capabilities() {
 void to_json_doc(JsonDocument &doc) {
     const Identity &i = get();
     const Capabilities &c = capabilities();
+    board::Capabilities bc = board::capabilities();
     doc["deviceId"] = i.device_id;
     doc["mac"] = i.mac;
     doc["board_id"] = i.board_id;
@@ -145,6 +146,7 @@ void to_json_doc(JsonDocument &doc) {
     caps["pull_ota"] = c.pull_ota;
     caps["nmea0183_wifi"] = c.nmea0183_wifi;
     caps["nmea2000"] = c.nmea2000;
+    caps["nmea2000_can"] = bc.nmea2000_can;
     caps["autopilot_controls"] = c.autopilot_controls;
     caps["beeper"] = c.beeper;
     caps["local_web_ui"] = c.local_web_ui;
@@ -156,22 +158,29 @@ void to_json_doc(JsonDocument &doc) {
     display["height"] = g.height_px;
     display["rotation"] = g.rotation;
     display["colorDepth"] = 16;  // RGB565 on this panel
-    display["density"] = "mdpi";
-    display["shape"] = g.square ? "square" : "rectangular";
+    display["density"] = board::density_class_name(g.density_class);
+    display["shape"] = board::shape_name(g.shape);
+    display["layoutClass"] = board::layout_class_name(g.layout_class);
+    display["bus"] = board::display_bus_name(bc.display_bus);
+    JsonObject usable = display["usableArea"].to<JsonObject>();
+    usable["x"] = g.usable_x;
+    usable["y"] = g.usable_y;
+    usable["width"] = g.usable_width;
+    usable["height"] = g.usable_height;
     JsonObject safe = display["safeArea"].to<JsonObject>();
     // MOB pill reserves y < 62 on every screen (spec 09 safe zone).
-    safe["x"] = 0;
-    safe["y"] = 62;
-    safe["width"] = g.width_px;
-    safe["height"] = g.height_px - 62;
+    const uint16_t safe_y = g.usable_y > 62 ? g.usable_y : 62;
+    safe["x"] = g.usable_x;
+    safe["y"] = safe_y;
+    safe["width"] = g.usable_width;
+    safe["height"] = g.usable_height > (safe_y - g.usable_y) ? g.usable_height - (safe_y - g.usable_y) : 0;
 
-    board::Capabilities bc = board::capabilities();
     JsonObject touch = doc["touch"].to<JsonObject>();
     touch["enabled"] = bc.touch != board::TouchKind::None;
     touch["width"] = g.width_px;
     touch["height"] = g.height_px;
-    touch["controller"] = "GT911";
-    touch["interrupt"] = c.touch_irq;
+    touch["controller"] = board::touch_kind_name(bc.touch);
+    touch["interrupt"] = bc.touch_interrupt;
 
     // Widget capability flags. Maps directly to the 10 spec-11
     // templates + future map support.
@@ -204,7 +213,10 @@ void to_json_doc(JsonDocument &doc) {
     layout["grid"] = true;       // QuadGrid, StatusList, ControlConsole
     layout["absolute"] = false;  // not in v1
     JsonArray variants = layout["variants"].to<JsonArray>();
-    variants.add("square-480");
+    variants.add(board::layout_class_name(g.layout_class));
+    if (g.layout_class == board::LayoutClass::LandscapeWide) {
+        variants.add("landscape-800x480");
+    }
 }
 
 }  // namespace device_identity

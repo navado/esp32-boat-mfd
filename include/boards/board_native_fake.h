@@ -9,6 +9,8 @@
 
 #include <stdint.h>
 
+#include "board.h"
+
 namespace board {
 namespace native_fake {
 
@@ -16,6 +18,8 @@ namespace native_fake {
 // ui::layout_context() calls observe the new values. Pass 0 to any
 // field to keep the current value.
 void set_geometry(uint16_t width_px, uint16_t height_px, uint16_t diagonal_tenths_in);
+void set_geometry(uint16_t width_px, uint16_t height_px, uint16_t diagonal_tenths_in,
+                  DisplayShape shape);
 
 // Restore the compile-time defaults (FAKE_BOARD_WIDTH / HEIGHT / DIAG).
 void reset_geometry();
