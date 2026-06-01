@@ -24,7 +24,31 @@ PYTHON="${PYTHON:-/usr/bin/python3}"
 echo "==> remote host: $REMOTE_HOST  (sk endpoint: $SK_HOST:$SK_PORT)"
 echo "==> remote dir:  $REMOTE_DIR"
 
-# 0. quick reachability + dependency check
+# 0a. local port collision guard.  A stale local `signalk-server`
+# container from a previous `make demo-up` will bind 34300/34301/udp
+# even after the container is stopped (Docker Desktop on macOS keeps
+# the proxy until removed).  When that happens, pytest's UDP discovery
+# listener can't bind to 34301 and the whole suite errors at
+# collection time with a confusing "Address already in use".  Detect
+# it now, surface a clear message, and exit with guidance.
+collision=""
+for port in 3000 10110 34300 34301; do
+  if lsof -nP -iUDP:$port -iTCP:$port -sTCP:LISTEN 2>/dev/null | grep -q ' LISTEN\| UDP '; then
+    collision="${collision} ${port}"
+  fi
+done
+if [ -n "$collision" ]; then
+  echo >&2
+  echo "==> port collision on the LOCAL machine:$collision" >&2
+  echo "    The remote SK container will bind these on $SK_HOST," >&2
+  echo "    but pytest also listens locally for UDP 34301 and will fail." >&2
+  echo "    Most likely cause: an old \`make demo-up\` (local SK) is still" >&2
+  echo "    running. Stop it first:" >&2
+  echo "        make demo-down" >&2
+  exit 2
+fi
+
+# 0b. quick remote reachability + dependency check
 ssh -o BatchMode=yes -o ConnectTimeout=5 "$REMOTE_HOST" \
   'command -v docker >/dev/null || { echo "docker not on PATH on remote" >&2; exit 1; }'
 
