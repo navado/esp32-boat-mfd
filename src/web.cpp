@@ -152,6 +152,11 @@ static void handle_state() {
         mgr["registered"] = st.has_token && st.endpoint.length() > 0;
         mgr["lastHeartbeatOk"] = st.last_heartbeat_code >= 200 && st.last_heartbeat_code < 300;
         mgr["endpoint"] = st.endpoint;
+        mgr["endpointHost"] = st.endpoint_host;
+        mgr["endpointPort"] = st.endpoint_port;
+        mgr["endpointTls"] = st.endpoint_tls;
+        mgr["endpointBasePath"] = st.endpoint_base_path;
+        mgr["discoveryMethod"] = st.discovery_method;
         mgr["hasToken"] = st.has_token;
         mgr["hasSkToken"] = st.has_sk_token;
         mgr["lastRegisterCode"] = st.last_register_code;

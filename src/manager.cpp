@@ -29,6 +29,7 @@
 #include "sources_check.h"
 #include "storage.h"
 #include "ui_config_check.h"
+#include "manager_endpoint.h"
 #include "manager_config.h"
 #include "manager_screens.h"
 #include "manager_url.h"
@@ -60,6 +61,7 @@ constexpr uint16_t HTTP_READ_TIMEOUT_MS = 1500;
 String s_endpoint;
 String s_token;     // device/dev/provision token sent as X-EspDisp-Authorization
 String s_sk_token;  // SignalK server bearer token used to pass SK security
+manager_endpoint::DiscoveryMethod s_discovery_method = manager_endpoint::DiscoveryMethod::None;
 AuthState s_auth = AuthState::Unprovisioned;
 HealthState s_health = HealthState::Idle;
 uint32_t s_heartbeat_interval_ms = DEFAULT_HEARTBEAT_MS;
@@ -126,6 +128,11 @@ void load_prefs() {
     s_endpoint = String(p.get_string("endpoint", "").c_str());
     s_token = String(p.get_string("token", "").c_str());
     s_sk_token = String(p.get_string("sk_token", "").c_str());
+    s_discovery_method =
+        manager_endpoint::discovery_method_from_string(p.get_string("disc", "").c_str());
+    if (s_endpoint.length() && s_discovery_method == manager_endpoint::DiscoveryMethod::None) {
+        s_discovery_method = manager_endpoint::DiscoveryMethod::Stored;
+    }
     s_applied_config_version = String(p.get_string("cfg_ver", "v0").c_str());
     s_applied_config_hash = String(p.get_string("cfg_hash", "").c_str());
     s_ota_enabled = p.get_u8("ota_en", 1) != 0;
@@ -139,6 +146,7 @@ void save_prefs() {
     p.put_string("endpoint", s_endpoint.c_str());
     p.put_string("token", s_token.c_str());
     p.put_string("sk_token", s_sk_token.c_str());
+    p.put_string("disc", manager_endpoint::discovery_method_to_string(s_discovery_method));
     p.put_string("cfg_ver", s_applied_config_version.c_str());
     p.put_string("cfg_hash", s_applied_config_hash.c_str());
     p.put_u8("ota_en", s_ota_enabled ? 1 : 0);
@@ -1556,6 +1564,18 @@ Status status() {
     s.auth = s_auth;
     s.health = s_health;
     s.endpoint = s_endpoint;
+    s.endpoint_host = "";
+    s.endpoint_base_path = "";
+    s.endpoint_port = 0;
+    s.endpoint_tls = false;
+    s.discovery_method = manager_endpoint::discovery_method_to_string(s_discovery_method);
+    manager_endpoint::Endpoint ep;
+    if (manager_endpoint::parse_url(std::string(s_endpoint.c_str()), ep)) {
+        s.endpoint_host = ep.host.c_str();
+        s.endpoint_base_path = ep.base_path.c_str();
+        s.endpoint_port = ep.port;
+        s.endpoint_tls = ep.tls;
+    }
     s.has_token = s_token.length() > 0;
     s.has_sk_token = s_sk_token.length() > 0;
     s.last_register_ms = s_last_register_ms;
@@ -1595,6 +1615,11 @@ bool handleSerialCommand(const String &line) {
                                                           : "idle",
                   st.endpoint.length() ? st.endpoint.c_str() : "(none)",
                   st.has_token ? "set" : "none", st.has_sk_token ? "set" : "none");
+        net::logf("[mgr] endpoint host=%s port=%u tls=%d base=%s discovery=%s",
+                  st.endpoint_host.length() ? st.endpoint_host.c_str() : "-",
+                  (unsigned)st.endpoint_port, (int)st.endpoint_tls,
+                  st.endpoint_base_path.length() ? st.endpoint_base_path.c_str() : "-",
+                  st.discovery_method.length() ? st.discovery_method.c_str() : "none");
         net::logf("[mgr] last_register=%dms ago code=%d  "
                   "last_hb=%dms ago code=%d",
                   (int)(millis() - st.last_register_ms), st.last_register_code,
@@ -1634,6 +1659,7 @@ bool handleSerialCommand(const String &line) {
         }
         lock_state();
         s_endpoint = url;
+        s_discovery_method = manager_endpoint::DiscoveryMethod::Manual;
         if (!s_token.length()) s_auth = AuthState::Unprovisioned;
         save_prefs();
         s_force_register = true;
@@ -1674,6 +1700,7 @@ bool handleSerialCommand(const String &line) {
         s_endpoint = "";
         s_token = "";
         s_sk_token = "";
+        s_discovery_method = manager_endpoint::DiscoveryMethod::None;
         s_auth = AuthState::Unprovisioned;
         save_prefs();
         unlock_state();
@@ -1707,6 +1734,7 @@ bool handleSerialCommand(const String &line) {
             String url = String("http://") + ip.toString() + ":" + String(port);
             lock_state();
             s_endpoint = url;
+            s_discovery_method = manager_endpoint::DiscoveryMethod::Mdns;
             if (!s_token.length()) s_auth = AuthState::Unprovisioned;
             save_prefs();
             s_force_register = true;

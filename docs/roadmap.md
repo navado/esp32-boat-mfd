@@ -325,6 +325,7 @@ Potential later tracks:
 
 ## Related Specs
 
+- [Implementation Plan](implementation-plan.md)
 - [ESP Display Management Firmware Spec Plan](specs/17-espdisp-management-firmware-plan.md)
 - [SignalK ESP Display Manager Plugin Spec Plan](specs/18-signalk-espdisp-manager-plugin-plan.md)
 - [Device Display Widget Management](specs/19-device-display-widget-management.md)

@@ -33,6 +33,11 @@ struct Status {
     AuthState auth;
     HealthState health;
     String endpoint;  // "http://host:port" or ""
+    String endpoint_host;
+    String endpoint_base_path;
+    uint16_t endpoint_port;
+    bool endpoint_tls;
+    String discovery_method;
     bool has_token;
     bool has_sk_token;  // server-issued SK bearer for auth header
     uint32_t last_register_ms;
