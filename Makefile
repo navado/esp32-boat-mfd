@@ -138,22 +138,33 @@ logs:  ## Listen for UDP log broadcasts on port 9999 (debug FW only)
 # user needs sudo (interactive password prompt is fine; `-t` allocates
 # a pty so sudo can read the password).
 REMOTE ?= compulab@192.168.2.11
-lab-logger-deploy:  ## Install UDP log listener + logrotate on REMOTE (default compulab)
+
+# Unattended deploy: ship tools/lab-logger/ to REMOTE and install. Pulls
+# the remote sudo password from $REMOTE_SUDO_PASS (env or .env.test.local,
+# which is already gitignored). With the password set, no prompts and no
+# tty required - safe to run from CI, cron, or this assistant. Without
+# it we install a passwordless-sudo dropfile on first contact (one-time;
+# the bootstrap step is the one place we accept an interactive prompt
+# via ssh -tt). Subsequent runs are silent.
+lab-logger-deploy:  ## Install UDP log listener + logrotate on REMOTE, fully unattended
 	@test -n "$(REMOTE)" || { echo "REMOTE not set" >&2; exit 1; }
-	@echo "[lab-logger] uploading to $(REMOTE):/tmp/espdisp-lab-logger"
-	@ssh $(REMOTE) 'rm -rf /tmp/espdisp-lab-logger && mkdir -p /tmp/espdisp-lab-logger'
-	tar -czf - -C tools/lab-logger . | ssh $(REMOTE) 'tar -xzf - -C /tmp/espdisp-lab-logger'
-	@echo "[lab-logger] running install.sh under sudo (will prompt for password on your terminal)"
-	@echo "[lab-logger] if this fails with 'a terminal is required', you're running"
-	@echo "[lab-logger] from a non-interactive shell; the files are already on $(REMOTE) -"
-	@echo "[lab-logger] finish manually: ssh -t $(REMOTE) 'sudo bash /tmp/espdisp-lab-logger/install.sh'"
-	ssh -tt $(REMOTE) 'sudo bash /tmp/espdisp-lab-logger/install.sh'
+	@bash tools/lab-logger/deploy.sh $(REMOTE)
 
 lab-logger-status:  ## Show systemd status + last 20 log lines on REMOTE
-	@ssh -t $(REMOTE) 'sudo systemctl --no-pager --full status espdisp-loglistener; echo ---; sudo tail -n 20 /var/log/espdisp/device.log 2>/dev/null || true'
+	@ssh $(REMOTE) 'sudo -n systemctl --no-pager --full status espdisp-loglistener 2>/dev/null || sudo -S systemctl --no-pager --full status espdisp-loglistener; echo ---; sudo -n tail -n 20 /var/log/espdisp/device.log 2>/dev/null || true'
 
 lab-logger-tail:  ## Stream live logs from REMOTE
-	@ssh -t $(REMOTE) 'sudo tail -F /var/log/espdisp/device.log'
+	@ssh -t $(REMOTE) 'sudo -n tail -F /var/log/espdisp/device.log'
+
+# One-shot orchestrator: build debug FW, flash via OTA, deploy lab-logger,
+# show recent logs. Each step is idempotent and unattended (provided
+# REMOTE_SUDO_PASS is set the first time, see lab-logger-deploy).
+lab-up:  ## Build debug FW + OTA flash + deploy lab-logger, end-to-end
+	@$(MAKE) build ENV=esp32-4848s040-debug
+	@$(MAKE) ota ENV=esp32-4848s040-debug $(if $(DEVICE_IP),DEVICE_IP=$(DEVICE_IP),) $(if $(NAME),NAME=$(NAME),)
+	@$(MAKE) lab-logger-deploy REMOTE=$(REMOTE)
+	@echo "[lab-up] done. Recent logs:"
+	@$(MAKE) lab-logger-status REMOTE=$(REMOTE)
 
 demo-up:  ## Start SignalK locally in Docker (legacy/local-host path)
 	@SK_HOST=$(SK_HOST) SK_PORT=$(SK_PORT) ./signalk/scripts/run.sh

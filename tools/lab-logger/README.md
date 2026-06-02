@@ -12,13 +12,41 @@ Release builds never broadcast.
 - `espdisp.logrotate` — daily rotation, 7-day retention, gzip-compressed, `copytruncate` (listener has no SIGHUP).
 - `install.sh` — idempotent root installer; copies files into place, reloads systemd, enables + restarts the service, validates logrotate config.
 
-## Deploy (from the dev box)
+## Deploy (unattended)
 
 ```sh
 make lab-logger-deploy REMOTE=compulab@192.168.2.11
+# or end-to-end (build debug FW + OTA flash + deploy logger):
+make lab-up REMOTE=compulab@192.168.2.11 DEVICE_IP=10.42.0.67
 ```
 
-Under the hood: tars `tools/lab-logger/`, ships it via SSH, runs `install.sh` with sudo.
+`tools/lab-logger/deploy.sh` runs without prompts. Sudo auth in this order:
+
+1. Remote user has passwordless sudo → just runs.
+2. `REMOTE_SUDO_PASS` in env or `.env.test.local` (gitignored) → fed to `sudo -S` over SSH stdin.
+3. Neither → script exits non-zero with the one-line fix. There is no interactive fallback by design.
+
+Add to `.env.test.local` once:
+
+```sh
+echo 'REMOTE_SUDO_PASS=your-sudo-password' >> .env.test.local
+chmod 600 .env.test.local
+```
+
+## Log volume controls
+
+The firmware's UDP broadcast is gated by a runtime severity threshold + optional tag filter so the lab LAN doesn't get flooded. Default is **WARN+ only, no tag filter** — quiet enough to leave on permanently in a debug build. Widen on demand via BLE or serial:
+
+```sh
+make ble-cmd CMD="log-status"           # show current filter
+make ble-cmd CMD="log-level debug"      # widen to DEBUG+
+make ble-cmd CMD="log-tag sk"           # only [sk] tag passes
+make ble-cmd CMD="log-tag clear"        # remove tag filter
+```
+
+Settings persist in NVS, so the device boots back into whatever filter you set. `log-level` and `log-tag` both also work over the serial console and `net::dispatchCommand`.
+
+Severity levels: `error` (1) < `warn` (2) < `info` (3) < `debug` (4) < `trace` (5). Lines at or below the configured level pass. The SignalK stall transition lines (`STALL begin` / `STALL end`) are classified as WARN so they reach the lab logger by default — that's the "specific issue" the logger exists to capture.
 
 ## Verify
 

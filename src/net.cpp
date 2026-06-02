@@ -33,6 +33,15 @@ namespace net {
 static IPAddress broadcastAddr;
 static bool ota_started = false;
 
+// Runtime log filter knobs. Honored only when ESPDISP_DEBUG_UDP_LOG is
+// compiled in; in release builds the UDP path is gone entirely so these
+// just hold values nobody reads. Defaults are conservative (WARN+, no
+// tag filter) so a freshly-flashed debug build doesn't drown the lab
+// LAN on first boot.
+static volatile uint8_t s_udp_log_level = LOG_WARN;
+static char s_udp_log_tag[16] = {0};
+static void load_log_prefs();
+
 #ifdef ESPDISP_DEBUG_UDP_LOG
 // Lab-only UDP log sink. Compiled out of release builds entirely.
 // Wire format: one logf() line per UDP datagram, broadcast to
@@ -41,7 +50,23 @@ static bool ota_started = false;
 // source IP + receive timestamp before persisting.
 static WiFiUDP s_log_udp;
 static bool s_log_udp_ready = false;
-static void udp_log_emit(const char *buf, int n) {
+
+// Extract the bracketed tag at the start of a log line: "[sk] foo" -> "sk".
+// Returns nullptr if the line doesn't start with [tag].
+static bool line_tag_matches(const char *buf, int n, const char *want) {
+    if (!want || !*want) return true;  // no filter -> everything passes
+    if (n < 2 || buf[0] != '[') return false;
+    size_t wl = strlen(want);
+    if ((int)wl + 2 > n) return false;
+    if (strncmp(buf + 1, want, wl) != 0) return false;
+    return buf[1 + wl] == ']';
+}
+
+static void udp_log_emit(uint8_t level, const char *buf, int n) {
+    // Severity gate: higher numeric level == more verbose. We only emit
+    // lines at-or-below the configured threshold.
+    if (level > s_udp_log_level) return;
+    if (!line_tag_matches(buf, n, s_udp_log_tag)) return;
     // broadcastAddr is set to softAPIP|.255 in AP mode and to
     // localIP | ~mask when STA comes up. Zero means we have no usable
     // network - silently drop (the in-memory log ring still has the
@@ -530,6 +555,9 @@ void setup() {
         }
     }
     printf("[net] device id: %s\n", s_device_id.c_str());
+    // Load UDP log filter prefs before anything starts emitting so the
+    // first boot-time logf doesn't get broadcast at the wrong level.
+    load_log_prefs();
     // BLE is independent of WiFi - bring it up immediately so the BLE
     // console is responsive even if the WiFi manager is still trying.
     bleSetup();
@@ -645,12 +673,9 @@ void clearLogs() {
     if (locked) xSemaphoreGive(s_log_mtx);
 }
 
-void logf(const char *fmt, ...) {
+static void log_emit(uint8_t level, const char *fmt, va_list ap) {
     char buf[256];
-    va_list ap;
-    va_start(ap, fmt);
     int n = vsnprintf(buf, sizeof(buf), fmt, ap);
-    va_end(ap);
     if (n < 0) return;
     if (n >= (int)sizeof(buf)) n = sizeof(buf) - 1;
     if (n == 0) return;
@@ -668,12 +693,131 @@ void logf(const char *fmt, ...) {
         bleTxChar->notify();
     }
 #ifdef ESPDISP_DEBUG_UDP_LOG
-    udp_log_emit(buf, n);
+    udp_log_emit(level, buf, n);
+#else
+    (void)level;
 #endif
     if (locked) xSemaphoreGive(s_log_mtx);
 }
 
+void logf(const char *fmt, ...) {
+    va_list ap;
+    va_start(ap, fmt);
+    log_emit(LOG_INFO, fmt, ap);
+    va_end(ap);
+}
+
+void logf_at(LogLevel level, const char *fmt, ...) {
+    va_list ap;
+    va_start(ap, fmt);
+    log_emit((uint8_t)level, fmt, ap);
+    va_end(ap);
+}
+
+static LogLevel parse_log_level(const char *s) {
+    if (!s) return LOG_WARN;
+    if (!strcasecmp(s, "error") || !strcmp(s, "1")) return LOG_ERROR;
+    if (!strcasecmp(s, "warn") || !strcasecmp(s, "warning") || !strcmp(s, "2")) return LOG_WARN;
+    if (!strcasecmp(s, "info") || !strcmp(s, "3")) return LOG_INFO;
+    if (!strcasecmp(s, "debug") || !strcmp(s, "4")) return LOG_DEBUG;
+    if (!strcasecmp(s, "trace") || !strcmp(s, "5")) return LOG_TRACE;
+    return LOG_WARN;
+}
+
+static const char *log_level_name(uint8_t lvl) {
+    switch (lvl) {
+    case LOG_ERROR:
+        return "error";
+    case LOG_WARN:
+        return "warn";
+    case LOG_INFO:
+        return "info";
+    case LOG_DEBUG:
+        return "debug";
+    case LOG_TRACE:
+        return "trace";
+    default:
+        return "?";
+    }
+}
+
+void setLogLevel(LogLevel max_level) {
+    s_udp_log_level = (uint8_t)max_level;
+    storage::Namespace prefs("log", false);
+    prefs.put_u32("level", (uint32_t)max_level);
+}
+LogLevel logLevel() {
+    return (LogLevel)s_udp_log_level;
+}
+
+void setLogTagFilter(const char *tag) {
+    if (!tag) tag = "";
+    // Strip leading '[' and trailing ']' for ergonomics: `log-tag sk`
+    // and `log-tag [sk]` both work.
+    if (tag[0] == '[') tag++;
+    size_t tl = strlen(tag);
+    if (tl > 0 && tag[tl - 1] == ']') tl--;
+    if (tl >= sizeof(s_udp_log_tag)) tl = sizeof(s_udp_log_tag) - 1;
+    memcpy(s_udp_log_tag, tag, tl);
+    s_udp_log_tag[tl] = 0;
+    storage::Namespace prefs("log", false);
+    prefs.put_string("tag", s_udp_log_tag);
+}
+const char *logTagFilter() {
+    return s_udp_log_tag;
+}
+
+static void load_log_prefs() {
+    storage::Namespace prefs("log", true);
+    uint32_t lvl = prefs.get_u32("level", LOG_WARN);
+    if (lvl >= LOG_ERROR && lvl <= LOG_TRACE) s_udp_log_level = (uint8_t)lvl;
+    std::string tag = prefs.get_string("tag", "");
+    size_t tl = tag.size();
+    if (tl >= sizeof(s_udp_log_tag)) tl = sizeof(s_udp_log_tag) - 1;
+    memcpy(s_udp_log_tag, tag.data(), tl);
+    s_udp_log_tag[tl] = 0;
+}
+
 bool handleSerialCommand(const String &line) {
+    // Log filter knobs. Both persist to NVS so the device boots back into
+    // the operator-chosen state without needing the lab box to push it.
+    if (line == "log-status") {
+        logf("[log] level=%s tag=%s udp=%s", log_level_name(s_udp_log_level),
+             s_udp_log_tag[0] ? s_udp_log_tag : "(none)",
+#ifdef ESPDISP_DEBUG_UDP_LOG
+             "enabled"
+#else
+             "disabled-by-build"
+#endif
+        );
+        return true;
+    }
+    if (line.startsWith("log-level")) {
+        String rest = line.length() > 9 ? line.substring(9) : String("");
+        rest.trim();
+        if (rest.length() == 0) {
+            logf("[log] level=%s (usage: log-level error|warn|info|debug|trace)",
+                 log_level_name(s_udp_log_level));
+            return true;
+        }
+        LogLevel lvl = parse_log_level(rest.c_str());
+        setLogLevel(lvl);
+        logf("[log] level=%s", log_level_name(lvl));
+        return true;
+    }
+    if (line.startsWith("log-tag")) {
+        String rest = line.length() > 7 ? line.substring(7) : String("");
+        rest.trim();
+        if (rest.length() == 0) {
+            logf("[log] tag=%s (usage: log-tag <name>|clear)",
+                 s_udp_log_tag[0] ? s_udp_log_tag : "(none)");
+            return true;
+        }
+        if (rest == "clear" || rest == "none" || rest == "off") rest = "";
+        setLogTagFilter(rest.c_str());
+        logf("[log] tag=%s", s_udp_log_tag[0] ? s_udp_log_tag : "(none)");
+        return true;
+    }
     if (line.startsWith("wifi ")) {
         // Accept either:
         //   wifi <ssid>                          (open, no spaces in ssid)

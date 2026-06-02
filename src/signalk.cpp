@@ -395,21 +395,27 @@ void pollStallTelemetry() {
     // distinguishes a freshly-cleared timestamp from a 0-ms-old one.
     auto age = [&](uint32_t t) -> long { return t ? (long)(now - t) : -1L; };
 
+    // Promoted to WARN: a stall transition is exactly the "specific issue"
+    // the lab logger exists to capture, so it must pass the conservative
+    // default UDP filter (WARN+) without an operator first widening the
+    // level. Routine [sk] traffic stays at INFO and doesn't get broadcast.
     if (now_stalled) {
         s_stall_begin_ms = now;
-        net::logf("[sk] STALL begin connected=%d last_update_age=%ld "
-                  "last_frame_age=%ld connect_age=%ld iters_delta=%u "
-                  "peak_us=%u wifi=%s rssi=%d host=%s:%u",
-                  (int)connected, age(last_update), age(ws_last_frame), age(connected_since),
-                  (unsigned)iters_delta, (unsigned)peak_us, net::wifiStateName(), net::rssi(),
-                  s_host.c_str(), (unsigned)s_port);
+        net::logf_at(net::LOG_WARN,
+                     "[sk] STALL begin connected=%d last_update_age=%ld "
+                     "last_frame_age=%ld connect_age=%ld iters_delta=%u "
+                     "peak_us=%u wifi=%s rssi=%d host=%s:%u",
+                     (int)connected, age(last_update), age(ws_last_frame), age(connected_since),
+                     (unsigned)iters_delta, (unsigned)peak_us, net::wifiStateName(), net::rssi(),
+                     s_host.c_str(), (unsigned)s_port);
     } else {
         uint32_t dur = s_stall_begin_ms ? (now - s_stall_begin_ms) : 0;
-        net::logf("[sk] STALL end after %u ms status=%s connected=%d "
-                  "last_update_age=%ld last_frame_age=%ld iters_delta=%u "
-                  "peak_us=%u rssi=%d",
-                  (unsigned)dur, status.c_str(), (int)connected, age(last_update),
-                  age(ws_last_frame), (unsigned)iters_delta, (unsigned)peak_us, net::rssi());
+        net::logf_at(net::LOG_WARN,
+                     "[sk] STALL end after %u ms status=%s connected=%d "
+                     "last_update_age=%ld last_frame_age=%ld iters_delta=%u "
+                     "peak_us=%u rssi=%d",
+                     (unsigned)dur, status.c_str(), (int)connected, age(last_update),
+                     age(ws_last_frame), (unsigned)iters_delta, (unsigned)peak_us, net::rssi());
         s_stall_begin_ms = 0;
     }
     s_prev_stalled = now_stalled;

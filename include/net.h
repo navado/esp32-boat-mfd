@@ -7,9 +7,35 @@ namespace net {
 void setup();  // call once after Serial.begin
 void loop();   // call frequently from main loop
 
+// Log severity. The default `logf()` emits at INFO. UDP broadcast (debug
+// builds only) is gated by a runtime threshold + optional tag filter, so
+// chatty INFO/DEBUG/TRACE traffic can't flood the lab LAN unless an
+// operator explicitly turns it on via the `log-level` / `log-tag`
+// commands. stdout, BLE NUS, and the in-memory ring buffer are
+// unconditional - they're the low-cost local sinks.
+enum LogLevel : uint8_t {
+    LOG_ERROR = 1,
+    LOG_WARN = 2,
+    LOG_INFO = 3,
+    LOG_DEBUG = 4,
+    LOG_TRACE = 5,
+};
+
 // Multi-target log: Serial + UDP broadcast + BLE notify (if connected).
 // Safe to call before setup() - it falls through to Serial only.
+// `logf` defaults to INFO; use `logf_at(level, ...)` to classify a line
+// explicitly. Lines that should reach the lab log collector in normal
+// operation must be WARN or ERROR (the default UDP threshold).
 void logf(const char *fmt, ...) __attribute__((format(printf, 1, 2)));
+void logf_at(LogLevel level, const char *fmt, ...) __attribute__((format(printf, 2, 3)));
+
+// Runtime knobs for the UDP log filter (debug builds only; no-op in
+// release). Both are NVS-persisted under namespace "log". Pass an empty
+// string to logTagFilter() to clear the tag filter (all tags pass).
+void setLogLevel(LogLevel max_level);
+LogLevel logLevel();
+void setLogTagFilter(const char *tag);
+const char *logTagFilter();
 
 struct LogEntry {
     uint32_t seq;
