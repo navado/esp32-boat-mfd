@@ -1,0 +1,421 @@
+#!/usr/bin/env python3
+"""Unified CLI for poking an espdisp MFD over BLE NUS, HTTP, and UDP.
+
+Replaces the inline `python3 - <<PY` heredocs that have been sprinkled
+through OTA wrappers, lab notes, and debugging sessions. Every operation
+has a subcommand; every subcommand is non-interactive and exit-coded so
+it composes in shell + Make + CI.
+
+Subcommand summary:
+
+  ble cmd <text>...       Send one or more BLE NUS commands, stream
+                          notification lines for `--wait` seconds.
+  ble ip                  Issue `ip` over BLE, print just `<ipv4>`.
+  ble reboot              Issue `reboot` over BLE, return immediately.
+  ble wifi-reconnect      Issue `wifi-reconnect` (recovers half-up STA).
+
+  state [--field K]       GET /api/state, pretty-print or extract field.
+  logs [--since SEQ] [--limit N]
+                          GET /api/logs once.
+  logs tail [--port N]    Bind UDP and stream broadcast log datagrams.
+
+  discover                mDNS + BLE discovery, print device IP.
+
+  recover [--timeout S]   Composite: ble wifi-reconnect, then poll for
+                          ping reachability until --timeout.
+  watch [--interval S]    Periodic /api/state poll with diff vs previous.
+
+Common options:
+  --device-ip IP          Pin HTTP target. Otherwise resolved via discover.
+  --remote user@host      Proxy HTTP/ping through SSH (when this host
+                          can't reach the device subnet directly).
+  --name SUBSTRING        BLE device-name filter (default: any "espdisp*").
+  --timeout SECONDS       Per-op timeout (default per-subcommand).
+
+Exit codes: 0 success, 1 not found / not reachable, 2 usage error.
+"""
+
+from __future__ import annotations
+
+import argparse
+import asyncio
+import datetime
+import json
+import os
+import re
+import shlex
+import signal
+import socket
+import subprocess
+import sys
+import time
+from typing import Optional
+
+NUS_SERVICE = "6e400001-b5a3-f393-e0a3-9f4dd9e3a05a"
+NUS_RX = "6e400002-b5a3-f393-e0a3-9f4dd9e3a05a"  # write to device
+NUS_TX = "6e400003-b5a3-f393-e0a3-9f4dd9e3a05a"  # notify from device
+
+DEFAULT_BLE_TIMEOUT = 10.0
+DEFAULT_HTTP_TIMEOUT = 8.0
+
+
+# ---------- BLE helpers ----------
+
+async def _ble_scan(name_filter: Optional[str], timeout: float):
+    try:
+        from bleak import BleakScanner
+    except ImportError:
+        die("bleak not installed; pip install bleak")
+    needle = (name_filter or "espdisp").lower()
+    return await BleakScanner.find_device_by_filter(
+        lambda d, _adv: (d.name or "").lower().startswith(needle), timeout=timeout
+    )
+
+
+async def ble_cmd(commands: list[str], name_filter: Optional[str],
+                  wait_after: float, timeout: float) -> int:
+    """Open a BLE NUS connection, send each command, dump notifications
+    for `wait_after` seconds. Returns 0 on connect; 1 on no device."""
+    try:
+        from bleak import BleakClient
+    except ImportError:
+        die("bleak not installed; pip install bleak")
+    d = await _ble_scan(name_filter, timeout)
+    if not d:
+        print("no espdisp BLE device found", file=sys.stderr)
+        return 1
+    print(f"# ble: {d.name} {d.address}", file=sys.stderr)
+    async with BleakClient(d) as c:
+        out: list[str] = []
+
+        def on_notify(_handle, data: bytearray) -> None:
+            sys.stdout.write(data.decode("utf-8", "replace"))
+            sys.stdout.flush()
+
+        await c.start_notify(NUS_TX, on_notify)
+        for cmd in commands:
+            await c.write_gatt_char(NUS_RX, cmd.encode(), response=False)
+            await asyncio.sleep(0.3)
+        await asyncio.sleep(wait_after)
+    sys.stdout.write("\n")
+    return 0
+
+
+async def ble_query_ip(name_filter: Optional[str], timeout: float) -> int:
+    """Send `ip`, parse `ip=<ipv4>` from the notification stream, print
+    just the IP. Returns 1 if no IP appeared within timeout."""
+    try:
+        from bleak import BleakClient
+    except ImportError:
+        die("bleak not installed; pip install bleak")
+    d = await _ble_scan(name_filter, timeout)
+    if not d:
+        print("no espdisp BLE device found", file=sys.stderr)
+        return 1
+    pat = re.compile(r"ip=(\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3})")
+    async with BleakClient(d) as c:
+        got = asyncio.Event()
+        ip_holder: dict[str, str] = {}
+
+        def on_notify(_handle, data: bytearray) -> None:
+            m = pat.search(data.decode("utf-8", "replace"))
+            if m and m.group(1) != "0.0.0.0":
+                ip_holder["ip"] = m.group(1)
+                got.set()
+
+        await c.start_notify(NUS_TX, on_notify)
+        await c.write_gatt_char(NUS_RX, b"ip", response=False)
+        try:
+            await asyncio.wait_for(got.wait(), timeout=timeout)
+        except asyncio.TimeoutError:
+            print("ip not reported within timeout", file=sys.stderr)
+            return 1
+    print(ip_holder["ip"])
+    return 0
+
+
+async def ble_fire_and_forget(cmd: str, name_filter: Optional[str],
+                              timeout: float, wait_after: float = 1.0) -> int:
+    """Connect, send one command, briefly wait, disconnect. Used for
+    `reboot` and `wifi-reconnect` where we don't care about reply."""
+    try:
+        from bleak import BleakClient
+    except ImportError:
+        die("bleak not installed; pip install bleak")
+    d = await _ble_scan(name_filter, timeout)
+    if not d:
+        print("no espdisp BLE device found", file=sys.stderr)
+        return 1
+    async with BleakClient(d) as c:
+        await c.write_gatt_char(NUS_RX, cmd.encode(), response=False)
+        await asyncio.sleep(wait_after)
+    print(f"# ble: {cmd} sent", file=sys.stderr)
+    return 0
+
+
+# ---------- HTTP helpers (with optional --remote SSH proxy) ----------
+
+def _curl_argv(url: str, timeout: float) -> list[str]:
+    return ["curl", "-sS", "--max-time", str(timeout), url]
+
+
+def http_get(url: str, timeout: float, remote: Optional[str]) -> tuple[int, str]:
+    """Returns (returncode, stdout). Stderr is forwarded to ours so
+    network errors surface. With --remote, runs curl over SSH."""
+    if remote:
+        argv = ["ssh", "-o", "BatchMode=yes", remote, " ".join(shlex.quote(a) for a in _curl_argv(url, timeout))]
+    else:
+        argv = _curl_argv(url, timeout)
+    res = subprocess.run(argv, capture_output=True, text=True, timeout=timeout + 10)
+    if res.stderr:
+        sys.stderr.write(res.stderr)
+    return res.returncode, res.stdout
+
+
+def http_get_json(url: str, timeout: float, remote: Optional[str]) -> Optional[dict]:
+    rc, body = http_get(url, timeout, remote)
+    if rc != 0 or not body:
+        return None
+    try:
+        return json.loads(body)
+    except json.JSONDecodeError as e:
+        print(f"non-json response: {e}", file=sys.stderr)
+        return None
+
+
+def resolve_ip(args) -> Optional[str]:
+    """Return DEVICE_IP -- explicit flag first, then discover."""
+    if getattr(args, "device_ip", None):
+        return args.device_ip
+    # Defer to existing discover_device.py to keep the discovery logic
+    # in one place. Strip the resolved IP off its stdout.
+    here = os.path.dirname(os.path.abspath(__file__))
+    argv = ["python3", os.path.join(here, "discover_device.py")]
+    if getattr(args, "name", None):
+        argv += ["--name", args.name]
+    res = subprocess.run(argv, capture_output=True, text=True, timeout=20)
+    if res.returncode != 0:
+        sys.stderr.write(res.stderr)
+        return None
+    return res.stdout.strip() or None
+
+
+# ---------- Subcommands ----------
+
+def cmd_state(args) -> int:
+    ip = resolve_ip(args)
+    if not ip:
+        return 1
+    doc = http_get_json(f"http://{ip}/api/state", args.timeout, args.remote)
+    if doc is None:
+        return 1
+    if args.field:
+        # Dotted path: device.firmware_version -> doc["device"]["firmware_version"]
+        cur = doc
+        for part in args.field.split("."):
+            if not isinstance(cur, dict) or part not in cur:
+                print("", file=sys.stderr)
+                return 1
+            cur = cur[part]
+        print(cur)
+    else:
+        json.dump(doc, sys.stdout, indent=2, sort_keys=True)
+        sys.stdout.write("\n")
+    return 0
+
+
+def cmd_logs(args) -> int:
+    ip = resolve_ip(args)
+    if not ip:
+        return 1
+    url = f"http://{ip}/api/logs?since={args.since}&limit={args.limit}"
+    rc, body = http_get(url, args.timeout, args.remote)
+    if rc != 0:
+        return 1
+    sys.stdout.write(body)
+    if not body.endswith("\n"):
+        sys.stdout.write("\n")
+    return 0
+
+
+def cmd_logs_tail(args) -> int:
+    """Equivalent to tools/lab-logger/loglistener.py - included here so
+    a single `espdisp logs tail` works without the lab-logger bundle."""
+    s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+    s.setsockopt(socket.SOL_SOCKET, socket.SO_BROADCAST, 1)
+    s.bind(("0.0.0.0", args.port))
+    signal.signal(signal.SIGTERM, lambda *_: sys.exit(0))
+    sys.stdout.write(f"# espdisp UDP log tail on :{args.port}\n")
+    sys.stdout.flush()
+    while True:
+        data, addr = s.recvfrom(4096)
+        ts = datetime.datetime.now().isoformat(timespec="milliseconds")
+        text = data.decode("utf-8", "replace").rstrip("\r\n")
+        sys.stdout.write(f"{ts}  [{addr[0]}]  {text}\n")
+        sys.stdout.flush()
+
+
+def cmd_discover(args) -> int:
+    here = os.path.dirname(os.path.abspath(__file__))
+    argv = ["python3", os.path.join(here, "discover_device.py")]
+    if args.name:
+        argv += ["--name", args.name]
+    if args.method != "auto":
+        argv += ["--method", args.method]
+    if args.json:
+        argv += ["--json"]
+    return subprocess.run(argv).returncode
+
+
+def cmd_recover(args) -> int:
+    """BLE wifi-reconnect + wait for ping reachable. Used after the
+    OTA wedge or any time the device's STA is half-up. With --remote
+    the ping check runs there, since this host typically can't see
+    the device subnet directly."""
+    rc = asyncio.run(ble_fire_and_forget("wifi-reconnect", args.name, args.timeout))
+    if rc != 0:
+        return rc
+    deadline = time.monotonic() + args.timeout
+    ip = args.device_ip or resolve_ip(args)
+    if not ip:
+        return 1
+    while time.monotonic() < deadline:
+        if args.remote:
+            argv = ["ssh", "-o", "BatchMode=yes", args.remote, f"ping -c 1 -W 1 {ip}"]
+        else:
+            argv = ["ping", "-c", "1", "-W", "1", ip]
+        if subprocess.run(argv, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL).returncode == 0:
+            print(f"# {ip} reachable", file=sys.stderr)
+            return 0
+        time.sleep(2)
+    print(f"# {ip} still unreachable after {args.timeout}s", file=sys.stderr)
+    return 1
+
+
+def cmd_watch(args) -> int:
+    ip = resolve_ip(args)
+    if not ip:
+        return 1
+    prev: dict = {}
+    while True:
+        doc = http_get_json(f"http://{ip}/api/state", args.timeout, args.remote) or {}
+        ts = datetime.datetime.now().isoformat(timespec="seconds")
+        dev = doc.get("device", {})
+        mgr = doc.get("manager", {})
+        sk = doc.get("sk", {})
+        line = (f"{ts}  heap={dev.get('heap_free', 0) // 1024}k "
+                f"psram={dev.get('psram_free', 0) // 1024}k "
+                f"sk={sk.get('state')} task_iters={sk.get('task_iters')} "
+                f"mgr.hb={mgr.get('lastHeartbeatCode')} "
+                f"uptime={dev.get('uptime_ms', 0) // 1000}s")
+        # Flag uptime regression (device rebooted) loud.
+        prev_up = prev.get("device", {}).get("uptime_ms", 0)
+        if prev_up and dev.get("uptime_ms", 0) < prev_up:
+            sys.stdout.write(f"!! REBOOTED (prev_uptime={prev_up // 1000}s)\n")
+        sys.stdout.write(line + "\n")
+        sys.stdout.flush()
+        prev = doc
+        time.sleep(args.interval)
+
+
+# ---------- CLI plumbing ----------
+
+def die(msg: str, code: int = 2) -> None:
+    print(msg, file=sys.stderr)
+    sys.exit(code)
+
+
+def add_common_args(p: argparse.ArgumentParser) -> None:
+    p.add_argument("--device-ip", default=os.environ.get("ESPDISP_DEVICE_IP"),
+                   help="Pin HTTP target; otherwise auto-discover.")
+    p.add_argument("--remote", default=os.environ.get("ESPDISP_REMOTE"),
+                   help="user@host SSH relay for HTTP/ping operations.")
+    p.add_argument("--name", default=None,
+                   help="BLE device-name filter (default: any 'espdisp*').")
+    p.add_argument("--timeout", type=float, default=DEFAULT_HTTP_TIMEOUT,
+                   help=f"Per-op timeout in seconds (default {DEFAULT_HTTP_TIMEOUT}).")
+
+
+def main(argv: Optional[list[str]] = None) -> int:
+    parser = argparse.ArgumentParser(description=__doc__,
+                                     formatter_class=argparse.RawDescriptionHelpFormatter)
+    sub = parser.add_subparsers(dest="cmd", required=True)
+
+    # --- ble ---
+    p_ble = sub.add_parser("ble", help="BLE NUS operations")
+    ble_sub = p_ble.add_subparsers(dest="ble_cmd", required=True)
+
+    p_ble_cmd = ble_sub.add_parser("cmd", help="Send commands, stream notifications")
+    add_common_args(p_ble_cmd)
+    p_ble_cmd.add_argument("commands", nargs="+", help="Commands to send (one per arg).")
+    p_ble_cmd.add_argument("--wait", type=float, default=3.0,
+                           help="Seconds to keep listening after sending (default 3).")
+
+    p_ble_ip = ble_sub.add_parser("ip", help="Get current IP from device")
+    add_common_args(p_ble_ip)
+
+    p_ble_reboot = ble_sub.add_parser("reboot", help="Reboot the device")
+    add_common_args(p_ble_reboot)
+
+    p_ble_wifi = ble_sub.add_parser("wifi-reconnect", help="Force WiFi reconnect")
+    add_common_args(p_ble_wifi)
+
+    # --- state / logs ---
+    p_state = sub.add_parser("state", help="Fetch /api/state")
+    add_common_args(p_state)
+    p_state.add_argument("--field", default=None,
+                         help="Dotted JSON path (e.g. device.firmware_version) to print.")
+
+    p_logs = sub.add_parser("logs", help="Fetch /api/logs or tail UDP broadcasts")
+    logs_sub = p_logs.add_subparsers(dest="logs_cmd", required=False)
+    add_common_args(p_logs)
+    p_logs.add_argument("--since", type=int, default=0, help="Starting sequence number.")
+    p_logs.add_argument("--limit", type=int, default=32, help="Max entries (cap 96).")
+
+    p_logs_tail = logs_sub.add_parser("tail", help="UDP listener (debug FW only)")
+    p_logs_tail.add_argument("--port", type=int, default=9999)
+
+    # --- discover ---
+    p_disc = sub.add_parser("discover", help="Locate device (mDNS, BLE)")
+    p_disc.add_argument("--name", default=None)
+    p_disc.add_argument("--method", choices=("auto", "mdns", "ble"), default="auto")
+    p_disc.add_argument("--json", action="store_true")
+
+    # --- composite ---
+    p_recover = sub.add_parser("recover", help="BLE wifi-reconnect + wait for ping")
+    add_common_args(p_recover)
+
+    p_watch = sub.add_parser("watch", help="Periodic /api/state poll with diff")
+    add_common_args(p_watch)
+    p_watch.add_argument("--interval", type=float, default=5.0)
+
+    args = parser.parse_args(argv)
+
+    if args.cmd == "ble":
+        if args.ble_cmd == "cmd":
+            return asyncio.run(ble_cmd(args.commands, args.name, args.wait, args.timeout))
+        if args.ble_cmd == "ip":
+            return asyncio.run(ble_query_ip(args.name, args.timeout))
+        if args.ble_cmd == "reboot":
+            return asyncio.run(ble_fire_and_forget("reboot", args.name, args.timeout))
+        if args.ble_cmd == "wifi-reconnect":
+            return asyncio.run(ble_fire_and_forget("wifi-reconnect", args.name, args.timeout))
+    if args.cmd == "state":
+        return cmd_state(args)
+    if args.cmd == "logs":
+        if getattr(args, "logs_cmd", None) == "tail":
+            return cmd_logs_tail(args)
+        return cmd_logs(args)
+    if args.cmd == "discover":
+        return cmd_discover(args)
+    if args.cmd == "recover":
+        return cmd_recover(args)
+    if args.cmd == "watch":
+        return cmd_watch(args)
+    parser.error(f"unknown command: {args.cmd}")
+    return 2
+
+
+if __name__ == "__main__":
+    sys.exit(main())
