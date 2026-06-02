@@ -79,9 +79,30 @@ flash: setup  ## Flash via USB (uses PORT, auto-detected if not set)
 	@test -n "$(PORT)" || { echo "No USB serial port found. Set PORT=<path>." >&2; exit 1; }
 	ESPDISP_VERSION=$(PROJECT_VERSION) $(PIO) run -e $(ENV) -t upload --upload-port $(PORT)
 
-ota: setup  ## Flash via WiFi (DEVICE_IP defaults to espdisp.local)
-	$(eval OTA_TARGET := $(if $(DEVICE_IP),$(DEVICE_IP),espdisp.local))
+discover:  ## Discover the device on the LAN (mDNS) or over BLE; prints IP. NAME=<filter> optional.
+	@python3 tools/discover_device.py $(if $(NAME),--name $(NAME),)
+
+discover-json:  ## Same as discover but prints full JSON record (ip, name, port, source, txt).
+	@python3 tools/discover_device.py --json $(if $(NAME),--name $(NAME),)
+
+# ota target: explicit DEVICE_IP wins. Otherwise we run tools/discover_device.py
+# (mDNS _espdisp._tcp -> _arduino._tcp -> BLE NUS `ip` query) and use whatever
+# it returns. Pass NAME=<substring> to disambiguate when multiple devices are
+# visible. Fails loudly if discovery returns nothing.
+ota: setup  ## Flash via WiFi. DEVICE_IP=<ip> to pin, NAME=<filter> to scope discovery.
+	$(eval OTA_TARGET := $(if $(DEVICE_IP),$(DEVICE_IP),$(shell python3 tools/discover_device.py $(if $(NAME),--name $(NAME),))))
+	@test -n "$(OTA_TARGET)" || { echo "OTA target not resolved: pass DEVICE_IP=<ip> or run 'make discover'" >&2; exit 1; }
+	@echo "[ota] target=$(OTA_TARGET)"
 	ESPDISP_VERSION=$(PROJECT_VERSION) $(PIO) run -e ota -t upload --upload-port $(OTA_TARGET)
+
+flash-auto: setup  ## USB if a serial port is present, else OTA via discovery.
+	@if [ -n "$(PORT)" ]; then \
+	  echo "[flash-auto] USB port $(PORT)"; \
+	  $(MAKE) flash PORT=$(PORT); \
+	else \
+	  echo "[flash-auto] no USB port - falling back to OTA discovery"; \
+	  $(MAKE) ota $(if $(NAME),NAME=$(NAME),); \
+	fi
 
 monitor:  ## Open serial monitor at 115200 baud
 	@test -n "$(PORT)" || { echo "No USB serial port found. Set PORT=<path>." >&2; exit 1; }
