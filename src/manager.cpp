@@ -56,8 +56,30 @@ constexpr uint32_t DEFAULT_COMMAND_POLL_MS = 10000;
 constexpr uint32_t MIN_HEARTBEAT_MS = 30000;
 constexpr uint32_t MIN_COMMAND_POLL_MS = 15000;
 constexpr uint32_t TRANSPORT_FAILURE_BACKOFF_MS = 60000;
+constexpr uint32_t LOW_HEAP_BACKOFF_MS = 60000;
+constexpr size_t MIN_MANAGER_INTERNAL_HEAP = 24 * 1024;
+constexpr size_t MIN_MANAGER_INTERNAL_BLOCK = 8 * 1024;
 constexpr uint16_t HTTP_CONNECT_TIMEOUT_MS = 1000;
 constexpr uint16_t HTTP_READ_TIMEOUT_MS = 1500;
+
+class PsramJsonAllocator : public ArduinoJson::Allocator {
+  public:
+    void *allocate(size_t size) override {
+        void *ptr = heap_caps_malloc(size, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+        if (!ptr) ptr = heap_caps_malloc(size, MALLOC_CAP_8BIT);
+        return ptr;
+    }
+
+    void deallocate(void *ptr) override { heap_caps_free(ptr); }
+
+    void *reallocate(void *ptr, size_t new_size) override {
+        void *out = heap_caps_realloc(ptr, new_size, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+        if (!out) out = heap_caps_realloc(ptr, new_size, MALLOC_CAP_8BIT);
+        return out;
+    }
+};
+
+PsramJsonAllocator s_json_allocator;
 
 String s_endpoint;
 String s_token;     // device/dev/provision token sent as X-EspDisp-Authorization
@@ -178,6 +200,67 @@ constexpr int MAX_HEARTBEAT_RESP_BYTES = 4 * 1024;
 constexpr int MAX_CONFIG_BYTES = 32 * 1024;
 constexpr int MAX_COMMANDS_BYTES = 8 * 1024;
 
+void record_error(const char *fmt, ...);
+
+struct PsramJsonPayload {
+    uint8_t *data = nullptr;
+    size_t len = 0;
+
+    PsramJsonPayload() = default;
+    ~PsramJsonPayload() {
+        if (data) heap_caps_free(data);
+    }
+
+    PsramJsonPayload(const PsramJsonPayload &) = delete;
+    PsramJsonPayload &operator=(const PsramJsonPayload &) = delete;
+};
+
+bool serialize_json_payload(JsonDocument &doc, PsramJsonPayload &payload, const char *who) {
+    size_t len = measureJson(doc);
+    auto *buf = (uint8_t *)heap_caps_malloc(len + 1, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+    if (!buf) buf = (uint8_t *)heap_caps_malloc(len + 1, MALLOC_CAP_8BIT);
+    if (!buf) {
+        record_error("[mgr] %s payload alloc failed (%u bytes)", who, (unsigned)(len + 1));
+        return false;
+    }
+    size_t written = serializeJson(doc, (char *)buf, len + 1);
+    if (written != len) {
+        heap_caps_free(buf);
+        record_error("[mgr] %s payload serialize failed (%u/%u)", who, (unsigned)written,
+                     (unsigned)len);
+        return false;
+    }
+    payload.data = buf;
+    payload.len = len;
+    return true;
+}
+
+int post_json(HTTPClient &http, JsonDocument &doc, const char *who) {
+    PsramJsonPayload payload;
+    if (!serialize_json_payload(doc, payload, who)) return -4;
+    return http.POST(payload.data, payload.len);
+}
+
+bool deserialize_http_json(HTTPClient &http, JsonDocument &doc, const char *who) {
+    DeserializationError err = deserializeJson(doc, http.getStream());
+    if (err != DeserializationError::Ok) {
+        record_error("[mgr] %s JSON parse failed: %s", who, err.c_str());
+        return false;
+    }
+    return true;
+}
+
+bool manager_heap_ready(const char *op) {
+    size_t free = heap_caps_get_free_size(MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
+    size_t largest = heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
+    if (free < MIN_MANAGER_INTERNAL_HEAP || largest < MIN_MANAGER_INTERNAL_BLOCK) {
+        record_error("[mgr] skip %s: low internal heap free=%u largest=%u", op, (unsigned)free,
+                     (unsigned)largest);
+        return false;
+    }
+    return true;
+}
+
 // Returns true iff the Content-Length header (if any) is within `cap`.
 // HTTPClient::getSize() returns -1 when the server omits Content-Length;
 // in that case we accept the read but rely on the small timeouts to
@@ -276,9 +359,8 @@ int fetch_discovery(const String &base, String *out_base_path = nullptr) {
     prepare_http(http);
     int code = http.GET();
     if (code == 200 && resp_within_cap(http, MAX_DISCOVERY_BYTES, "discovery")) {
-        String body = http.getString();
-        JsonDocument d;
-        if (deserializeJson(d, body) == DeserializationError::Ok) {
+        JsonDocument d(&s_json_allocator);
+        if (deserialize_http_json(http, d, "discovery")) {
             apply_manager_intervals(d["intervals"]["heartbeatMs"] | 0,
                                     d["intervals"]["commandPollMs"] | 0);
             if (out_base_path && d["basePath"].is<const char *>()) {
@@ -297,12 +379,11 @@ int fetch_discovery(const String &base, String *out_base_path = nullptr) {
 int do_register() {
     if (s_endpoint.length() == 0) return -1;
     if (WiFi.status() != WL_CONNECTED) return -2;
+    if (!manager_heap_ready("register")) return -5;
     s_health = HealthState::Registering;
 
-    JsonDocument body;
+    JsonDocument body(&s_json_allocator);
     device_identity::to_json_doc(body);
-    String payload;
-    serializeJson(body, payload);
 
     String bases[2];
     int base_count = 0;
@@ -317,7 +398,6 @@ int do_register() {
     }
 
     int code = -3;
-    String resp;
     String successful_base;
     for (int i = 0; i < base_count; ++i) {
         // Probe discovery first - if it 200s, pull intervals + confirm
@@ -334,11 +414,29 @@ int do_register() {
         // Short timeouts: HTTPClient defaults to ~10 s which trips the ESP32
         // task watchdog (5 s) and can brick the device on a slow/down manager.
         prepare_http(http, true);
-        code = http.POST(payload);
+        code = post_json(http, body, "register");
         if (code == 200 || code == 201) {
             if (resp_within_cap(http, MAX_HEARTBEAT_RESP_BYTES, "register")) {
-                resp = http.getString();
                 successful_base = bases[i];
+                JsonDocument r(&s_json_allocator);
+                if (deserialize_http_json(http, r, "register")) {
+                    if (successful_base.length() && successful_base != s_endpoint) {
+                        s_endpoint = successful_base;
+                        save_prefs();
+                    }
+                    const char *tok = r["deviceToken"] | "";
+                    if (tok && *tok) {
+                        s_token = tok;
+                        s_auth = AuthState::Provisioned;
+                        save_prefs();
+                        net::logf("[mgr] registered ok (token_len=%u)", (unsigned)s_token.length());
+                    }
+                    uint32_t hb = r["heartbeat"]["intervalMs"] | 0;
+                    if (!hb) hb = r["heartbeat_interval_ms"] | 0;
+                    uint32_t poll = r["commands"]["pollMs"] | 0;
+                    if (!poll) poll = r["command_poll_interval_ms"] | 0;
+                    apply_manager_intervals(hb, poll);
+                }
             }
             http.end();
             break;
@@ -347,27 +445,7 @@ int do_register() {
         // 404 from /plugins/... means this is likely the standalone mock.
         if (code != 404) break;
     }
-    if (code == 200 || code == 201) {
-        JsonDocument r;
-        if (deserializeJson(r, resp) == DeserializationError::Ok) {
-            if (successful_base.length() && successful_base != s_endpoint) {
-                s_endpoint = successful_base;
-                save_prefs();
-            }
-            const char *tok = r["deviceToken"] | "";
-            if (tok && *tok) {
-                s_token = tok;
-                s_auth = AuthState::Provisioned;
-                save_prefs();
-                net::logf("[mgr] registered ok (token_len=%u)", (unsigned)s_token.length());
-            }
-            uint32_t hb = r["heartbeat"]["intervalMs"] | 0;
-            if (!hb) hb = r["heartbeat_interval_ms"] | 0;
-            uint32_t poll = r["commands"]["pollMs"] | 0;
-            if (!poll) poll = r["command_poll_interval_ms"] | 0;
-            apply_manager_intervals(hb, poll);
-        }
-    } else {
+    if (!(code == 200 || code == 201)) {
         record_error("[mgr] register -> %d", code);
     }
     s_last_register_ms = millis();
@@ -438,6 +516,12 @@ void build_status_body(JsonDocument &doc) {
 
     JsonObject mem = doc["memory"].to<JsonObject>();
     mem["heap_free_kb"] = (uint32_t)(ESP.getFreeHeap() / 1024);
+    mem["internal_free_kb"] =
+        (uint32_t)(heap_caps_get_free_size(MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT) / 1024);
+    mem["internal_largest_block_kb"] =
+        (uint32_t)(heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT) / 1024);
+    mem["internal_min_free_kb"] =
+        (uint32_t)(heap_caps_get_minimum_free_size(MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT) / 1024);
     mem["psram_free_kb"] = (uint32_t)(heap_caps_get_free_size(MALLOC_CAP_SPIRAM) / 1024);
 
     JsonObject fw = doc["firmware"].to<JsonObject>();
@@ -914,18 +998,17 @@ bool apply_config(JsonDocument &cfg) {
 void post_ota_progress(const String &job_id, const char *state, int progress_pct = -1,
                        const char *detail = nullptr) {
     if (!is_provisioned() || job_id.length() == 0) return;
+    if (!manager_heap_ready("ota progress")) return;
     HTTPClient http;
     String url = build_url("/devices/") + device_identity::get().device_id + "/firmware/jobs/" +
                  job_id + "/progress";
     if (!http.begin(url)) return;
     prepare_http(http, true);
-    JsonDocument body;
+    JsonDocument body(&s_json_allocator);
     body["state"] = state;
     if (progress_pct >= 0) body["progress_pct"] = progress_pct;
     if (detail) body["detail"] = detail;
-    String payload;
-    serializeJson(body, payload);
-    int code = http.POST(payload);
+    int code = post_json(http, body, "ota progress");
     if (code != 200) {
         net::logf("[mgr-ota] progress %s -> %d", state, code);
     }
@@ -1218,16 +1301,15 @@ const char *execute_command(const char *type, JsonObject payload) {
 }
 
 void ack_command(const String &cmd_id, const char *result) {
+    if (!manager_heap_ready("command ack")) return;
     HTTPClient http;
     String url =
         build_url("/devices/") + device_identity::get().device_id + "/commands/" + cmd_id + "/ack";
     if (!http.begin(url)) return;
     prepare_http(http, true);
-    JsonDocument body;
+    JsonDocument body(&s_json_allocator);
     body["result"] = result;
-    String payload;
-    serializeJson(body, payload);
-    int code = http.POST(payload);
+    int code = post_json(http, body, "command ack");
     if (code != 200) {
         net::logf("[mgr] ack %s -> %d", cmd_id.c_str(), code);
     }
@@ -1237,6 +1319,7 @@ void ack_command(const String &cmd_id, const char *result) {
 int poll_commands() {
     if (!is_provisioned()) return -1;
     if (WiFi.status() != WL_CONNECTED) return -2;
+    if (!manager_heap_ready("commands")) return -5;
 
     HTTPClient http;
     String url = build_url("/devices/") + device_identity::get().device_id + "/commands";
@@ -1248,10 +1331,12 @@ int poll_commands() {
             http.end();
             return code;
         }
-        String resp = http.getString();
+        JsonDocument r(&s_json_allocator);
+        if (!deserialize_http_json(http, r, "commands")) {
+            http.end();
+            return code;
+        }
         http.end();  // close before any nested HTTP calls (acks)
-        JsonDocument r;
-        if (deserializeJson(r, resp) != DeserializationError::Ok) return code;
         JsonArray cmds = r["commands"].as<JsonArray>();
         size_t n = cmds.size();
         s_pending_cmd_count = n > 255 ? 255 : (uint8_t)n;
@@ -1284,6 +1369,7 @@ int poll_commands() {
 int fetch_config() {
     if (!is_provisioned()) return -1;
     if (WiFi.status() != WL_CONNECTED) return -2;
+    if (!manager_heap_ready("config fetch")) return -5;
 
     HTTPClient http;
     String url = build_url("/devices/") + device_identity::get().device_id + "/config";
@@ -1295,9 +1381,8 @@ int fetch_config() {
             http.end();
             return code;
         }
-        String resp = http.getString();
-        JsonDocument r;
-        if (deserializeJson(r, resp) == DeserializationError::Ok) {
+        JsonDocument r(&s_json_allocator);
+        if (deserialize_http_json(http, r, "config")) {
             String new_version = r["version"] | "";
             String new_hash = r["hash"] | "";
             JsonObject cfg_src;
@@ -1310,7 +1395,7 @@ int fetch_config() {
                 new_version = String(r["version"].as<int>());
             }
             if (cfg_src) {
-                JsonDocument cfg;
+                JsonDocument cfg(&s_json_allocator);
                 cfg.set(cfg_src);
                 // Spec 19 D2 -> D5: build a RenderPlan from the
                 // config so diagnostics can show it. Failures don't
@@ -1392,17 +1477,16 @@ int fetch_config() {
 int do_heartbeat() {
     if (!is_provisioned()) return -1;
     if (WiFi.status() != WL_CONNECTED) return -2;
+    if (!manager_heap_ready("heartbeat")) return -5;
 
-    JsonDocument body;
+    JsonDocument body(&s_json_allocator);
     build_status_body(body);
-    String payload;
-    serializeJson(body, payload);
 
     HTTPClient http;
     String url = build_url("/devices/") + device_identity::get().device_id + "/status";
     if (!http.begin(url)) return -3;
     prepare_http(http, true);
-    int code = http.POST(payload);
+    int code = post_json(http, body, "heartbeat");
     if (code == 401 || code == 403) {
         net::logf("[mgr] heartbeat auth failed (%d) - will re-register", code);
         lock_state();
@@ -1418,9 +1502,8 @@ int do_heartbeat() {
         s_force_register = true;
     } else if (code == 200 && resp_within_cap(http, MAX_HEARTBEAT_RESP_BYTES, "heartbeat")) {
         // F3: check if the server wants a config update.
-        String resp = http.getString();
-        JsonDocument r;
-        if (deserializeJson(r, resp) == DeserializationError::Ok) {
+        JsonDocument r(&s_json_allocator);
+        if (deserialize_http_json(http, r, "heartbeat")) {
             String want_ver = r["desiredConfig"]["version"] | "";
             String want_hash = r["desiredConfig"]["hash"] | "";
             if (!want_ver.length()) want_ver = r["desired_config_version"] | "";
@@ -1469,14 +1552,12 @@ int do_heartbeat() {
             build_url("/devices/") + device_identity::get().device_id + "/firmware/confirm";
         if (hc.begin(confirm_url)) {
             prepare_http(hc, true);
-            JsonDocument cbody;
+            JsonDocument cbody(&s_json_allocator);
             const auto &id = device_identity::get();
             cbody["version"] = id.firmware_version;
             cbody["build_time"] = id.build_time;
             cbody["git_commit"] = id.git_commit;
-            String payload;
-            serializeJson(cbody, payload);
-            int cc = hc.POST(payload);
+            int cc = post_json(hc, cbody, "firmware confirm");
             net::logf("[mgr] /firmware/confirm -> %d", cc);
             hc.end();
             if (cc >= 200 && cc < 300) s_ota_confirm_pending = false;
@@ -1524,7 +1605,9 @@ void worker(void *) {
                     // Back off: longer delay on transport errors to
                     // avoid pounding an unreachable peer.
                     next_register_attempt_ms = now + (rc < 0 ? 10000 : 5000);
-                    if (rc < 0) {
+                    if (rc == -5) {
+                        next_manager_http_ms = millis() + LOW_HEAP_BACKOFF_MS;
+                    } else if (rc < 0) {
                         next_manager_http_ms = millis() + TRANSPORT_FAILURE_BACKOFF_MS;
                     }
                 }
@@ -1533,6 +1616,11 @@ void worker(void *) {
         if (prov && now >= next_heartbeat_ms) {
             int rc = do_heartbeat();
             next_heartbeat_ms = millis() + s_heartbeat_interval_ms;
+            if (rc == -5) {
+                next_manager_http_ms = millis() + LOW_HEAP_BACKOFF_MS;
+                vTaskDelay(pdMS_TO_TICKS(500));
+                continue;
+            }
             if (rc < 0) {
                 next_manager_http_ms = millis() + TRANSPORT_FAILURE_BACKOFF_MS;
                 vTaskDelay(pdMS_TO_TICKS(500));
@@ -1542,6 +1630,11 @@ void worker(void *) {
         if (prov && s_config_fetch_pending) {
             s_config_fetch_pending = false;
             int rc = fetch_config();
+            if (rc == -5) {
+                next_manager_http_ms = millis() + LOW_HEAP_BACKOFF_MS;
+                vTaskDelay(pdMS_TO_TICKS(500));
+                continue;
+            }
             if (rc < 0) {
                 next_manager_http_ms = millis() + TRANSPORT_FAILURE_BACKOFF_MS;
                 vTaskDelay(pdMS_TO_TICKS(500));
@@ -1551,6 +1644,11 @@ void worker(void *) {
         if (prov && now >= next_command_poll_ms) {
             int rc = poll_commands();
             next_command_poll_ms = millis() + s_command_poll_interval_ms;
+            if (rc == -5) {
+                next_manager_http_ms = millis() + LOW_HEAP_BACKOFF_MS;
+                vTaskDelay(pdMS_TO_TICKS(500));
+                continue;
+            }
             if (rc < 0) {
                 next_manager_http_ms = millis() + TRANSPORT_FAILURE_BACKOFF_MS;
                 vTaskDelay(pdMS_TO_TICKS(500));
@@ -1840,7 +1938,7 @@ bool handleSerialCommand(const String &line) {
             net::logf("[mgr] no render plan applied yet");
             return true;
         }
-        JsonDocument out;
+        JsonDocument out(&s_json_allocator);
         out["layout_variant"] = s_render_plan->layout_variant;
         out["widget_variant"] = s_render_plan->widget_variant;
         out["display"]["width"] = s_render_plan->display_width;
