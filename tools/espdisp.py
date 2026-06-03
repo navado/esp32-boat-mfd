@@ -32,6 +32,24 @@ Common options:
   --name SUBSTRING        BLE device-name filter (default: any "espdisp*").
   --timeout SECONDS       Per-op timeout (default per-subcommand).
 
+Configuration precedence (highest first):
+  1. command-line flag                 --remote compulab@192.168.2.11
+  2. process environment               ESPDISP_REMOTE=compulab@192.168.2.11
+  3. `.env.test.local` at repo root    REMOTE_HOST=compulab@192.168.2.11
+     (gitignored; same file used by lab-logger/deploy.sh and the
+     existing system-test tooling, so one config covers everything)
+  4. `.env.test` at repo root          tracked defaults; usually has
+                                       DEVICE_IP=10.42.0.67 already
+
+Recognised env keys (and the .env aliases we also accept for
+interoperability with the existing scripts):
+
+  ESPDISP_REMOTE      | REMOTE_HOST            -> --remote
+  ESPDISP_DEVICE_IP   | DEVICE_IP | ESPDISP_HOST -> --device-ip
+  ESPDISP_BLE_NAME    | ESPDISP_BLE_NAME       -> --name
+
+Print effective config with `espdisp config`.
+
 Exit codes: 0 success, 1 not found / not reachable, 2 usage error.
 """
 
@@ -57,6 +75,106 @@ NUS_TX = "6e400003-b5a3-f393-e0a3-9f4dd9e3a05a"  # notify from device
 
 DEFAULT_BLE_TIMEOUT = 10.0
 DEFAULT_HTTP_TIMEOUT = 8.0
+
+# Aliases for env keys we map onto our canonical ESPDISP_* names. The
+# left column wins on first match (process env), then we fall through
+# to the right column - which uses the same names other repo tools
+# already set in .env.test / .env.test.local. Single source of truth
+# for "where does the lab IP come from" across the repo.
+ENV_ALIASES: dict[str, tuple[str, ...]] = {
+    "ESPDISP_REMOTE":    ("ESPDISP_REMOTE", "REMOTE_HOST"),
+    "ESPDISP_DEVICE_IP": ("ESPDISP_DEVICE_IP", "DEVICE_IP", "ESPDISP_HOST"),
+    "ESPDISP_BLE_NAME":  ("ESPDISP_BLE_NAME",),
+}
+
+_ENV_FILE_PATTERN = re.compile(
+    r"^[[:space:]]*(?:export[[:space:]]+)?([A-Z_][A-Z0-9_]*)=(.*)$"
+    .replace("[[:space:]]", "[ \t]")  # POSIX class -> Python char class
+)
+
+
+_PARAM_SUBST = re.compile(r"\$\{([A-Z_][A-Z0-9_]*):-([^}]*)\}")
+_VAR_SUBST = re.compile(r"\$\{?([A-Z_][A-Z0-9_]*)\}?")
+
+
+def _strip_quotes(v: str) -> str:
+    v = v.strip()
+    if len(v) >= 2 and v[0] == v[-1] and v[0] in ("'", '"'):
+        return v[1:-1]
+    # Strip trailing inline comment when value is unquoted.
+    hash_at = v.find(" #")
+    return v if hash_at < 0 else v[:hash_at].rstrip()
+
+
+def _expand_value(v: str, scope: dict[str, str]) -> str:
+    """Resolve `${VAR:-default}` and `$VAR` against `scope` (and
+    falling back to os.environ). Matches what `.env.test` files
+    in this repo use - the existing provision_device.py loader
+    accepts the same syntax."""
+    def repl_default(m: re.Match) -> str:
+        name, default = m.group(1), m.group(2)
+        return scope.get(name) or os.environ.get(name) or default
+
+    def repl_plain(m: re.Match) -> str:
+        name = m.group(1)
+        return scope.get(name) or os.environ.get(name) or ""
+
+    v = _PARAM_SUBST.sub(repl_default, v)
+    v = _VAR_SUBST.sub(repl_plain, v)
+    return v
+
+
+def _load_env_file(path: str) -> dict[str, str]:
+    """Tolerant key=value parser. Accepts `KEY=value`, `export KEY=value`,
+    quoted values. Inline `# comment` allowed for unquoted values. Lines
+    we don't recognize are skipped silently - this is a best-effort
+    loader, not a shell."""
+    out: dict[str, str] = {}
+    try:
+        text = open(path, "r", encoding="utf-8").read()
+    except OSError:
+        return out
+    for line in text.splitlines():
+        line = line.strip()
+        if not line or line.startswith("#"):
+            continue
+        m = _ENV_FILE_PATTERN.match(line)
+        if not m:
+            continue
+        key = m.group(1)
+        raw = _strip_quotes(m.group(2))
+        # Expand against values already parsed from this file plus the
+        # process env, so later lines that reference earlier keys work.
+        out[key] = _expand_value(raw, out)
+    return out
+
+
+def load_env_defaults() -> None:
+    """Populate os.environ from .env.test and .env.test.local at the
+    repo root (.local wins). Only fills keys that aren't already set in
+    the process environment - so a one-off `ESPDISP_REMOTE=foo espdisp`
+    invocation overrides the file just as a CLI flag overrides env.
+
+    Then canonicalize: for each ESPDISP_* canonical key, if it's unset
+    and an alias is set, copy the alias value over so the rest of the
+    CLI only has to read the canonical name.
+    """
+    # tools/espdisp.py lives in <repo>/tools/, so .. is the repo root.
+    here = os.path.dirname(os.path.abspath(__file__))
+    repo = os.path.dirname(here)
+    base = _load_env_file(os.path.join(repo, ".env.test"))
+    overlay = _load_env_file(os.path.join(repo, ".env.test.local"))
+    base.update(overlay)
+    for k, v in base.items():
+        os.environ.setdefault(k, v)
+    for canonical, aliases in ENV_ALIASES.items():
+        if os.environ.get(canonical):
+            continue
+        for alias in aliases:
+            val = os.environ.get(alias)
+            if val:
+                os.environ[canonical] = val
+                break
 
 
 # ---------- BLE helpers ----------
@@ -327,20 +445,74 @@ def die(msg: str, code: int = 2) -> None:
 
 
 def add_common_args(p: argparse.ArgumentParser) -> None:
-    p.add_argument("--device-ip", default=os.environ.get("ESPDISP_DEVICE_IP"),
-                   help="Pin HTTP target; otherwise auto-discover.")
-    p.add_argument("--remote", default=os.environ.get("ESPDISP_REMOTE"),
-                   help="user@host SSH relay for HTTP/ping operations.")
+    # Defaults resolved at call time so load_env_defaults() runs first
+    # in main() and we pick up any .env.test.local values.
+    p.add_argument("--device-ip", default=None,
+                   help="Pin HTTP target; otherwise auto-discover. "
+                        "Falls back to $ESPDISP_DEVICE_IP / $DEVICE_IP.")
+    p.add_argument("--remote", default=None,
+                   help="user@host SSH relay for HTTP/ping operations. "
+                        "Falls back to $ESPDISP_REMOTE / $REMOTE_HOST.")
     p.add_argument("--name", default=None,
-                   help="BLE device-name filter (default: any 'espdisp*').")
+                   help="BLE device-name filter (default: any 'espdisp*'). "
+                        "Falls back to $ESPDISP_BLE_NAME.")
     p.add_argument("--timeout", type=float, default=DEFAULT_HTTP_TIMEOUT,
                    help=f"Per-op timeout in seconds (default {DEFAULT_HTTP_TIMEOUT}).")
 
 
+def apply_env_defaults(args: argparse.Namespace) -> None:
+    """Fill unset args from env (after load_env_defaults canonicalized
+    them). Keeps the precedence rule simple: CLI flag wins; otherwise
+    env (which already includes .env.test*); otherwise None/default."""
+    if getattr(args, "device_ip", None) is None:
+        args.device_ip = os.environ.get("ESPDISP_DEVICE_IP")
+    if getattr(args, "remote", None) is None:
+        args.remote = os.environ.get("ESPDISP_REMOTE")
+    if getattr(args, "name", None) is None:
+        args.name = os.environ.get("ESPDISP_BLE_NAME")
+
+
+def cmd_config(args) -> int:
+    """Dump effective configuration sources + resolved values, so a
+    user can verify which .env file fed which knob without grepping."""
+    here = os.path.dirname(os.path.abspath(__file__))
+    repo = os.path.dirname(here)
+    base = _load_env_file(os.path.join(repo, ".env.test"))
+    overlay = _load_env_file(os.path.join(repo, ".env.test.local"))
+    print(f"# repo root: {repo}")
+    print(f"# .env.test           : {'present' if base else 'missing'}")
+    print(f"# .env.test.local     : {'present' if overlay else 'missing'}")
+    print()
+    for canonical in ENV_ALIASES:
+        val = os.environ.get(canonical, "")
+        if not val:
+            print(f"{canonical:20s} = (unset)")
+            continue
+        # Best-effort source attribution: did the value come from
+        # process env directly, .env.test.local, or .env.test?
+        source = "process-env"
+        for alias in ENV_ALIASES[canonical]:
+            if alias in overlay and overlay[alias] == val:
+                source = ".env.test.local"
+                break
+            if alias in base and base[alias] == val:
+                source = ".env.test"
+                break
+        print(f"{canonical:20s} = {val:30s}   [{source}]")
+    return 0
+
+
 def main(argv: Optional[list[str]] = None) -> int:
+    # Load .env.test* before argparse so help text already sees any
+    # operator-set defaults. CLI flags still win - they're applied
+    # later via apply_env_defaults() which only fills unset values.
+    load_env_defaults()
+
     parser = argparse.ArgumentParser(description=__doc__,
                                      formatter_class=argparse.RawDescriptionHelpFormatter)
     sub = parser.add_subparsers(dest="cmd", required=True)
+
+    p_config = sub.add_parser("config", help="Show resolved config sources")
 
     # --- ble ---
     p_ble = sub.add_parser("ble", help="BLE NUS operations")
@@ -391,7 +563,10 @@ def main(argv: Optional[list[str]] = None) -> int:
     p_watch.add_argument("--interval", type=float, default=5.0)
 
     args = parser.parse_args(argv)
+    apply_env_defaults(args)
 
+    if args.cmd == "config":
+        return cmd_config(args)
     if args.cmd == "ble":
         if args.ble_cmd == "cmd":
             return asyncio.run(ble_cmd(args.commands, args.name, args.wait, args.timeout))
