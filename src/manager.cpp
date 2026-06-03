@@ -74,6 +74,78 @@ constexpr uint32_t LOW_HEAP_BACKOFF_MS = 60000;
 // of internal heap (HTTPClient instance + transient send/recv buffers).
 // 6 KiB free / 3 KiB largest leaves enough headroom for HTTPClient's
 // own internal allocations without choking the WiFi stack.
+// Typed status for the manager's HTTP-fronted entry points
+// (do_register, do_heartbeat, fetch_config, poll_commands). Each call
+// returns ManagerCall { status, http_code }. The status is exhaustive
+// over the failure modes; http_code is the HTTPClient response code
+// when status==Ok or HttpError (the >=200 / <300 split), zero
+// otherwise.
+//
+// History: these functions previously returned bare `int` where
+// negative numbers meant pre-flight failures and positive numbers
+// meant HTTP status. HTTPClient.POST() itself returns negative codes
+// for connection_refused, send_failed, etc., which COLLIDED with our
+// own pre-flight codes (-1 was both NotProvisioned and
+// HTTPC_ERROR_CONNECTION_REFUSED). On 2026-06-03 I misread a
+// `heartbeat -> -1` as WiFi-down when it was actually
+// connection-refused. The enum disambiguates statically.
+enum class ManagerStatus : uint8_t {
+    Ok,              // 2xx response, success
+    HttpError,       // got an HTTP response but >=300
+    NotProvisioned,  // no endpoint / no token saved
+    WifiDown,        // WiFi.status() != WL_CONNECTED
+    LowHeap,         // manager_heap_ready() refused (backoff)
+    BeginFailed,     // http.begin(url) returned false (bad URL)
+    PayloadError,    // post_json couldn't serialize / alloc the body
+    SendFailed,      // HTTPClient POST returned a negative transport code
+    BodyTooLarge,    // resp_within_cap() rejected the response
+    BodyParseError,  // deserialize_http_json() failed
+};
+
+struct ManagerCall {
+    ManagerStatus status;
+    int http_code;  // HTTPClient response code; meaningful for Ok/HttpError
+
+    static ManagerCall ok(int code) { return {ManagerStatus::Ok, code}; }
+    static ManagerCall http_error(int code) { return {ManagerStatus::HttpError, code}; }
+    static ManagerCall fail(ManagerStatus s, int code = 0) { return {s, code}; }
+
+    bool is_ok() const { return status == ManagerStatus::Ok; }
+    // True if this call burned a transport (DNS / TCP / TLS) - distinct
+    // from pre-flight refusals like NotProvisioned/LowHeap which mean
+    // we never went out on the wire.
+    bool burned_transport() const {
+        return status == ManagerStatus::SendFailed || status == ManagerStatus::HttpError ||
+               status == ManagerStatus::BodyTooLarge || status == ManagerStatus::BodyParseError;
+    }
+};
+
+static const char *to_str(ManagerStatus s) {
+    switch (s) {
+    case ManagerStatus::Ok:
+        return "Ok";
+    case ManagerStatus::HttpError:
+        return "HttpError";
+    case ManagerStatus::NotProvisioned:
+        return "NotProvisioned";
+    case ManagerStatus::WifiDown:
+        return "WifiDown";
+    case ManagerStatus::LowHeap:
+        return "LowHeap";
+    case ManagerStatus::BeginFailed:
+        return "BeginFailed";
+    case ManagerStatus::PayloadError:
+        return "PayloadError";
+    case ManagerStatus::SendFailed:
+        return "SendFailed";
+    case ManagerStatus::BodyTooLarge:
+        return "BodyTooLarge";
+    case ManagerStatus::BodyParseError:
+        return "BodyParseError";
+    }
+    return "?";
+}
+
 constexpr size_t MIN_MANAGER_INTERNAL_HEAP = 6 * 1024;
 constexpr size_t MIN_MANAGER_INTERNAL_BLOCK = 3 * 1024;
 constexpr uint16_t HTTP_CONNECT_TIMEOUT_MS = 1000;
@@ -242,9 +314,14 @@ bool serialize_json_payload(JsonDocument &doc, PsramJsonPayload &payload, const 
     return true;
 }
 
+// Returns HTTP response code on success, an HTTPClient HTTPC_ERROR_*
+// negative on transport failure, or `INT_MIN` for "could not allocate
+// or serialize the payload" - chosen to avoid colliding with any
+// HTTPClient error value (all of which are -1..-11).
+static constexpr int POST_JSON_PAYLOAD_ERROR = INT_MIN;
 int post_json(HTTPClient &http, JsonDocument &doc, const char *who) {
     PsramJsonPayload payload;
-    if (!serialize_json_payload(doc, payload, who)) return -4;
+    if (!serialize_json_payload(doc, payload, who)) return POST_JSON_PAYLOAD_ERROR;
     return http.POST(payload.data, payload.len);
 }
 
@@ -383,10 +460,10 @@ int fetch_discovery(const String &base, String *out_base_path = nullptr) {
 
 // POST /devices/register. On 200, store the returned bearer token +
 // any heartbeat/command-poll intervals the plugin reports.
-int do_register() {
-    if (s_endpoint.length() == 0) return -1;
-    if (WiFi.status() != WL_CONNECTED) return -2;
-    if (!manager_heap_ready("register")) return -5;
+ManagerCall do_register() {
+    if (s_endpoint.length() == 0) return ManagerCall::fail(ManagerStatus::NotProvisioned);
+    if (WiFi.status() != WL_CONNECTED) return ManagerCall::fail(ManagerStatus::WifiDown);
+    if (!manager_heap_ready("register")) return ManagerCall::fail(ManagerStatus::LowHeap);
     s_health = HealthState::Registering;
 
     JsonDocument body(&s_json_allocator);
@@ -458,7 +535,15 @@ int do_register() {
     s_last_register_ms = millis();
     s_last_register_code = code;
     s_health = (code >= 200 && code < 300) ? HealthState::Heartbeating : HealthState::Failed;
-    return code;
+    // post_json sentinel disambiguation: PAYLOAD_ERROR vs HTTPClient
+    // transport negative (both <0, but only one means "we built a bad
+    // body"). >=200/<300 = Ok, any other positive = HttpError, any
+    // negative = SendFailed (the loop above already records the
+    // numeric value via record_error).
+    if (code == POST_JSON_PAYLOAD_ERROR) return ManagerCall::fail(ManagerStatus::PayloadError);
+    if (code < 0) return ManagerCall::fail(ManagerStatus::SendFailed, code);
+    if (code >= 200 && code < 300) return ManagerCall::ok(code);
+    return ManagerCall::http_error(code);
 }
 
 void build_status_body(JsonDocument &doc) {
@@ -627,6 +712,20 @@ bool apply_config(JsonDocument &cfg) {
             if (!hostname_check::is_valid(hn)) {
                 record_error("[mgr] reject network.hostname=%s (invalid)", hn);
                 ok = false;
+            } else if (net::isLegacyDefaultDeviceId(String(hn))) {
+                // The plugin's default config carries
+                // `network.hostname=espdisp-device` (the literal legacy
+                // fallback from secrets.h). A device that has already
+                // resolved a MAC-derived id MUST NOT rename itself back
+                // to that placeholder - doing so triggered a periodic
+                // reboot loop (apply rename -> reboot -> migrate back to
+                // MAC id -> config drift -> rename again, every ~60 s).
+                // Refuse the rename silently; the manager's discovery
+                // path keeps using whatever the device actually reports.
+                net::logf_at(net::LOG_DEBUG,
+                             "[mgr] ignore network.hostname=%s (placeholder; "
+                             "would clobber MAC-derived id %s)",
+                             hn, device_identity::get().device_id);
             } else if (n["hostname"] != device_identity::get().device_id) {
                 String cmd = String("id ") + hn;
                 net::dispatchCommand(cmd);
@@ -1323,25 +1422,25 @@ void ack_command(const String &cmd_id, const char *result) {
     http.end();
 }
 
-int poll_commands() {
-    if (!is_provisioned()) return -1;
-    if (WiFi.status() != WL_CONNECTED) return -2;
-    if (!manager_heap_ready("commands")) return -5;
+ManagerCall poll_commands() {
+    if (!is_provisioned()) return ManagerCall::fail(ManagerStatus::NotProvisioned);
+    if (WiFi.status() != WL_CONNECTED) return ManagerCall::fail(ManagerStatus::WifiDown);
+    if (!manager_heap_ready("commands")) return ManagerCall::fail(ManagerStatus::LowHeap);
 
     HTTPClient http;
     String url = build_url("/devices/") + device_identity::get().device_id + "/commands";
-    if (!http.begin(url)) return -3;
+    if (!http.begin(url)) return ManagerCall::fail(ManagerStatus::BeginFailed);
     prepare_http(http);
     int code = http.GET();
     if (code == 200) {
         if (!resp_within_cap(http, MAX_COMMANDS_BYTES, "commands")) {
             http.end();
-            return code;
+            return ManagerCall::fail(ManagerStatus::BodyTooLarge, code);
         }
         JsonDocument r(&s_json_allocator);
         if (!deserialize_http_json(http, r, "commands")) {
             http.end();
-            return code;
+            return ManagerCall::fail(ManagerStatus::BodyParseError, code);
         }
         http.end();  // close before any nested HTTP calls (acks)
         JsonArray cmds = r["commands"].as<JsonArray>();
@@ -1364,29 +1463,34 @@ int poll_commands() {
         // After acking, pending drops to zero from our POV - the plugin
         // will repopulate on the next poll if new commands arrived.
         s_pending_cmd_count = 0;
-        return 200;
+        return ManagerCall::ok(code);
     }
     http.end();
+    if (code < 0) {
+        record_error("[mgr] commands send failed code=%d", code);
+        return ManagerCall::fail(ManagerStatus::SendFailed, code);
+    }
     if (code < 200 || code >= 300) {
         record_error("[mgr] commands fetch -> %d", code);
+        return ManagerCall::http_error(code);
     }
-    return code;
+    return ManagerCall::ok(code);
 }
 
-int fetch_config() {
-    if (!is_provisioned()) return -1;
-    if (WiFi.status() != WL_CONNECTED) return -2;
-    if (!manager_heap_ready("config fetch")) return -5;
+ManagerCall fetch_config() {
+    if (!is_provisioned()) return ManagerCall::fail(ManagerStatus::NotProvisioned);
+    if (WiFi.status() != WL_CONNECTED) return ManagerCall::fail(ManagerStatus::WifiDown);
+    if (!manager_heap_ready("config fetch")) return ManagerCall::fail(ManagerStatus::LowHeap);
 
     HTTPClient http;
     String url = build_url("/devices/") + device_identity::get().device_id + "/config";
-    if (!http.begin(url)) return -3;
+    if (!http.begin(url)) return ManagerCall::fail(ManagerStatus::BeginFailed);
     prepare_http(http);
     int code = http.GET();
     if (code == 200) {
         if (!resp_within_cap(http, MAX_CONFIG_BYTES, "config")) {
             http.end();
-            return code;
+            return ManagerCall::fail(ManagerStatus::BodyTooLarge, code);
         }
         JsonDocument r(&s_json_allocator);
         if (deserialize_http_json(http, r, "config")) {
@@ -1478,22 +1582,35 @@ int fetch_config() {
         net::logf("[mgr] config fetch -> %d", code);
     }
     http.end();
-    return code;
+    if (code < 0) return ManagerCall::fail(ManagerStatus::SendFailed, code);
+    if (code >= 200 && code < 300) return ManagerCall::ok(code);
+    return ManagerCall::http_error(code);
 }
 
-int do_heartbeat() {
-    if (!is_provisioned()) return -1;
-    if (WiFi.status() != WL_CONNECTED) return -2;
-    if (!manager_heap_ready("heartbeat")) return -5;
+ManagerCall do_heartbeat() {
+    if (!is_provisioned()) return ManagerCall::fail(ManagerStatus::NotProvisioned);
+    if (WiFi.status() != WL_CONNECTED) return ManagerCall::fail(ManagerStatus::WifiDown);
+    if (!manager_heap_ready("heartbeat")) return ManagerCall::fail(ManagerStatus::LowHeap);
 
     JsonDocument body(&s_json_allocator);
     build_status_body(body);
 
     HTTPClient http;
     String url = build_url("/devices/") + device_identity::get().device_id + "/status";
-    if (!http.begin(url)) return -3;
+    if (!http.begin(url)) return ManagerCall::fail(ManagerStatus::BeginFailed);
     prepare_http(http, true);
     int code = post_json(http, body, "heartbeat");
+    if (code == POST_JSON_PAYLOAD_ERROR) {
+        http.end();
+        return ManagerCall::fail(ManagerStatus::PayloadError);
+    }
+    if (code < 0) {
+        // HTTPClient transport error - the negative is one of
+        // HTTPC_ERROR_*. Record numeric value alongside the status.
+        record_error("[mgr] heartbeat send failed code=%d", code);
+        http.end();
+        return ManagerCall::fail(ManagerStatus::SendFailed, code);
+    }
     if (code == 401 || code == 403) {
         net::logf("[mgr] heartbeat auth failed (%d) - will re-register", code);
         lock_state();
@@ -1542,6 +1659,7 @@ int do_heartbeat() {
     http.end();
     s_last_heartbeat_ms = millis();
     s_last_heartbeat_code = code;
+    bool ok = (code >= 200 && code < 300);
     // do_register sets s_health on register success/failure, but until
     // now the heartbeat path never wrote it. That left already-
     // provisioned boots reporting health=idle indefinitely even though
@@ -1570,7 +1688,7 @@ int do_heartbeat() {
             if (cc >= 200 && cc < 300) s_ota_confirm_pending = false;
         }
     }
-    return code;
+    return ok ? ManagerCall::ok(code) : ManagerCall::http_error(code);
 }
 
 void worker(void *) {
@@ -1601,63 +1719,87 @@ void worker(void *) {
             vTaskDelay(pdMS_TO_TICKS(500));
             continue;
         }
+        // Translate a ManagerCall status into how long the worker
+        // should refuse to make another HTTP call. Bare `int` returns
+        // used to mix HTTP codes and HTTPClient error negatives in
+        // the same value space - the new switch is exhaustive over
+        // ManagerStatus so adding a status forces a deliberate
+        // backoff decision here.
+        auto apply_backoff = [&](ManagerCall r) -> bool {
+            // DEBUG log every non-Ok status so an operator widening
+            // the log level can see exactly which preflight or
+            // transport leg failed - the new typed status removes
+            // the ambiguity the old `int rc` had.
+            if (r.status != ManagerStatus::Ok) {
+                net::logf_at(net::LOG_DEBUG, "[mgr] status=%s http_code=%d", to_str(r.status),
+                             r.http_code);
+            }
+            // Returns true if the worker should `continue` (skip the
+            // rest of this iteration). Sets next_manager_http_ms.
+            switch (r.status) {
+            case ManagerStatus::Ok:
+                return false;
+            case ManagerStatus::HttpError:
+                // Server replied something non-2xx but didn't refuse
+                // transport - don't burn 60s of backoff for a 4xx.
+                return false;
+            case ManagerStatus::NotProvisioned:
+                // Caller already checked this before invoking, so this
+                // means state raced. Loop and try again next tick.
+                return false;
+            case ManagerStatus::WifiDown:
+                next_manager_http_ms = millis() + TRANSPORT_FAILURE_BACKOFF_MS;
+                return true;
+            case ManagerStatus::LowHeap:
+                next_manager_http_ms = millis() + LOW_HEAP_BACKOFF_MS;
+                return true;
+            case ManagerStatus::BeginFailed:
+            case ManagerStatus::PayloadError:
+            case ManagerStatus::SendFailed:
+            case ManagerStatus::BodyTooLarge:
+            case ManagerStatus::BodyParseError:
+                next_manager_http_ms = millis() + TRANSPORT_FAILURE_BACKOFF_MS;
+                return true;
+            }
+            return false;  // unreachable; -Wswitch-enum should catch missing cases
+        };
+
         if (force || !prov) {
             if (now >= next_register_attempt_ms) {
-                int rc = do_register();
-                if (rc >= 200 && rc < 300) {
+                ManagerCall r = do_register();
+                if (r.is_ok()) {
                     s_force_register = false;
                     next_heartbeat_ms = now + 1000;
                     next_manager_http_ms = 0;
                 } else {
-                    // Back off: longer delay on transport errors to
-                    // avoid pounding an unreachable peer.
-                    next_register_attempt_ms = now + (rc < 0 ? 10000 : 5000);
-                    if (rc == -5) {
-                        next_manager_http_ms = millis() + LOW_HEAP_BACKOFF_MS;
-                    } else if (rc < 0) {
-                        next_manager_http_ms = millis() + TRANSPORT_FAILURE_BACKOFF_MS;
-                    }
+                    // Longer delay on real transport errors so we don't
+                    // pound an unreachable peer.
+                    bool transport = r.burned_transport() || r.status == ManagerStatus::WifiDown;
+                    next_register_attempt_ms = now + (transport ? 10000 : 5000);
+                    apply_backoff(r);
                 }
             }
         }
         if (prov && now >= next_heartbeat_ms) {
-            int rc = do_heartbeat();
+            ManagerCall r = do_heartbeat();
             next_heartbeat_ms = millis() + s_heartbeat_interval_ms;
-            if (rc == -5) {
-                next_manager_http_ms = millis() + LOW_HEAP_BACKOFF_MS;
-                vTaskDelay(pdMS_TO_TICKS(500));
-                continue;
-            }
-            if (rc < 0) {
-                next_manager_http_ms = millis() + TRANSPORT_FAILURE_BACKOFF_MS;
+            if (apply_backoff(r)) {
                 vTaskDelay(pdMS_TO_TICKS(500));
                 continue;
             }
         }
         if (prov && s_config_fetch_pending) {
             s_config_fetch_pending = false;
-            int rc = fetch_config();
-            if (rc == -5) {
-                next_manager_http_ms = millis() + LOW_HEAP_BACKOFF_MS;
-                vTaskDelay(pdMS_TO_TICKS(500));
-                continue;
-            }
-            if (rc < 0) {
-                next_manager_http_ms = millis() + TRANSPORT_FAILURE_BACKOFF_MS;
+            ManagerCall r = fetch_config();
+            if (apply_backoff(r)) {
                 vTaskDelay(pdMS_TO_TICKS(500));
                 continue;
             }
         }
         if (prov && now >= next_command_poll_ms) {
-            int rc = poll_commands();
+            ManagerCall r = poll_commands();
             next_command_poll_ms = millis() + s_command_poll_interval_ms;
-            if (rc == -5) {
-                next_manager_http_ms = millis() + LOW_HEAP_BACKOFF_MS;
-                vTaskDelay(pdMS_TO_TICKS(500));
-                continue;
-            }
-            if (rc < 0) {
-                next_manager_http_ms = millis() + TRANSPORT_FAILURE_BACKOFF_MS;
+            if (apply_backoff(r)) {
                 vTaskDelay(pdMS_TO_TICKS(500));
                 continue;
             }

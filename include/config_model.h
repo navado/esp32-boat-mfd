@@ -43,7 +43,13 @@ enum class PosFormat : uint8_t { DDM = 0, DD = 1, DMS = 2 };
 
 struct UiConfig {
     Theme theme = Theme::Night;
-    uint8_t brightness = 200;
+    // Default to max PWM (255). The Sunton 4848S040's transflective-ish
+    // panel doesn't get readable below ~80% of full PWM under typical
+    // indoor lighting, and there's no upside to factory-defaulting low -
+    // the user can always dial it down from the Settings screen. The
+    // segmented control in screen_settings.cpp offers {32,80,128,200,255}
+    // so any of those choices remain valid post-load.
+    uint8_t brightness = 255;
     PosFormat pos_format = PosFormat::DDM;
     char default_screen[16] = "dashboard";
 };

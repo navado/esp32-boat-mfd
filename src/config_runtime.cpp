@@ -76,7 +76,7 @@ static void load_ui(UiConfig &c, DomainMeta &meta) {
         storage::Namespace p(NS_UI, true);
         if (p.is_key("rev")) {
             c.theme = (Theme)p.get_u8("theme", (uint8_t)Theme::Night);
-            c.brightness = p.get_u8("bright", 200);
+            c.brightness = p.get_u8("bright", 255);
             c.pos_format = (PosFormat)p.get_u8("pos_fmt", (uint8_t)PosFormat::DDM);
             std::string dft = p.get_string("default", "dashboard");
             strncpy(c.default_screen, dft.c_str(), sizeof(c.default_screen) - 1);
@@ -89,7 +89,7 @@ static void load_ui(UiConfig &c, DomainMeta &meta) {
     // Legacy compatibility: read old "ui" namespace if present.
     storage::Namespace legacy("ui", true);
     if (legacy.is_key("bright")) {
-        c.brightness = legacy.get_u8("bright", 200);
+        c.brightness = legacy.get_u8("bright", 255);
     }
     if (legacy.is_key("theme")) {
         std::string t = legacy.get_string("theme", "night");

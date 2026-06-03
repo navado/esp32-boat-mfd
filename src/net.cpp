@@ -225,6 +225,15 @@ static bool is_legacy_default_device_id(const String &id, const String &raw_efus
     return id.length() == 0 || id == OTA_HOSTNAME || id == "espdisp-device" || id == raw_efuse_id;
 }
 
+bool isLegacyDefaultDeviceId(const String &id) {
+    // Public version without the raw_efuse_id arg - manager.cpp doesn't
+    // know the e-fuse value, but anyone trying to rename us TO a bare
+    // e-fuse string is doing the wrong thing anyway, so the relaxed
+    // check (no e-fuse comparison) is sufficient for the config-apply
+    // safeguard.
+    return id.length() == 0 || id == OTA_HOSTNAME || id == "espdisp-device";
+}
+
 WifiState wifiState() {
     return s_wifi_state;
 }

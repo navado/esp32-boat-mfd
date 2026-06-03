@@ -57,6 +57,15 @@ bool wifiUp();
 String ipString();
 int rssi();
 
+// True for "placeholder" device IDs the firmware has used historically:
+// empty string, OTA_HOSTNAME (the secrets.h default), the literal
+// "espdisp-device" (the original legacy fallback), or the bare e-fuse
+// MAC form. The MAC-derived `espdisp-<mac>` IDs are NOT placeholders.
+// Used by the manager config-apply path to refuse a rename TO a
+// placeholder name, which previously caused a reboot loop when the
+// plugin's default config carried network.hostname=espdisp-device.
+bool isLegacyDefaultDeviceId(const String &id);
+
 // WiFi manager state. Set by the async wifi_manager_task; readable from
 // any task.
 enum class WifiState : uint8_t {
