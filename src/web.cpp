@@ -108,15 +108,12 @@ static bool require_api_auth() {
 
 // ---- /api/state --------------------------------------------------------
 
-static void handle_state() {
-    if (!require_api_auth()) return;
-    // /api/state builds a doc with ~80 fields across device/wifi/sk/manager/
-    // gestures/errors. On internal heap (the ArduinoJson v7 default) this
-    // is a multi-KiB allocation on a heap that idles at 11-15 KiB free -
-    // the same root cause as the manager bug fixed in f3c3c26. Route the
-    // tree through PSRAM via the shared allocator so frequent web-UI
-    // polling doesn't fragment internal SRAM.
-    JsonDocument doc(&espdisp::psram_json);
+// Build the core state document - what UI polls every few seconds. Cheap
+// to serialize, no LVGL state reads, no log-ring iteration. Heavy
+// forensic fields (touch counters, queue depths, gestures, recentErrors,
+// manager.lastCmd*) moved to /api/diag below so they don't run on
+// every poll.
+static void build_state_doc(JsonDocument &doc) {
     JsonObject dev = doc["device"].to<JsonObject>();
     dev["id"] = net::deviceId();
     dev["uptime_ms"] = (uint32_t)millis();
@@ -189,6 +186,48 @@ static void handle_state() {
                         : st.health == manager::HealthState::Registering ? "registering"
                         : st.health == manager::HealthState::Failed      ? "failed"
                                                                          : "idle";
+        // Manager keeps a couple of fields on the hot path because the
+        // web UI shows them prominently. The verbose command/firmware
+        // diagnostics + recent-errors list are in /api/diag.
+    }
+
+    JsonObject screen = doc["screen"].to<JsonObject>();
+    screen["index"] = ui::current_index();
+    screen["id"] = ui::current_id();
+    screen["title"] = ui::current_title();
+    screen["count"] = (uint32_t)ui::screen_count();
+
+    // Display state: brightness + theme. Consumed by spec 17 F4 tests
+    // (manager.brightness.set/theme.set commands assert /api/state.display
+    // reflects the new value).
+    JsonObject display = doc["display"].to<JsonObject>();
+    display["brightness"] = (uint32_t)ui::brightness();
+    JsonObject ui_o = doc["ui"].to<JsonObject>();
+    {
+        storage::Namespace pu("ui", true);
+        ui_o["theme"] = pu.get_string("theme", "night");
+    }
+}
+
+static void handle_state() {
+    if (!require_api_auth()) return;
+    JsonDocument doc(&espdisp::psram_json);
+    build_state_doc(doc);
+    send_json(200, doc);
+}
+
+// /api/diag - debug/forensic fields that aren't worth polling at the
+// /api/state cadence. Touch counters, queue depths, gesture stats,
+// manager command + OTA detail, recent error ring. The web UI only
+// hits this when a diagnostics view is open; the lab logger fetches
+// it on demand.
+static void handle_diag() {
+    if (!require_api_auth()) return;
+    JsonDocument doc(&espdisp::psram_json);
+
+    {
+        manager::Status st = manager::status();
+        JsonObject mgr = doc["manager"].to<JsonObject>();
         // Spec 17 §11 command diagnostics
         mgr["pendingCmdCount"] = (uint32_t)st.pending_cmd_count;
         if (st.last_cmd_id.length()) mgr["lastCmdId"] = st.last_cmd_id;
@@ -210,23 +249,6 @@ static void handle_state() {
             e["t_ms"] = buf[i].timestamp_ms;
             e["msg"] = buf[i].message;
         }
-    }
-
-    JsonObject screen = doc["screen"].to<JsonObject>();
-    screen["index"] = ui::current_index();
-    screen["id"] = ui::current_id();
-    screen["title"] = ui::current_title();
-    screen["count"] = (uint32_t)ui::screen_count();
-
-    // Display state: brightness + theme. Consumed by spec 17 F4 tests
-    // (manager.brightness.set/theme.set commands assert /api/state.display
-    // reflects the new value).
-    JsonObject display = doc["display"].to<JsonObject>();
-    display["brightness"] = (uint32_t)ui::brightness();
-    JsonObject ui_o = doc["ui"].to<JsonObject>();
-    {
-        storage::Namespace pu("ui", true);
-        ui_o["theme"] = pu.get_string("theme", "night");
     }
 
     JsonObject queues = doc["queues"].to<JsonObject>();
@@ -262,7 +284,7 @@ static void handle_state() {
 
 static void handle_screens() {
     if (!require_api_auth()) return;
-    JsonDocument doc;
+    JsonDocument doc(&espdisp::psram_json);
     JsonArray arr = doc.to<JsonArray>();
     int active = ui::current_index();
     for (size_t i = 0; i < ui::screen_count(); ++i) {
@@ -299,7 +321,7 @@ static void handle_screen_set() {
         server.send(503, "text/plain", "ui queue full");
         return;
     }
-    JsonDocument doc;
+    JsonDocument doc(&espdisp::psram_json);
     doc["queued"] = true;
     doc["target"] = id;
     send_json(202, doc);
@@ -316,7 +338,7 @@ static void handle_sk_data() {
     sk::Data d_snap;
     sk::copyData(d_snap);
     const sk::Data &d = d_snap;
-    JsonDocument doc;
+    JsonDocument doc(&espdisp::psram_json);
     JsonObject nav = doc["nav"].to<JsonObject>();
     put_double(nav, "lat", d.lat);
     put_double(nav, "lon", d.lon);
@@ -371,7 +393,7 @@ static void handle_boat() {
     boat::Priority p = boat::get_priority();
     uint32_t now = millis();
 
-    JsonDocument doc;
+    JsonDocument doc(&espdisp::psram_json);
     JsonObject prio = doc["priority"].to<JsonObject>();
     JsonArray order = prio["order"].to<JsonArray>();
     for (uint8_t i = 0; i < 5; ++i) {
@@ -456,7 +478,7 @@ static void handle_boat() {
 
 static void handle_commands_json() {
     if (!require_api_auth()) return;
-    JsonDocument doc;
+    JsonDocument doc(&espdisp::psram_json);
     JsonArray arr = doc["commands"].to<JsonArray>();
     const auto *list = cmd_catalog::entries();
     size_t n = cmd_catalog::entry_count();
@@ -584,7 +606,7 @@ static void handle_layout_put() {
         server.send(503, "text/plain", "ui queue full");
         return;
     }
-    JsonDocument doc;
+    JsonDocument doc(&espdisp::psram_json);
     doc["queued"] = true;
     doc["size"] = (uint32_t)len;
     send_json(202, doc);
@@ -618,7 +640,7 @@ static void handle_dashboard_config_put() {
 
 static void handle_security() {
     if (!require_api_auth()) return;
-    JsonDocument doc;
+    JsonDocument doc(&espdisp::psram_json);
     JsonObject web = doc["web"].to<JsonObject>();
     web["bind"] = net::wifiUp() ? "station-ip" : "setup-ap";
     web["auth"] = api_auth_required() ? "basic" : "none-on-device";
@@ -668,7 +690,7 @@ static void handle_wifi_scan() {
 static void handle_wifi_networks() {
     if (!require_api_auth()) return;
     int n = WiFi.scanComplete();
-    JsonDocument doc;
+    JsonDocument doc(&espdisp::psram_json);
     if (n == WIFI_SCAN_RUNNING) {
         doc["running"] = true;
         send_json(200, doc);
@@ -703,7 +725,7 @@ static void handle_wifi_connect() {
         server.send(413, "text/plain", "body too large (1 KB max)");
         return;
     }
-    JsonDocument doc;
+    JsonDocument doc(&espdisp::psram_json);
     if (deserializeJson(doc, server.arg("plain"))) {
         server.send(400, "text/plain", "bad json");
         return;
@@ -812,7 +834,7 @@ static void handle_cmd() {
         server.send(503, "text/plain", "ui queue full");
         return;
     }
-    JsonDocument doc;
+    JsonDocument doc(&espdisp::psram_json);
     doc["queued"] = true;
     doc["cmd"] = line;
     send_json(202, doc);
@@ -841,7 +863,7 @@ static void handle_config() {
     ::config::AlarmConfig al = ::config::alarms();
     ::config::SignalKConfig sk = ::config::signalk();
 
-    JsonDocument doc;
+    JsonDocument doc(&espdisp::psram_json);
     JsonObject root = doc.to<JsonObject>();
 
     JsonObject ui_obj = root["ui"].to<JsonObject>();
@@ -875,7 +897,7 @@ static void handle_config() {
 
 static void handle_config_status() {
     if (!require_api_auth()) return;
-    JsonDocument doc;
+    JsonDocument doc(&espdisp::psram_json);
     JsonObject root = doc.to<JsonObject>();
     root["jobs_queued"] = ::config::persist_jobs_queued();
     root["jobs_completed"] = ::config::persist_jobs_completed();
@@ -960,7 +982,7 @@ static void handle_logs() {
     }
     size_t n = net::copyLogs(entries, limit, since);
 
-    JsonDocument doc;
+    JsonDocument doc(&espdisp::psram_json);
     JsonArray arr = doc["entries"].to<JsonArray>();
     uint32_t last = since;
     for (size_t i = 0; i < n; ++i) {
@@ -1308,6 +1330,7 @@ static void bind_routes() {
     server.on("/chat", HTTP_GET, handle_probe);
     server.on("/check_network_status.txt", HTTP_GET, handle_probe);
     server.on("/api/state", HTTP_GET, handle_state);
+    server.on("/api/diag", HTTP_GET, handle_diag);
     server.on("/api/config", HTTP_GET, handle_config);
     server.on("/api/config/status", HTTP_GET, handle_config_status);
     server.on("/api/security", HTTP_GET, handle_security);

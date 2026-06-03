@@ -22,3 +22,15 @@
 #ifndef ESPDISP_ENABLE_STALL_TELEMETRY
 #define ESPDISP_ENABLE_STALL_TELEMETRY 1
 #endif
+
+// Touch calibration UI screen. The core calibration application
+// (touch_cal::apply / set / reset in src/touch_cal.cpp) stays in all
+// builds - it's what reads the saved matrix from NVS and remaps
+// touch input every frame. This flag only controls the SETUP UI
+// (src/ui/screen_touch_cal.cpp), which is a one-shot first-boot
+// flow and isn't needed on shipped devices that have already been
+// calibrated at the factory. Disabling drops ~3 KiB of Flash + the
+// "touch_cal" hidden screen.
+#ifndef ESPDISP_ENABLE_TOUCH_CAL_UI
+#define ESPDISP_ENABLE_TOUCH_CAL_UI 1
+#endif

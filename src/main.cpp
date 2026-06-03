@@ -1425,10 +1425,12 @@ static bool handleMainCommand(const String &line) {
         gt911_dump_config();
         return true;
     }
+#if ESPDISP_ENABLE_TOUCH_CAL_UI
     if (line == "touch-cal" || line == "calibrate") {
         ui::show_by_id("touch_cal");
         return true;
     }
+#endif
     if (line == "touch-grid" || line == "grid-cal") {
         ui::show_by_id("touch_grid");
         return true;
@@ -1905,8 +1907,10 @@ void setup() {
         {"wifi", "WiFi Setup", ui::wifi_setup::build(NULL), ui::wifi_setup::refresh, true});
     ui::register_screen(
         {"settings", "Settings", ui::settings::build(NULL), ui::settings::refresh, true});
+#if ESPDISP_ENABLE_TOUCH_CAL_UI
     ui::register_screen({"touch_cal", "Touch Cal", ui::touch_cal_screen::build(NULL),
                          ui::touch_cal_screen::refresh, true});
+#endif
     ui::register_screen({"touch_grid", "Touch Grid", ui::touch_grid_screen::build(NULL),
                          ui::touch_grid_screen::refresh, true});
     ui::register_screen(
