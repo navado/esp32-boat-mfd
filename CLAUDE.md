@@ -159,6 +159,13 @@ that apply to *this* firmware repo, distilled:
   + `pio test -e native` + a build for the affected env before claiming
   the change works. For firmware changes, `make ota-verify` confirms
   the new binary actually booted on the device.
+- **If the next stage is doable, do it.** Don't stop at "could now do X" —
+  if X is unambiguous, unattended, and has no decision the user owns,
+  do X and continue to the stage after. A reasonable stopping point is
+  when you hit a genuine blocker (missing creds, ambiguous design call,
+  external service down) or when the user has explicitly scoped the
+  ask to a single step. "I finished step 1; want me to do step 2?" is
+  almost always the wrong end-of-turn — just do step 2.
 
 `CLAUDE-orch.md` itself is generic across projects in this fleet; the
 firmware-specific contracts (memory traps, dispatch funnel, layout
