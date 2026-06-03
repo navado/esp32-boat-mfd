@@ -206,6 +206,22 @@ sys-test-remote:  ## Run unattended system tests against the lab device + remote
 	  fi; \
 	  pytest tests/system/unattended
 
+# Manager plugin load test against the lab SignalK. Sources .env.test for
+# SIGNALK_URL/USERNAME/PASSWORD; npm doesn't inherit those from a bare
+# `npm run` so we have to spell it out here. Overrides:
+#   make load-test DEVICES=100 DURATION=60
+DEVICES  ?= 20
+DURATION ?= 30
+load-test:  ## Plugin load test against $SIGNALK_URL (sources .env.test)
+	@test -f .env.test || { echo ".env.test missing" >&2; exit 1; }
+	@set -a; . ./.env.test; set +a; \
+	  : "$${SIGNALK_URL:=http://$${SK_HOST:-localhost}:$${SK_PORT:-3000}}"; \
+	  cd signalk/plugins/signalk-espdisp-manager && \
+	  SIGNALK_URL="$$SIGNALK_URL" \
+	  SIGNALK_USERNAME="$$SIGNALK_USERNAME" \
+	  SIGNALK_PASSWORD="$$SIGNALK_PASSWORD" \
+	  node tools/load-test.js --devices $(DEVICES) --duration-sec $(DURATION)
+
 # The full transport: native BLE on this Mac (the lab AP is on a
 # combo WiFi+BT chip on nav-server, so its BT is starved while hostapd
 # runs — BLE has to live on the dev laptop) plus SSH-tunneled HTTP
