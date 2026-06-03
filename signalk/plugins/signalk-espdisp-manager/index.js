@@ -2051,8 +2051,15 @@ function renderFirmwarePage (catalog, jobs, upgrades) {
           <td>${escapeHtml(firmwareSourceLabel(artifact))}</td>
           <td><code>${escapeHtml(artifact.file && artifact.file.sha256)}</code></td>
           <td>
+            <!-- Same JS-attribute-context XSS risk as the device Remove
+                 button above. Firmware version + artifactId come from
+                 GitHub release metadata in the common case but the
+                 catalogue also accepts operator-uploaded artifacts
+                 with arbitrary version strings, so we can't trust them
+                 inside an inline onsubmit. Static prompt; the row
+                 itself shows which artifact is being deleted. -->
             <form method="post" action="/plugins/espdisp-manager/ui/firmware/artifacts/${encodeURIComponent(artifact.artifactId)}/delete"
-                  onsubmit="return confirm('Remove ${escapeHtml(artifact.firmware && artifact.firmware.version || artifact.artifactId)} from catalogue?')"
+                  onsubmit="return confirm('Remove this artifact from catalogue?')"
                   style="margin:0;display:inline;">
               <button type="submit" style="background:#c0392b;border-color:#a82716;">Delete</button>
             </form>
@@ -2123,8 +2130,15 @@ function deviceTable (devices) {
           <td>${device.configDrift ? 'yes' : 'no'}</td>
           <td>${device.pendingCommands}<br><span><a href="/plugins/espdisp-manager/ui/devices/${encodeURIComponent(device.id)}/config">config</a></span></td>
           <td>
+            <!-- Static confirm prompt - device.name is attacker-controlled
+                 in principle (registers via authenticated POST but still
+                 untrusted free-form text), and escapeHtml does NOT escape
+                 the single-quote-context inside an inline JS attribute.
+                 A name like \`'); alert(1); //\` would execute. The device
+                 row above already labels which device this Remove button
+                 acts on, so a generic prompt is no UX loss. -->
             <form method="post" action="/plugins/espdisp-manager/ui/devices/${encodeURIComponent(device.id)}/delete"
-                  onsubmit="return confirm('Remove ${escapeHtml(device.name || device.id)}? Pending commands are dropped.')"
+                  onsubmit="return confirm('Remove this device? Pending commands are dropped.')"
                   style="margin:0;display:inline;">
               <button type="submit" style="background:#c0392b;border-color:#a82716;">Remove</button>
             </form>
