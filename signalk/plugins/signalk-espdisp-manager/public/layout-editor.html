@@ -163,14 +163,26 @@ const state = {
 
 function el (tag, props, ...children) {
   const node = document.createElement(tag);
-  // HTMLElement.dataset is a read-only DOMStringMap getter; Object.assign
-  // throws "setting getter-only property 'dataset'" in strict mode (which
-  // is what modern browsers default to for module-ish scripts). Pull it
-  // out of props before assigning the rest.
+  // Many HTML element properties are read-only getters that can't be
+  // assigned via Object.assign (dataset, list, style, classList...).
+  // Use setAttribute for everything except event handlers (on*) and
+  // textContent/innerHTML (need direct assignment).
   if (props) {
-    const { dataset, ...rest } = props;
-    Object.assign(node, rest);
-    if (dataset) for (const k in dataset) node.dataset[k] = dataset[k];
+    for (const k of Object.keys(props)) {
+      const v = props[k];
+      if (v == null) continue;
+      if (k === 'dataset') {
+        for (const dk in v) node.dataset[dk] = v[dk];
+      } else if (k.startsWith('on') && typeof v === 'function') {
+        node[k] = v;
+      } else if (k === 'textContent' || k === 'innerHTML' || k === 'value' || k === 'checked') {
+        node[k] = v;
+      } else if (k === 'className') {
+        node.className = v;
+      } else {
+        node.setAttribute(k, v);
+      }
+    }
   }
   for (const child of children) {
     if (child == null || child === false) continue;

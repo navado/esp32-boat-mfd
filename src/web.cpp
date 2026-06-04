@@ -134,8 +134,14 @@ static bool heap_ok(HeapWeight weight) {
         break;
     case HEAP_HEAVY:
     default:
-        min_free = 12 * 1024;
-        min_block = 8 * 1024;
+        // The screenshot endpoint allocates its 460 kB BMP in PSRAM, so
+        // the internal-heap need is just lwIP's TX buffer pool while
+        // streaming (~6 kB contiguous per packet). The device's
+        // steady-state largest internal block sits around 7.6 kB after
+        // LVGL + NimBLE + WiFi finish initializing - 8 kB would 503
+        // every heavy request, so use 6 kB as the floor.
+        min_free = 10 * 1024;
+        min_block = 6 * 1024;
         break;
     }
     size_t free_int = heap_caps_get_free_size(MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
@@ -1015,19 +1021,20 @@ static void handle_screenshot() {
         server.send(504, "text/plain", "snapshot timeout");
         return;
     }
+    // Chunked write with a per-write timeout AND a periodic yield so
+    // the WiFi task gets CPU. Without the yield, blasting ~460 kB on
+    // this task starves WiFi keepalives and the AP can drop the
+    // station mid-transfer. This still has issues streaming the full
+    // 460 kB through Arduino-ESP32 WebServer's chunked path (see the
+    // E2E test in tools/test-screenshot.sh) but a 503/timeout is
+    // safer than the prior wedged-WiFi state.
     server.sendHeader("Access-Control-Allow-Origin", "*");
     server.sendHeader("Cache-Control", "no-store");
     server.setContentLength(len);
     server.send(200, "image/bmp", "");
-
-    // Chunked write with a per-write timeout AND a periodic yield so
-    // the WiFi task gets CPU. Without the yield, blasting ~460 kB on
-    // this task starves WiFi keepalives and the AP can drop the
-    // station mid-transfer (observed: device disappears from the AP's
-    // ARP table for ~30s after a single /api/screenshot.bmp hit).
     WiFiClient client = server.client();
-    client.setTimeout(2000);                    // 2s per write before we bail
-    const uint32_t deadline = millis() + 8000;  // 8s total budget
+    client.setTimeout(2000);
+    const uint32_t deadline = millis() + 8000;
     const uint8_t *p = bmp;
     size_t left = len;
     while (left && client.connected()) {
@@ -1037,7 +1044,6 @@ static void handle_screenshot() {
         if (w == 0) break;
         p += w;
         left -= w;
-        // Yield every ~16 kB so WiFi/lwIP get scheduled.
         if ((((size_t)(p - bmp)) & 0x3FFF) == 0) vTaskDelay(1);
     }
     heap_caps_free(bmp);
