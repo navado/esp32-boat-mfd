@@ -162,8 +162,16 @@ const state = {
 // --- DOM helpers --------------------------------------------------------
 
 function el (tag, props, ...children) {
-  const node = Object.assign(document.createElement(tag), props || {});
-  for (const k in (props && props.dataset || {})) node.dataset[k] = props.dataset[k];
+  const node = document.createElement(tag);
+  // HTMLElement.dataset is a read-only DOMStringMap getter; Object.assign
+  // throws "setting getter-only property 'dataset'" in strict mode (which
+  // is what modern browsers default to for module-ish scripts). Pull it
+  // out of props before assigning the rest.
+  if (props) {
+    const { dataset, ...rest } = props;
+    Object.assign(node, rest);
+    if (dataset) for (const k in dataset) node.dataset[k] = dataset[k];
+  }
   for (const child of children) {
     if (child == null || child === false) continue;
     if (Array.isArray(child)) {
