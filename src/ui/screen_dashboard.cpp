@@ -17,62 +17,51 @@ namespace ui::dashboard {
 
 static lv_obj_t *s_root = nullptr;
 
+// Tile catalog matches the editor's `dashboardQuad()` preset:
+// windRose / numeric SOG / numeric DEPTH / bar BATT_SOC. Widget kinds
+// drive the per-tile painter in ui_layouts.cpp so the device render
+// approximates the editor's widgetPreview() canvas.
 static const ui::layouts::MetricBinding s_tiles[] = {
-    // WIND: AWS hero, AWA below
+    // WIND: wind-rose ring with AWS in center (tap -> wind detail).
     {"wind",
      "WIND",
      "kn",
      ui::layouts::MetricSource::AWS_kn,
      0xffb84d /*warn*/,
      "wind",
-     1,
-     {
-         {"AWA", ui::layouts::MetricSource::AWA_deg},
-         {},
-         {},
-         {},
-     }},
-    // NAV: SOG hero, COG/HDG/position below
-    {"nav",
-     "NAV",
+     0,
+     {},
+     ui::layouts::WidgetKind::WindRose},
+    // SOG: big numeric primary, accent color (matches editor numeric tile).
+    {"sog",
+     "SOG",
      "kn",
      ui::layouts::MetricSource::SOG_kn,
      0x57c7d8 /*accent*/,
      "nav",
-     3,
-     {
-         {"COG", ui::layouts::MetricSource::COG_deg},
-         {"HDG", ui::layouts::MetricSource::HDG_deg},
-         {"", ui::layouts::MetricSource::Position},
-     }},
-    // DEPTH: depth hero, water temp below
+     0,
+     {},
+     ui::layouts::WidgetKind::Numeric},
+    // DEPTH: numeric primary.
     {"depth",
      "DEPTH",
      "m",
      ui::layouts::MetricSource::Depth_m,
      0x39d98a /*good*/,
      "depth",
-     1,
-     {
-         {"H2O", ui::layouts::MetricSource::WaterTemp_C},
-         {},
-         {},
-         {},
-     }},
-    // SYSTEM: battery V hero, SOC below
-    {"system",
-     "SYSTEM",
-     "V",
-     ui::layouts::MetricSource::BatteryV,
+     0,
+     {},
+     ui::layouts::WidgetKind::Numeric},
+    // BATT SOC: horizontal bar (matches editor's .bar preview).
+    {"batt",
+     "BATT",
+     "",
+     ui::layouts::MetricSource::BatterySOC_pct,
      0x52736f /*grid*/,
      "status",
-     1,
-     {
-         {"SOC", ui::layouts::MetricSource::BatterySOC_pct},
-         {},
-         {},
-         {},
-     }},
+     0,
+     {},
+     ui::layouts::WidgetKind::Bar},
 };
 
 static const ui::layouts::ScreenVariantSpec s_spec = {

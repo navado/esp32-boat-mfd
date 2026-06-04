@@ -31,10 +31,16 @@ struct QuadGridTile {
     lv_obj_t *unit;
     lv_obj_t *secondary;
     lv_obj_t *extras[4];  // multi-row tiles - small label+value lines
+    // Per-kind auxiliary widgets (compass needle, gauge arc, bar, etc.).
+    // Painter sets only the slots it needs; updater uses them via `kind`.
+    lv_obj_t *aux;   // primary aux widget (arc / bar / ring)
+    lv_obj_t *aux2;  // secondary aux (gauge needle / autopilot pill)
     char last_value[24];
     char last_secondary[24];
     char last_extras[4][32];
-    int idx;  // metric index into spec.metrics[]
+    int last_aux_pct;  // last gauge/bar value (0..100); -1 = unset
+    int idx;           // metric index into spec.metrics[]
+    WidgetKind kind;
 };
 
 struct QuadGridState {
@@ -246,15 +252,316 @@ static void tile_clicked_cb(lv_event_t *e) {
     app::post(c, 0);
 }
 
+// Map a scalar source value to a 0..1 fraction for gauge/bar widgets.
+// Heuristic per-source ranges; widgets that don't have an obvious range
+// (e.g., heading angles, positions) return NAN and render as empty.
+static double scalar_unit_fraction(MetricSource src, double v) {
+    if (isnan(v)) return NAN;
+    auto clamp01 = [](double x) {
+        if (x < 0) return 0.0;
+        if (x > 1) return 1.0;
+        return x;
+    };
+    switch (src) {
+    case MetricSource::BatterySOC_pct:
+        return clamp01(v / 100.0);
+    case MetricSource::BatteryV:
+        return clamp01((v - 11.0) / (14.4 - 11.0));
+    case MetricSource::Depth_m:
+        return clamp01(v / 30.0);
+    case MetricSource::AWS_kn:
+        return clamp01(v / 40.0);
+    case MetricSource::TWS_kn:
+        return clamp01(v / 40.0);
+    case MetricSource::SOG_kn:
+        return clamp01(v / 15.0);
+    case MetricSource::VMG_kn:
+        return clamp01(v / 15.0);
+    case MetricSource::WaterTemp_C:
+        return clamp01((v - 5.0) / (30.0 - 5.0));
+    default:
+        return NAN;
+    }
+}
+
+// --- Per-kind body painters --------------------------------------------
+// Every painter is called after the panel/border/accent-rail/caption
+// chrome is already in place. They populate the t.value / t.unit /
+// t.secondary / t.aux slots their updater will reach for.
+
+static void paint_numeric_body(QuadGridTile &t, const MetricBinding &m, int /*w*/, int /*h*/) {
+    bool has_extras = (m.extras_count > 0);
+    // Primary value uses accent color to match the editor preview
+    // (.num-primary { color: var(--accent) }). Editor uses 34px in a small
+    // card; on a real 2x2 tile we go bigger but keep the accent.
+    t.value = lv_label_create(t.root);
+    lv_label_set_text(t.value, "--");
+    const lv_font_t *primary_font = has_extras ? &lv_font_montserrat_28 : &lv_font_montserrat_48;
+    lv_obj_set_style_text_font(t.value, primary_font, 0);
+    lv_obj_set_style_text_color(t.value, lv_color_hex(theme.accent), 0);
+    if (has_extras)
+        lv_obj_align(t.value, LV_ALIGN_TOP_LEFT, 12, 26);
+    else
+        lv_obj_align(t.value, LV_ALIGN_CENTER, 0, -6);
+    lv_obj_clear_flag(t.value, LV_OBJ_FLAG_CLICKABLE);
+
+    if (m.unit && m.unit[0]) {
+        t.unit = lv_label_create(t.root);
+        lv_label_set_text(t.unit, m.unit);
+        lv_obj_set_style_text_font(t.unit, &lv_font_montserrat_20, 0);
+        lv_obj_set_style_text_color(t.unit, lv_color_hex(theme.fg_dim), 0);
+        if (has_extras)
+            lv_obj_align_to(t.unit, t.value, LV_ALIGN_OUT_RIGHT_BOTTOM, 6, 0);
+        else
+            lv_obj_align_to(t.unit, t.value, LV_ALIGN_OUT_RIGHT_BOTTOM, 6, -4);
+        lv_obj_clear_flag(t.unit, LV_OBJ_FLAG_CLICKABLE);
+    }
+
+    if (!has_extras) {
+        t.secondary = lv_label_create(t.root);
+        lv_label_set_text(t.secondary, "");
+        lv_obj_set_style_text_font(t.secondary, &lv_font_montserrat_14, 0);
+        lv_obj_set_style_text_color(t.secondary, lv_color_hex(theme.fg_dim), 0);
+        lv_obj_align(t.secondary, LV_ALIGN_BOTTOM_RIGHT, -4, -4);
+        lv_obj_clear_flag(t.secondary, LV_OBJ_FLAG_CLICKABLE);
+    } else {
+        for (uint8_t i = 0; i < m.extras_count && i < 4; ++i) {
+            t.extras[i] = lv_label_create(t.root);
+            lv_label_set_text(t.extras[i], "");
+            lv_obj_set_style_text_font(t.extras[i], &lv_font_montserrat_14, 0);
+            lv_obj_set_style_text_color(t.extras[i], lv_color_hex(theme.fg), 0);
+            lv_obj_align(t.extras[i], LV_ALIGN_TOP_LEFT, 12, 76 + i * 22);
+            lv_obj_clear_flag(t.extras[i], LV_OBJ_FLAG_CLICKABLE);
+        }
+    }
+}
+
+// Compass widget: round bezel with accent border, heading number in the
+// center, small "▲" marker at top, CTS label at bottom. Mirrors editor
+// .wpreview .compass.
+static void paint_compass_body(QuadGridTile &t, const MetricBinding &m, int w, int h) {
+    int dia = (w < h ? w : h) - 56;
+    if (dia < 64) dia = 64;
+    lv_obj_t *ring = lv_obj_create(t.root);
+    lv_obj_set_size(ring, dia, dia);
+    lv_obj_align(ring, LV_ALIGN_CENTER, 0, 6);
+    lv_obj_set_style_bg_color(ring, lv_color_hex(theme.panel), 0);
+    lv_obj_set_style_bg_opa(ring, LV_OPA_COVER, 0);
+    lv_obj_set_style_border_color(ring, lv_color_hex(theme.accent), 0);
+    lv_obj_set_style_border_width(ring, 2, 0);
+    lv_obj_set_style_radius(ring, LV_RADIUS_CIRCLE, 0);
+    lv_obj_set_style_pad_all(ring, 0, 0);
+    lv_obj_clear_flag(ring, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_clear_flag(ring, LV_OBJ_FLAG_CLICKABLE);
+    t.aux = ring;
+
+    // Top marker (warn-colored triangle approximation via label).
+    lv_obj_t *marker = lv_label_create(t.root);
+    lv_label_set_text(marker, "^");
+    lv_obj_set_style_text_font(marker, &lv_font_montserrat_14, 0);
+    lv_obj_set_style_text_color(marker, lv_color_hex(theme.warn), 0);
+    lv_obj_align_to(marker, ring, LV_ALIGN_OUT_TOP_MID, 0, 4);
+    lv_obj_clear_flag(marker, LV_OBJ_FLAG_CLICKABLE);
+
+    // Center heading text.
+    t.value = lv_label_create(ring);
+    lv_label_set_text(t.value, "--");
+    lv_obj_set_style_text_font(t.value, &lv_font_montserrat_28, 0);
+    lv_obj_set_style_text_color(t.value, lv_color_hex(theme.accent), 0);
+    lv_obj_align(t.value, LV_ALIGN_CENTER, 0, 0);
+    lv_obj_clear_flag(t.value, LV_OBJ_FLAG_CLICKABLE);
+
+    // CTS-style secondary line (e.g., "CTS 052") under the ring.
+    t.secondary = lv_label_create(t.root);
+    lv_label_set_text(t.secondary, "");
+    lv_obj_set_style_text_font(t.secondary, &lv_font_montserrat_14, 0);
+    lv_obj_set_style_text_color(t.secondary, lv_color_hex(theme.warn), 0);
+    lv_obj_align_to(t.secondary, ring, LV_ALIGN_OUT_BOTTOM_MID, 0, 4);
+    lv_obj_clear_flag(t.secondary, LV_OBJ_FLAG_CLICKABLE);
+}
+
+// Gauge widget: LVGL arc spanning 270° with the value fill in accent
+// and a center percent label. Mirrors editor .wpreview .gauge.
+static void paint_gauge_body(QuadGridTile &t, const MetricBinding & /*m*/, int w, int h) {
+    int dia = (w < h ? w : h) - 56;
+    if (dia < 80) dia = 80;
+    lv_obj_t *arc = lv_arc_create(t.root);
+    lv_obj_set_size(arc, dia, dia);
+    lv_obj_align(arc, LV_ALIGN_CENTER, 0, 6);
+    lv_arc_set_bg_angles(arc, 135, 45);  // 270° sweep (bottom open)
+    lv_arc_set_range(arc, 0, 100);
+    lv_arc_set_value(arc, 0);
+    lv_obj_remove_style(arc, NULL, LV_PART_KNOB);
+    lv_obj_clear_flag(arc, LV_OBJ_FLAG_CLICKABLE);
+    lv_obj_set_style_arc_color(arc, lv_color_hex(theme.grid), LV_PART_MAIN);
+    lv_obj_set_style_arc_width(arc, 8, LV_PART_MAIN);
+    lv_obj_set_style_arc_color(arc, lv_color_hex(theme.accent), LV_PART_INDICATOR);
+    lv_obj_set_style_arc_width(arc, 8, LV_PART_INDICATOR);
+    t.aux = arc;
+
+    // Center percent label.
+    t.value = lv_label_create(t.root);
+    lv_label_set_text(t.value, "--");
+    lv_obj_set_style_text_font(t.value, &lv_font_montserrat_28, 0);
+    lv_obj_set_style_text_color(t.value, lv_color_hex(theme.accent), 0);
+    lv_obj_align(t.value, LV_ALIGN_CENTER, 0, 6);
+    lv_obj_clear_flag(t.value, LV_OBJ_FLAG_CLICKABLE);
+}
+
+// Bar widget: title row (label left, percent right) + LVGL bar fill.
+// Mirrors editor .wpreview .bar.
+static void paint_bar_body(QuadGridTile &t, const MetricBinding &m, int w, int h) {
+    int bar_h = 22;
+    int bar_w = w - 32;
+
+    // Percent label (top-right of tile area).
+    t.value = lv_label_create(t.root);
+    lv_label_set_text(t.value, "--%");
+    lv_obj_set_style_text_font(t.value, &lv_font_montserrat_14, 0);
+    lv_obj_set_style_text_color(t.value, lv_color_hex(theme.fg_dim), 0);
+    lv_obj_align(t.value, LV_ALIGN_TOP_RIGHT, -12, 4);
+    lv_obj_clear_flag(t.value, LV_OBJ_FLAG_CLICKABLE);
+
+    // Bar widget centered below.
+    lv_obj_t *bar = lv_bar_create(t.root);
+    lv_obj_set_size(bar, bar_w, bar_h);
+    lv_obj_align(bar, LV_ALIGN_CENTER, 0, h / 6);
+    lv_bar_set_range(bar, 0, 100);
+    lv_bar_set_value(bar, 0, LV_ANIM_OFF);
+    lv_obj_set_style_bg_color(bar, lv_color_hex(0x001a20), LV_PART_MAIN);
+    lv_obj_set_style_border_color(bar, lv_color_hex(theme.panel_edge), LV_PART_MAIN);
+    lv_obj_set_style_border_width(bar, 1, LV_PART_MAIN);
+    lv_obj_set_style_radius(bar, 3, LV_PART_MAIN);
+    lv_obj_set_style_bg_color(bar, lv_color_hex(theme.good), LV_PART_INDICATOR);
+    lv_obj_set_style_radius(bar, 3, LV_PART_INDICATOR);
+    lv_obj_clear_flag(bar, LV_OBJ_FLAG_CLICKABLE);
+    t.aux = bar;
+    (void)m;
+}
+
+// Wind rose: dashed warn ring with center AWS value. Mirrors editor
+// .wpreview .rose - small visual stand-in; the fullscreen wind dial
+// (screen_wind.cpp) is the high-fidelity render.
+static void paint_wind_rose_body(QuadGridTile &t, const MetricBinding & /*m*/, int w, int h) {
+    int dia = (w < h ? w : h) - 60;
+    if (dia < 64) dia = 64;
+    lv_obj_t *ring = lv_obj_create(t.root);
+    lv_obj_set_size(ring, dia, dia);
+    lv_obj_align(ring, LV_ALIGN_CENTER, 0, 6);
+    lv_obj_set_style_bg_opa(ring, LV_OPA_TRANSP, 0);
+    lv_obj_set_style_border_color(ring, lv_color_hex(theme.warn), 0);
+    lv_obj_set_style_border_width(ring, 2, 0);
+    lv_obj_set_style_radius(ring, LV_RADIUS_CIRCLE, 0);
+    lv_obj_set_style_pad_all(ring, 0, 0);
+    lv_obj_clear_flag(ring, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_clear_flag(ring, LV_OBJ_FLAG_CLICKABLE);
+    t.aux = ring;
+
+    t.value = lv_label_create(ring);
+    lv_label_set_text(t.value, "--");
+    lv_obj_set_style_text_font(t.value, &lv_font_montserrat_20, 0);
+    lv_obj_set_style_text_color(t.value, lv_color_hex(theme.warn), 0);
+    lv_obj_align(t.value, LV_ALIGN_CENTER, 0, 0);
+    lv_obj_clear_flag(t.value, LV_OBJ_FLAG_CLICKABLE);
+}
+
+// Text widget: monospace value centered. Mirrors editor .wpreview .text-val.
+static void paint_text_body(QuadGridTile &t, const MetricBinding & /*m*/, int /*w*/, int /*h*/) {
+    t.value = lv_label_create(t.root);
+    lv_label_set_text(t.value, "--");
+    lv_obj_set_style_text_font(t.value, &lv_font_montserrat_20, 0);
+    lv_obj_set_style_text_color(t.value, lv_color_hex(theme.accent), 0);
+    lv_obj_align(t.value, LV_ALIGN_CENTER, 0, 6);
+    lv_obj_clear_flag(t.value, LV_OBJ_FLAG_CLICKABLE);
+}
+
+// Button widget: rounded accent bubble. Mirrors editor .wpreview .btn-bubble.
+static void paint_button_body(QuadGridTile &t, const MetricBinding &m, int /*w*/, int /*h*/) {
+    lv_obj_t *btn = lv_obj_create(t.root);
+    lv_obj_set_size(btn, LV_SIZE_CONTENT, LV_SIZE_CONTENT);
+    lv_obj_align(btn, LV_ALIGN_CENTER, 0, 6);
+    lv_obj_set_style_bg_color(btn, lv_color_hex(theme.accent), 0);
+    lv_obj_set_style_bg_opa(btn, LV_OPA_COVER, 0);
+    lv_obj_set_style_border_width(btn, 0, 0);
+    lv_obj_set_style_radius(btn, 16, 0);
+    lv_obj_set_style_pad_hor(btn, 18, 0);
+    lv_obj_set_style_pad_ver(btn, 8, 0);
+    lv_obj_clear_flag(btn, LV_OBJ_FLAG_SCROLLABLE);
+
+    lv_obj_t *label = lv_label_create(btn);
+    lv_label_set_text(label, (m.label && m.label[0]) ? m.label : "TAP");
+    lv_obj_set_style_text_font(label, &lv_font_montserrat_14, 0);
+    lv_obj_set_style_text_color(label, lv_color_hex(0x001218), 0);
+    t.aux = btn;
+}
+
+// Autopilot widget: state pill (green) + target text + 4 nudge buttons row.
+// Mirrors editor .wpreview .ap.
+static void paint_autopilot_body(QuadGridTile &t, const MetricBinding & /*m*/, int w, int /*h*/) {
+    // State pill.
+    lv_obj_t *pill = lv_obj_create(t.root);
+    lv_obj_set_size(pill, w - 32, 26);
+    lv_obj_align(pill, LV_ALIGN_TOP_MID, 0, 24);
+    lv_obj_set_style_bg_color(pill, lv_color_hex(0x143b2a), 0);
+    lv_obj_set_style_bg_opa(pill, LV_OPA_COVER, 0);
+    lv_obj_set_style_border_color(pill, lv_color_hex(theme.good), 0);
+    lv_obj_set_style_border_width(pill, 1, 0);
+    lv_obj_set_style_radius(pill, 4, 0);
+    lv_obj_set_style_pad_all(pill, 0, 0);
+    lv_obj_clear_flag(pill, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_clear_flag(pill, LV_OBJ_FLAG_CLICKABLE);
+    t.aux2 = pill;
+
+    t.value = lv_label_create(pill);
+    lv_label_set_text(t.value, "--");
+    lv_obj_set_style_text_font(t.value, &lv_font_montserrat_20, 0);
+    lv_obj_set_style_text_color(t.value, lv_color_hex(theme.good), 0);
+    lv_obj_align(t.value, LV_ALIGN_CENTER, 0, 0);
+    lv_obj_clear_flag(t.value, LV_OBJ_FLAG_CLICKABLE);
+
+    // Target text below the pill.
+    t.secondary = lv_label_create(t.root);
+    lv_label_set_text(t.secondary, "target ---");
+    lv_obj_set_style_text_font(t.secondary, &lv_font_montserrat_14, 0);
+    lv_obj_set_style_text_color(t.secondary, lv_color_hex(theme.fg_dim), 0);
+    lv_obj_align_to(t.secondary, pill, LV_ALIGN_OUT_BOTTOM_MID, 0, 4);
+    lv_obj_clear_flag(t.secondary, LV_OBJ_FLAG_CLICKABLE);
+
+    // 4 nudge buttons (-10/-1/+1/+10) row across the bottom.
+    int btn_w = (w - 40) / 4;
+    static const char *labels[] = {"-10", "-1", "+1", "+10"};
+    for (int i = 0; i < 4; ++i) {
+        lv_obj_t *b = lv_obj_create(t.root);
+        lv_obj_set_size(b, btn_w, 22);
+        lv_obj_align(t.root, LV_ALIGN_BOTTOM_LEFT, 16 + i * (btn_w + 2), -8);
+        lv_obj_set_pos(b, 16 + i * (btn_w + 2), -1);
+        lv_obj_align(b, LV_ALIGN_BOTTOM_LEFT, 16 + i * (btn_w + 2), -8);
+        lv_obj_set_style_bg_color(b, lv_color_hex(theme.panel_edge), 0);
+        lv_obj_set_style_bg_opa(b, LV_OPA_COVER, 0);
+        lv_obj_set_style_border_width(b, 0, 0);
+        lv_obj_set_style_radius(b, 3, 0);
+        lv_obj_set_style_pad_all(b, 0, 0);
+        lv_obj_clear_flag(b, LV_OBJ_FLAG_SCROLLABLE);
+        lv_obj_t *bl = lv_label_create(b);
+        lv_label_set_text(bl, labels[i]);
+        lv_obj_set_style_text_font(bl, &lv_font_montserrat_14, 0);
+        lv_obj_set_style_text_color(bl, lv_color_hex(theme.fg), 0);
+        lv_obj_align(bl, LV_ALIGN_CENTER, 0, 0);
+    }
+}
+
 static QuadGridTile build_tile(lv_obj_t *parent, int x, int y, int w, int h,
                                const MetricBinding &m) {
     QuadGridTile t = {};
     t.idx = -1;
+    t.kind = m.kind;
+    t.last_aux_pct = -1;
     strncpy(t.last_value, "\xFF", sizeof(t.last_value));
     strncpy(t.last_secondary, "\xFF", sizeof(t.last_secondary));
     for (int i = 0; i < 4; ++i)
         strncpy(t.last_extras[i], "\xFF", sizeof(t.last_extras[0]));
 
+    // --- Chrome: panel + border + accent rail + caption ---
     t.root = lv_obj_create(parent);
     lv_obj_set_size(t.root, w, h);
     lv_obj_set_pos(t.root, x, y);
@@ -266,7 +573,6 @@ static QuadGridTile build_tile(lv_obj_t *parent, int x, int y, int w, int h,
     lv_obj_set_style_pad_all(t.root, 10, 0);
     lv_obj_clear_flag(t.root, LV_OBJ_FLAG_SCROLLABLE);
 
-    // Accent rail.
     lv_obj_t *rail = lv_obj_create(t.root);
     lv_obj_set_size(rail, 4, h - 20);
     lv_obj_set_pos(rail, 0, 0);
@@ -278,7 +584,6 @@ static QuadGridTile build_tile(lv_obj_t *parent, int x, int y, int w, int h,
     lv_obj_clear_flag(rail, LV_OBJ_FLAG_SCROLLABLE);
     lv_obj_clear_flag(rail, LV_OBJ_FLAG_CLICKABLE);
 
-    // Caption.
     t.cap = lv_label_create(t.root);
     lv_label_set_text(t.cap, m.label ? m.label : "");
     lv_obj_set_style_text_font(t.cap, &lv_font_montserrat_14, 0);
@@ -286,60 +591,34 @@ static QuadGridTile build_tile(lv_obj_t *parent, int x, int y, int w, int h,
     lv_obj_set_pos(t.cap, 12, 4);
     lv_obj_clear_flag(t.cap, LV_OBJ_FLAG_CLICKABLE);
 
-    bool has_extras = (m.extras_count > 0);
-
-    // Primary value. If extras are present, shrink + pin to upper area
-    // so the extras have room below. Otherwise it stays large + centered.
-    // Primary value uses accent color to match the editor preview
-    // (.num-primary { color: var(--accent) }). Editor uses 34px in a small
-    // card; on a real 2x2 tile we go bigger but keep the accent so the
-    // visual cue is consistent with the editor canvas.
-    t.value = lv_label_create(t.root);
-    lv_label_set_text(t.value, "--");
-    const lv_font_t *primary_font = has_extras ? &lv_font_montserrat_28 : &lv_font_montserrat_48;
-    lv_obj_set_style_text_font(t.value, primary_font, 0);
-    lv_obj_set_style_text_color(t.value, lv_color_hex(theme.accent), 0);
-    if (has_extras) {
-        lv_obj_align(t.value, LV_ALIGN_TOP_LEFT, 12, 26);
-    } else {
-        lv_obj_align(t.value, LV_ALIGN_CENTER, 0, -6);
-    }
-    lv_obj_clear_flag(t.value, LV_OBJ_FLAG_CLICKABLE);
-
-    // Unit sits to the right of the value, baseline-aligned (matches the
-    // editor's inline `<span class="num-unit">` next to .num-primary).
-    if (m.unit && m.unit[0]) {
-        t.unit = lv_label_create(t.root);
-        lv_label_set_text(t.unit, m.unit);
-        lv_obj_set_style_text_font(t.unit, &lv_font_montserrat_20, 0);
-        lv_obj_set_style_text_color(t.unit, lv_color_hex(theme.fg_dim), 0);
-        if (has_extras) {
-            lv_obj_align_to(t.unit, t.value, LV_ALIGN_OUT_RIGHT_BOTTOM, 6, 0);
-        } else {
-            lv_obj_align_to(t.unit, t.value, LV_ALIGN_OUT_RIGHT_BOTTOM, 6, -4);
-        }
-        lv_obj_clear_flag(t.unit, LV_OBJ_FLAG_CLICKABLE);
-    }
-
-    if (!has_extras) {
-        // Classic Hero layout: secondary in bottom-right.
-        t.secondary = lv_label_create(t.root);
-        lv_label_set_text(t.secondary, "");
-        lv_obj_set_style_text_font(t.secondary, &lv_font_montserrat_14, 0);
-        lv_obj_set_style_text_color(t.secondary, lv_color_hex(theme.fg_dim), 0);
-        lv_obj_align(t.secondary, LV_ALIGN_BOTTOM_RIGHT, -4, -4);
-        lv_obj_clear_flag(t.secondary, LV_OBJ_FLAG_CLICKABLE);
-    } else {
-        // Multi-row layout: stack up to 4 extras below the primary value.
-        for (uint8_t i = 0; i < m.extras_count && i < 4; ++i) {
-            t.extras[i] = lv_label_create(t.root);
-            lv_label_set_text(t.extras[i], "");
-            lv_obj_set_style_text_font(t.extras[i], &lv_font_montserrat_14, 0);
-            lv_obj_set_style_text_color(t.extras[i], lv_color_hex(theme.fg), 0);
-            // Row positions packed below the primary value area.
-            lv_obj_align(t.extras[i], LV_ALIGN_TOP_LEFT, 12, 76 + i * 22);
-            lv_obj_clear_flag(t.extras[i], LV_OBJ_FLAG_CLICKABLE);
-        }
+    // --- Body: dispatched per widget kind ---
+    switch (m.kind) {
+    case WidgetKind::Compass:
+        paint_compass_body(t, m, w, h);
+        break;
+    case WidgetKind::Gauge:
+        paint_gauge_body(t, m, w, h);
+        break;
+    case WidgetKind::Bar:
+        paint_bar_body(t, m, w, h);
+        break;
+    case WidgetKind::WindRose:
+        paint_wind_rose_body(t, m, w, h);
+        break;
+    case WidgetKind::Text:
+        paint_text_body(t, m, w, h);
+        break;
+    case WidgetKind::Button:
+        paint_button_body(t, m, w, h);
+        break;
+    case WidgetKind::Autopilot:
+        paint_autopilot_body(t, m, w, h);
+        break;
+    case WidgetKind::Trend:  // sparkline not yet implemented; fall back
+    case WidgetKind::Numeric:
+    default:
+        paint_numeric_body(t, m, w, h);
+        break;
     }
 
     if (m.target_screen && m.target_screen[0]) {
@@ -396,14 +675,58 @@ static void update_quad_grid(lv_obj_t *root, const ScreenVariantSpec &spec, cons
 
         char pri[24], sec[24];
         format_metric(m, data, pri, sizeof(pri), sec, sizeof(sec));
-        ui::set_text_if_changed(t.value, t.last_value, sizeof(t.last_value), pri);
 
-        if (t.secondary) {
-            ui::set_text_if_changed(t.secondary, t.last_secondary, sizeof(t.last_secondary), sec);
+        // Per-kind aux updates (gauge arc fill, bar fill).
+        switch (t.kind) {
+        case WidgetKind::Gauge:
+        case WidgetKind::Bar: {
+            double scalar = metric_scalar(m, data);
+            double frac = scalar_unit_fraction(m.source, scalar);
+            int pct = isnan(frac) ? 0 : (int)(frac * 100.0 + 0.5);
+            if (t.aux && pct != t.last_aux_pct) {
+                if (t.kind == WidgetKind::Gauge)
+                    lv_arc_set_value(t.aux, pct);
+                else
+                    lv_bar_set_value(t.aux, pct, LV_ANIM_OFF);
+                t.last_aux_pct = pct;
+            }
+            // For bar/gauge the primary label is the percent; show pct
+            // string instead of raw value so the visual matches editor.
+            char buf[8];
+            if (isnan(frac))
+                snprintf(buf, sizeof(buf), "--");
+            else
+                snprintf(buf, sizeof(buf), "%d%%", pct);
+            ui::set_text_if_changed(t.value, t.last_value, sizeof(t.last_value), buf);
+            break;
         }
-        // Render extras (multi-row tiles). Each extra reuses
-        // format_metric on a synthetic MetricBinding so all the
-        // unit/format logic is shared.
+        case WidgetKind::Autopilot:
+            // value = AP state (already formatted in `pri` if source=APState),
+            // secondary = target heading (use `sec` if format_metric supplied one,
+            // else format it from sec text below).
+            ui::set_text_if_changed(t.value, t.last_value, sizeof(t.last_value), pri);
+            if (t.secondary) {
+                char tgt[24];
+                snprintf(tgt, sizeof(tgt), "target %s", sec[0] ? sec : "---");
+                ui::set_text_if_changed(t.secondary, t.last_secondary, sizeof(t.last_secondary),
+                                        tgt);
+            }
+            break;
+        case WidgetKind::Button:
+            // Static label; no update needed.
+            break;
+        default:
+            // Numeric, Compass, WindRose, Text, Trend fallback - all use
+            // the value/secondary text slots populated by format_metric.
+            ui::set_text_if_changed(t.value, t.last_value, sizeof(t.last_value), pri);
+            if (t.secondary) {
+                ui::set_text_if_changed(t.secondary, t.last_secondary, sizeof(t.last_secondary),
+                                        sec);
+            }
+            break;
+        }
+
+        // Multi-row extras (only meaningful for Numeric kind).
         for (uint8_t e = 0; e < m.extras_count && e < 4; ++e) {
             if (!t.extras[e]) continue;
             MetricBinding eb = {};
@@ -411,11 +734,10 @@ static void update_quad_grid(lv_obj_t *root, const ScreenVariantSpec &spec, cons
             char ep[24], esec[24];
             format_metric(eb, data, ep, sizeof(ep), esec, sizeof(esec));
             char row[32];
-            if (m.extras[e].label && m.extras[e].label[0]) {
+            if (m.extras[e].label && m.extras[e].label[0])
                 snprintf(row, sizeof(row), "%s %s", m.extras[e].label, ep);
-            } else {
+            else
                 snprintf(row, sizeof(row), "%s", ep);
-            }
             ui::set_text_if_changed(t.extras[e], t.last_extras[e], sizeof(t.last_extras[e]), row);
         }
     }

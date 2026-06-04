@@ -66,6 +66,23 @@ struct MetricRow {
     MetricSource source;
 };
 
+// Widget kind dispatched per-tile inside the QuadGrid template. Each
+// kind has a dedicated painter in ui_layouts.cpp that mirrors the
+// editor's widgetPreview() render so the device and layout editor
+// agree visually. Default is Numeric for back-compat with the existing
+// dashboard tile tables.
+enum class WidgetKind : uint8_t {
+    Numeric = 0,  // big accent value + unit + secondary line
+    Compass,      // round bezel, heading number center, CTS marker
+    Gauge,        // 270 degree arc, fill = primary fraction, percent center
+    Bar,          // small title + horizontal bar showing primary (0..1)
+    WindRose,     // dashed warn ring + center AWS value
+    Autopilot,    // state pill + target + nudge buttons row
+    Text,         // monospace value text (position, AP state strings)
+    Button,       // rounded accent bubble label
+    Trend,        // sparkline chart
+};
+
 struct MetricBinding {
     const char *id;             // "wind", "depth", ... stable id for API addressing
     const char *label;          // "WIND" displayed caption
@@ -78,6 +95,11 @@ struct MetricBinding {
     // demos that didn't carry these fields).
     uint8_t extras_count;
     MetricRow extras[4];
+    // Last field so existing 6-arg brace-init MetricBinding tables get
+    // value-initialized to 0 = WidgetKind::Numeric without us having to
+    // add a default member initializer (which would make MetricBinding
+    // non-aggregate under gnu++11, the Arduino-ESP32 default standard).
+    WidgetKind kind;
 };
 
 struct ScreenVariantSpec {
