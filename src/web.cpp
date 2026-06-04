@@ -994,6 +994,47 @@ static void handle_config_status() {
     send_json(200, doc);
 }
 
+// ---- /api/screenshot.png -----------------------------------------------
+// PNG-encoded LVGL snapshot. The encoder lives in screenshot.cpp using
+// ROM miniz; output is typically 20-60 kB for a 480x480 UI screen,
+// small enough to fit in a single TCP send window (so the chunked-
+// streaming wedge that breaks the .bmp endpoint never triggers).
+
+static void handle_screenshot_png() {
+    if (!require_api_auth()) return;
+    if (!heap_ok(HEAP_MEDIUM)) return;
+    static volatile bool s_in_flight = false;
+    if (s_in_flight) {
+        server.send(429, "text/plain", "screenshot busy");
+        return;
+    }
+    s_in_flight = true;
+    uint8_t *png = nullptr;
+    size_t len = 0;
+    bool ok = screenshot::request(5000, &png, &len, screenshot::Format::Png);
+    if (!ok || !png || len == 0) {
+        s_in_flight = false;
+        server.send(504, "text/plain", "snapshot timeout");
+        return;
+    }
+    server.sendHeader("Access-Control-Allow-Origin", "*");
+    server.sendHeader("Cache-Control", "no-store");
+    // Use the String(uint8_t*, len) constructor which preserves NULs
+    // and bundles everything into a single server.send() call. That's
+    // the only path on Arduino-ESP32 WebServer that reliably delivers
+    // a body - sendContent / send_P / direct WiFiClient.write all
+    // dropped bytes silently (~4 kB through, then nothing) with this
+    // version of the library.
+    String body((const uint8_t *)png, len);
+    // Diag: try application/octet-stream to rule out content-type-based
+    // filtering in WebServer or its TLS/middleware path. Image/png with
+    // identical body went out as HTTP 200 + Content-Length but with
+    // 0 bytes received downstream.
+    server.send(200, "application/octet-stream", body);
+    heap_caps_free(png);
+    s_in_flight = false;
+}
+
 // ---- /api/screenshot.bmp -----------------------------------------------
 // LVGL snapshot of the active screen. Requires LV_USE_SNAPSHOT in lv_conf.h.
 
@@ -1466,6 +1507,7 @@ static void bind_routes() {
     server.on("/api/wifi/forget", HTTP_POST, handle_wifi_forget);
     server.on("/api/wifi/saved", HTTP_GET, handle_wifi_saved_get);
     server.on("/api/screenshot.bmp", HTTP_GET, handle_screenshot);
+    server.on("/api/screenshot.png", HTTP_GET, handle_screenshot_png);
     server.onNotFound([]() {
         if (server.method() == HTTP_POST && server.uri().startsWith("/api/screen/")) {
             handle_screen_set();

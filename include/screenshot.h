@@ -18,9 +18,18 @@ void setup();
 // Called from the LVGL task each frame. Cheap when no request is pending.
 void serve_pending();
 
+// Output formats. PNG uses ROM miniz to compress the 480x480 LVGL
+// snapshot from ~460 kB (raw BMP) to ~20-60 kB so the body fits in a
+// single TCP send window and avoids the chunked-streaming wedge that
+// the Arduino-ESP32 WebServer hits with large bodies.
+enum class Format {
+    Bmp,
+    Png,
+};
+
 // Called from any other task (e.g. the web task). Blocks up to
-// timeout_ms; returns true on success, with *out_bmp and *out_len set.
-// Caller must heap_caps_free(*out_bmp) when done.
-bool request(uint32_t timeout_ms, uint8_t **out_bmp, size_t *out_len);
+// timeout_ms; returns true on success, with *out and *out_len set.
+// Caller must heap_caps_free(*out) when done.
+bool request(uint32_t timeout_ms, uint8_t **out, size_t *out_len, Format fmt = Format::Bmp);
 
 }  // namespace screenshot

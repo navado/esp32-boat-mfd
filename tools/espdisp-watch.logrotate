@@ -1,0 +1,10 @@
+/var/log/espdisp/*.log {
+    daily
+    rotate 14
+    compress
+    delaycompress
+    missingok
+    notifempty
+    copytruncate
+    create 0644 compulab compulab
+}
