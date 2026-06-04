@@ -415,16 +415,28 @@ function registerRoutes (router, getManager) {
         return
       }
       // node 18+ has global fetch; SignalK ships node 20.
+      // redirect: 'manual' prevents an attacker-controlled device from
+      // 302'ing this server-side fetch to an arbitrary host (the
+      // private-host check above only validates the URL we typed,
+      // not what the device might redirect us to).
       const upstream = await fetch(u.origin + '/api/screenshot.png', {
-        signal: AbortSignal.timeout(10000)
+        signal: AbortSignal.timeout(10000),
+        redirect: 'manual'
       })
+      if (upstream.status >= 300 && upstream.status < 400) {
+        res.status(502).json({ error: 'device tried to redirect; refusing' })
+        return
+      }
       if (!upstream.ok) {
         res.status(upstream.status).json({ error: 'device returned ' + upstream.status })
         return
       }
       res.setHeader('Content-Type', 'image/png')
       res.setHeader('Cache-Control', 'no-store')
-      res.setHeader('Access-Control-Allow-Origin', '*')
+      // No CORS wildcard: the editor reaches this proxy same-origin
+      // (it's mounted under /plugins/espdisp-manager). Cross-origin
+      // callers should not be able to use the SignalK host as an open
+      // SSRF gateway into the LAN.
       const buf = Buffer.from(await upstream.arrayBuffer())
       res.end(buf)
     } catch (e) {
