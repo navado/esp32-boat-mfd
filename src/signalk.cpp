@@ -339,9 +339,75 @@ bool tryAutoDiscover(uint32_t now_ms) {
 // stall lv_timer_handler on core 1. The event callbacks (onEvent /
 // onText / subscribe()) execute on this task; sk::data writes go
 // through s_data_mtx and remain safe for UI/web readers.
+// Auto-recovery escalation when connectionStatus() stays "stalled" for
+// a long time. Lab evidence shows the device sometimes wedges in this
+// state without ever resolving on its own (BLE says STA + IP + good
+// RSSI but no SK frames arrive); a manual reboot fixes it. These
+// thresholds drive a two-step escalation so we don't need the user
+// in the loop.
+//
+//   - STALL_WS_RESTART_MS  (60 s): the WebSocketsClient sometimes
+//     wedges its TCP socket after a server-side timeout. Disconnecting
+//     and reopening the WS clears that without touching WiFi.
+//   - STALL_WIFI_RECONNECT_MS (180 s): if a WS restart didn't help,
+//     the link itself is likely a "ghost association" (AP-side
+//     ARP-FAILED while STA still thinks it's online). Trigger a
+//     wifi-reconnect via the net dispatch funnel, same path the
+//     manual `wifi-reconnect` console command uses.
+//
+// Both escalations fire AT MOST ONCE per stall episode; the flags
+// reset when the status leaves "stalled".
+static constexpr uint32_t STALL_WS_RESTART_MS = 60000;
+static constexpr uint32_t STALL_WIFI_RECONNECT_MS = 180000;
+static uint32_t s_stall_began_ms = 0;
+static bool s_stall_ws_recovery_tried = false;
+static bool s_stall_wifi_recovery_tried = false;
+
+static void check_stall_autorecover(uint32_t now_ms) {
+    String status = connectionStatus();
+    if (status != "stalled") {
+        if (s_stall_began_ms) {
+            // We exited stall on our own (or via a recovery we
+            // triggered). Reset the escalation state.
+            net::logf("[sk] stall cleared after %u ms (status=%s)",
+                      (unsigned)(now_ms - s_stall_began_ms), status.c_str());
+            s_stall_began_ms = 0;
+            s_stall_ws_recovery_tried = false;
+            s_stall_wifi_recovery_tried = false;
+        }
+        return;
+    }
+    if (!s_stall_began_ms) {
+        s_stall_began_ms = now_ms;
+        return;
+    }
+    uint32_t stalled_for = now_ms - s_stall_began_ms;
+    if (!s_stall_ws_recovery_tried && stalled_for >= STALL_WS_RESTART_MS) {
+        s_stall_ws_recovery_tried = true;
+        net::logf_at(net::LOG_WARN, "[sk] stall %u ms -> WS restart (disconnect + reopen)",
+                     (unsigned)stalled_for);
+        if (s_host.length() > 0) {
+            ws.disconnect();
+            s_ws_started = false;
+            subscribed = false;
+            start_ws();
+        }
+        return;
+    }
+    if (!s_stall_wifi_recovery_tried && stalled_for >= STALL_WIFI_RECONNECT_MS) {
+        s_stall_wifi_recovery_tried = true;
+        net::logf_at(net::LOG_WARN, "[sk] stall %u ms -> wifi-reconnect", (unsigned)stalled_for);
+        // Route through the dispatch funnel so the wifi state machine
+        // sees this exactly like a manual console request.
+        net::dispatchCommand("wifi-reconnect");
+        return;
+    }
+}
+
 static void sk_task(void *) {
     s_running = true;
     uint32_t next_heap_log_ms = 0;
+    uint32_t next_stall_check_ms = 0;
     for (;;) {
         // Try auto-discovery whenever we have no target yet.
         if (!s_ws_started) tryAutoDiscover(millis());
@@ -369,6 +435,16 @@ static void sk_task(void *) {
             net::logf("[heap] int_free=%u int_largest=%u min_ever=%u psram=%uK temp=%.1fC",
                       (unsigned)free_int, (unsigned)largest_int, (unsigned)min_ever,
                       (unsigned)(psram_free / 1024), isnan(tC) ? 0.0f : tC);
+        }
+
+        // Stall auto-recovery: sample at 5 s cadence (the escalation
+        // thresholds are 60 s and 180 s so finer-grained polling buys
+        // nothing). Skip while an inbound OTA is in flight - we don't
+        // want a stall-driven WS restart to compete with the Update
+        // class for heap.
+        if ((int32_t)(now_ms - next_stall_check_ms) >= 0 && !net::otaInProgress()) {
+            next_stall_check_ms = now_ms + 5000;
+            check_stall_autorecover(now_ms);
         }
 
         // 10 ms cadence is plenty for WS frame draining and matches what
