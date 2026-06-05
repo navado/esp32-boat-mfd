@@ -27,6 +27,7 @@ struct Data {
     double twa = NAN;        // true wind angle, rad
     double tws = NAN;        // true wind speed, m/s
     double depth = NAN;      // m below transducer
+    double depthKeel = NAN;  // m below keel
     double waterTemp = NAN;  // K
 
     // electrical & tanks

@@ -27,7 +27,7 @@ static const ui::layouts::MetricBinding s_tiles[] = {
     {"depthKeel",
      "BELOW K",
      "m",
-     ui::layouts::MetricSource::Depth_m,
+     ui::layouts::MetricSource::DepthKeel_m,
      0x57c7d8 /*accent*/,
      nullptr,
      0,

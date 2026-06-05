@@ -45,9 +45,10 @@ void applyValue(const char *path, JsonVariant val, Data &out) {
     } else if (strcmp(path, "environment.wind.speedTrue") == 0) {
         out.tws = asDouble(val, out.tws);
     } else if (strcmp(path, "environment.depth.belowTransducer") == 0 ||
-               strcmp(path, "environment.depth.belowKeel") == 0 ||
                strcmp(path, "environment.depth.belowSurface") == 0) {
         out.depth = asDouble(val, out.depth);
+    } else if (strcmp(path, "environment.depth.belowKeel") == 0) {
+        out.depthKeel = asDouble(val, out.depthKeel);
     } else if (strcmp(path, "environment.water.temperature") == 0) {
         out.waterTemp = asDouble(val, out.waterTemp);
     } else if (strncmp(path, "electrical.batteries.", 21) == 0) {

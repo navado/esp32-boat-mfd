@@ -48,12 +48,14 @@ enum class MetricSource : uint8_t {
     COG_deg,
     HDG_deg,
     Depth_m,
+    DepthKeel_m,  // m below keel (d.depthKeel)
     WaterTemp_C,
     BatteryV,
     BatterySOC_pct,
-    DTW,  // formatted as nm or m
+    DTW,  // formatted as nm (always)
     BTW_deg,
-    XTE,
+    CTS_deg,  // course to steer, rad (navigation.courseRhumbline.bearingTrackTrue)
+    XTE,      // signed cross-track error in m (P/S suffix)
     VMG_kn,
     Position,  // formatted to current pos_format
     APState,

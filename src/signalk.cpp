@@ -340,29 +340,26 @@ bool tryAutoDiscover(uint32_t now_ms) {
 // stall lv_timer_handler on core 1. The event callbacks (onEvent /
 // onText / subscribe()) execute on this task; sk::data writes go
 // through s_data_mtx and remain safe for UI/web readers.
-// Auto-recovery escalation triggered by missing value-bearing SK
-// deltas (lastUpdateMs not advancing). Lab evidence: device wedged
-// with BLE-reported STA + IP + good RSSI but no fresh data arriving;
-// only a manual reboot recovered. The escalation ladder fires AT MOST
-// ONCE per level per stall episode and resets the moment a delta
-// advances lastUpdateMs.
+// Auto-recovery escalation triggered by a dead WS link — both
+// value-bearing deltas (lastUpdateMs) AND raw WS frames (wsLastFrameMs)
+// have stopped advancing. Using wsLastFrameMs as the primary liveness
+// signal prevents false recoveries on a still/anchored boat where SK
+// may suppress unchanged deltas but still sends keepalive PINGs: in
+// that case wsLastFrameMs advances while lastUpdateMs does not, and we
+// correctly leave the connection alone.
 //
-//   - DATA_STALE_WIFI_RECONNECT_MS  (5 s, ~3-5 missed beats at 1 Hz):
-//     dispatch `wifi-reconnect`. Soft reassociation, keeps WiFi state.
-//   - DATA_STALE_WIFI_RESET_MS     (30 s): hard WiFi.disconnect(true,
-//     true) then re-trigger join. Releases lwIP state, fresh DHCP.
-//   - DATA_STALE_DEVICE_RESET_MS   (60 s): ESP.restart(). Last resort.
+// Thresholds are intentionally generous:
+//   - DATA_STALE_WIFI_RECONNECT_MS (30 s): soft wifi-reconnect when
+//     both ws frames AND value deltas have been silent for 30 s.
+//   - DATA_STALE_WIFI_RESET_MS     (90 s): hard WiFi reset + rejoin.
+//   - DATA_STALE_DEVICE_RESET_MS  (180 s): ESP.restart(). Last resort.
 //
 // Guarded:
-//   * lastUpdateMs == 0 -> we've never had data. That's "no-data"
-//     (server has no producers) or warmup, not a stall - skip.
-//   * net::otaInProgress()  -> an inbound OTA upload is mid-flight;
-//     do nothing so the Update class isn't kicked.
-//   * connected == false   -> WS not even up; wifi-reconnect is the
-//     manager's job, not this path's.
-static constexpr uint32_t DATA_STALE_WIFI_RECONNECT_MS = 5000;
-static constexpr uint32_t DATA_STALE_WIFI_RESET_MS = 30000;
-static constexpr uint32_t DATA_STALE_DEVICE_RESET_MS = 60000;
+//   * lastUpdateMs == 0 -> never had data (no-data/warmup) - skip.
+//   * connected == false -> WS down; recovery is not our job here.
+static constexpr uint32_t DATA_STALE_WIFI_RECONNECT_MS = 30000;
+static constexpr uint32_t DATA_STALE_WIFI_RESET_MS = 90000;
+static constexpr uint32_t DATA_STALE_DEVICE_RESET_MS = 180000;
 
 // Boot-loop guard for the device-reset escalation: refuse to restart
 // if we've already done so MAX_RECOVERY_RESTARTS times without a
@@ -420,9 +417,11 @@ static bool recovery_restart_or_skip(uint32_t age_ms) {
 
 static void check_stall_autorecover(uint32_t now_ms) {
     uint32_t last_update;
+    uint32_t last_ws_frame;
     bool connected;
     if (s_data_mtx) xSemaphoreTake(s_data_mtx, portMAX_DELAY);
     last_update = data.lastUpdateMs;
+    last_ws_frame = data.wsLastFrameMs;
     connected = data.connected;
     if (s_data_mtx) xSemaphoreGive(s_data_mtx);
 
@@ -447,6 +446,20 @@ static void check_stall_autorecover(uint32_t now_ms) {
         return;
     }
 
+    // WS link liveness check: if frames (PING/PONG/TEXT/BIN) arrived
+    // recently, the connection is alive and the server is simply not
+    // sending value-bearing deltas (anchored boat, suppressed unchanged
+    // values). Don't escalate in that case — just reset escalation flags
+    // so a brief earlier gap doesn't carry over.
+    uint32_t ws_age_ms = (last_ws_frame > 0) ? (now_ms - last_ws_frame) : UINT32_MAX;
+    if (ws_age_ms < DATA_STALE_WIFI_RECONNECT_MS) {
+        s_data_recovery_wifi_reconnect_tried = false;
+        s_data_recovery_wifi_reset_tried = false;
+        return;
+    }
+
+    // Both value-bearing deltas and WS frames have been silent.
+    // Measure staleness against lastUpdateMs (older of the two).
     uint32_t age_ms = now_ms - last_update;
     if (age_ms >= DATA_STALE_DEVICE_RESET_MS) {
         // Boot-loop guarded restart. Returns false if cap reached; we

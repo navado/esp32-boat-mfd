@@ -16,7 +16,7 @@ namespace ui::nav {
 static lv_obj_t *s_root = nullptr;
 
 static const ui::layouts::MetricBinding s_tiles[] = {
-    // Compass: heading + CTS (extras[0] = COG used as course-to-steer fallback).
+    // Compass: heading with COG shown as secondary reference angle.
     {"hdg",
      "HDG",
      "",
@@ -24,7 +24,7 @@ static const ui::layouts::MetricBinding s_tiles[] = {
      0x57c7d8 /*accent*/,
      nullptr,
      1,
-     {{"CTS", ui::layouts::MetricSource::COG_deg}},
+     {{"COG", ui::layouts::MetricSource::COG_deg}},
      ui::layouts::WidgetKind::Compass},
     {"sog",
      "SOG",

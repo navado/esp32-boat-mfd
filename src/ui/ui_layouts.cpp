@@ -119,6 +119,12 @@ static void format_metric(const MetricBinding &m, const sk::Data &d, char *prima
         else
             snprintf(primary, pcap, "--");
         break;
+    case MetricSource::DepthKeel_m:
+        if (!isnan(d.depthKeel))
+            snprintf(primary, pcap, "%.1f", d.depthKeel);
+        else
+            snprintf(primary, pcap, "--");
+        break;
     case MetricSource::WaterTemp_C:
         if (!isnan(d.waterTemp))
             snprintf(primary, pcap, "%.1f", k_to_c(d.waterTemp));
@@ -141,11 +147,16 @@ static void format_metric(const MetricBinding &m, const sk::Data &d, char *prima
             snprintf(primary, pcap, "--");
         break;
     case MetricSource::DTW:
+        // Always display in nm regardless of magnitude so the static
+        // unit label "nm" in the MetricBinding is always correct.
         if (!isnan(d.dtw)) {
-            if (d.dtw >= 1852.0)
-                snprintf(primary, pcap, "%.2f", d.dtw / 1852.0);
+            double nm = d.dtw / 1852.0;
+            if (nm >= 10.0)
+                snprintf(primary, pcap, "%.1f", nm);
+            else if (nm >= 1.0)
+                snprintf(primary, pcap, "%.2f", nm);
             else
-                snprintf(primary, pcap, "%.0f", d.dtw);
+                snprintf(primary, pcap, "%.3f", nm);
         } else {
             snprintf(primary, pcap, "--");
         }
@@ -156,9 +167,17 @@ static void format_metric(const MetricBinding &m, const sk::Data &d, char *prima
         else
             snprintf(primary, pcap, "--");
         break;
+    case MetricSource::CTS_deg:
+        if (!isnan(d.cts))
+            snprintf(primary, pcap, "%03.0f", rad_to_deg_pos(d.cts));
+        else
+            snprintf(primary, pcap, "--");
+        break;
     case MetricSource::XTE:
+        // Show signed value: +N = right of track (steer port), -N = left
+        // (steer starboard). Unit label "m" in MetricBinding stays correct.
         if (!isnan(d.xte))
-            snprintf(primary, pcap, "%.0f", fabs(d.xte));
+            snprintf(primary, pcap, "%+.0f", d.xte);
         else
             snprintf(primary, pcap, "--");
         break;
@@ -200,6 +219,8 @@ static double metric_scalar(const MetricBinding &m, const sk::Data &d) {
         return isnan(d.sog) ? NAN : mps_to_kn(d.sog);
     case MetricSource::Depth_m:
         return d.depth;
+    case MetricSource::DepthKeel_m:
+        return d.depthKeel;
     case MetricSource::WaterTemp_C:
         return isnan(d.waterTemp) ? NAN : k_to_c(d.waterTemp);
     case MetricSource::BatteryV:
@@ -218,10 +239,12 @@ static double metric_scalar(const MetricBinding &m, const sk::Data &d) {
         return isnan(d.twa) ? NAN : rad_to_deg_pos(d.twa);
     case MetricSource::BTW_deg:
         return isnan(d.btw) ? NAN : rad_to_deg_pos(d.btw);
+    case MetricSource::CTS_deg:
+        return isnan(d.cts) ? NAN : rad_to_deg_pos(d.cts);
     case MetricSource::XTE:
         return d.xte;
     case MetricSource::DTW:
-        return d.dtw;
+        return isnan(d.dtw) ? NAN : d.dtw / 1852.0;  // nm
     default:
         return NAN;
     }
@@ -268,6 +291,7 @@ static double scalar_unit_fraction(MetricSource src, double v) {
     case MetricSource::BatteryV:
         return clamp01((v - 11.0) / (14.4 - 11.0));
     case MetricSource::Depth_m:
+    case MetricSource::DepthKeel_m:
         return clamp01(v / 30.0);
     case MetricSource::AWS_kn:
         return clamp01(v / 40.0);

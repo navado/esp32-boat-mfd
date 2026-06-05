@@ -56,11 +56,21 @@ static void test_parses_depth_variants() {
     auto j1 = singleValueDelta("environment.depth.belowTransducer", "12.3");
     sk::applyDelta(j1.data(), j1.size(), d);
     TEST_ASSERT_FLOAT_WITHIN(0.001, 12.3, d.depth);
+    TEST_ASSERT_TRUE(std::isnan(d.depthKeel));  // belowKeel must not overwrite depth
 
     Data d2;
     auto j2 = singleValueDelta("environment.depth.belowKeel", "8.5");
     sk::applyDelta(j2.data(), j2.size(), d2);
-    TEST_ASSERT_FLOAT_WITHIN(0.001, 8.5, d2.depth);
+    // belowKeel must populate depthKeel, not depth
+    TEST_ASSERT_FLOAT_WITHIN(0.001, 8.5, d2.depthKeel);
+    TEST_ASSERT_TRUE(std::isnan(d2.depth));
+
+    // Both fields independent when both paths arrive in the same delta
+    Data d3;
+    sk::applyDelta(j1.data(), j1.size(), d3);  // sets depth
+    sk::applyDelta(j2.data(), j2.size(), d3);  // sets depthKeel
+    TEST_ASSERT_FLOAT_WITHIN(0.001, 12.3, d3.depth);
+    TEST_ASSERT_FLOAT_WITHIN(0.001, 8.5, d3.depthKeel);
 }
 
 static void test_parses_battery_with_named_bank() {

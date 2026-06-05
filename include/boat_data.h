@@ -49,6 +49,7 @@ struct Snapshot {
 
     // depth/sea
     Field depth_m;
+    Field depth_keel_m;
     Field water_temp_k;
 
     // electrical/tanks

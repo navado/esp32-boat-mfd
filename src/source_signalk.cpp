@@ -32,6 +32,7 @@ void compose_from_boat(sk::Data &out, uint32_t now_ms) {
     out.twa = v(s.twa_rad);
     out.tws = v(s.tws_mps);
     out.depth = v(s.depth_m);
+    out.depthKeel = v(s.depth_keel_m);
     out.waterTemp = v(s.water_temp_k);
     out.battVoltage = v(s.battery_v);
     out.battSoc = v(s.battery_soc);
@@ -72,6 +73,7 @@ int bridge_signalk_into_boat(const sk::Data &sk, uint32_t now_ms) {
     n += pub(&Snapshot::twa_rad, now_ms, sk.twa);
     n += pub(&Snapshot::tws_mps, now_ms, sk.tws);
     n += pub(&Snapshot::depth_m, now_ms, sk.depth);
+    n += pub(&Snapshot::depth_keel_m, now_ms, sk.depthKeel);
     n += pub(&Snapshot::water_temp_k, now_ms, sk.waterTemp);
     n += pub(&Snapshot::battery_v, now_ms, sk.battVoltage);
     n += pub(&Snapshot::battery_soc, now_ms, sk.battSoc);

@@ -17,15 +17,16 @@ namespace ui::steering {
 static lv_obj_t *s_root = nullptr;
 
 static const ui::layouts::MetricBinding s_tiles[] = {
-    // Compass: heading with BTW shown as target bearing in extras.
+    // Compass: heading with CTS (course-to-steer) as secondary — matches
+    // the editor's steeringScreen() preset (HDG / CTS).
     {"hdg",
-     "HDG",
+     "HDG / CTS",
      "",
      ui::layouts::MetricSource::HDG_deg,
      0x57c7d8 /*accent*/,
      nullptr,
      1,
-     {{"BTW", ui::layouts::MetricSource::BTW_deg}},
+     {{"CTS", ui::layouts::MetricSource::CTS_deg}},
      ui::layouts::WidgetKind::Compass},
     {"xte",
      "XTE",
