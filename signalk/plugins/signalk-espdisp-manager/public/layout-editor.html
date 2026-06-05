@@ -117,14 +117,25 @@
   .wpreview .num-unit { font-size: 13px; color: var(--fg-dim); margin-left: 4px; }
   .wpreview .num-row { display: flex; align-items: baseline; }
   .wpreview .num-secondary { font-size: 12px; color: var(--fg-dim); }
-  .wpreview .compass { position: relative; width: 88px; height: 88px;
+  /* Compass: round bezel with N/E/S/W cardinals on the ring + center
+     heading + marker triangle + CTS text below. Larger ring + bigger
+     number makes the heading scannable at a glance. */
+  .wpreview .compass { position: relative; width: 110px; height: 110px;
     border: 2px solid var(--accent); border-radius: 50%; display: flex;
-    align-items: center; justify-content: center; }
-  .wpreview .compass .heading { color: var(--accent); font-weight: 700; font-size: 18px; }
-  .wpreview .compass .marker { position: absolute; top: -6px; left: 50%; transform: translateX(-50%);
-    color: #ffb84d; font-size: 13px; }
-  .wpreview .compass .cts { position: absolute; bottom: -2px; left: 50%; transform: translateX(-50%);
-    color: #ffb84d; font-size: 10px; }
+    align-items: center; justify-content: center;
+    background: rgba(87, 199, 216, 0.04); }
+  .wpreview .compass .heading { color: var(--accent); font-weight: 700; font-size: 26px;
+    letter-spacing: -0.02em; }
+  .wpreview .compass .marker { position: absolute; top: -10px; left: 50%; transform: translateX(-50%);
+    color: var(--warn); font-size: 16px; font-weight: 700; }
+  .wpreview .compass .cts { position: absolute; bottom: -14px; left: 50%; transform: translateX(-50%);
+    color: var(--warn); font-size: 11px; font-weight: 500; }
+  .wpreview .compass .card { position: absolute; color: var(--fg-dim); font-size: 11px;
+    font-weight: 700; }
+  .wpreview .compass .card-n { top: 4px; left: 50%; transform: translateX(-50%); color: var(--fg); }
+  .wpreview .compass .card-e { right: 6px; top: 50%; transform: translateY(-50%); }
+  .wpreview .compass .card-s { bottom: 4px; left: 50%; transform: translateX(-50%); }
+  .wpreview .compass .card-w { left: 6px; top: 50%; transform: translateY(-50%); }
   .wpreview .rose { position: relative; width: 88px; height: 88px;
     border: 2px dashed #ffb84d; border-radius: 50%; display: flex;
     align-items: center; justify-content: center; color: #ffb84d; font-weight: 700; font-size: 12px; }
@@ -364,28 +375,84 @@ function metricPathCombobox (value, placeholder, onChange) {
 // draws for this widget type, so the editor canvas matches the panel.
 // Uses representative sample values so the operator sees the shape
 // (digit size, compass bezel, sparkline, etc.) without needing live data.
+// Sample data per SK path so the editor preview reflects what the
+// operator is binding. The numbers are visually distinct fixtures
+// (not live data) but match what the device would display when the
+// tile is actually populated.
+const PATH_SAMPLES = {
+  'environment.wind.speedApparent':    { value: '9.7',  unit: 'kn', percent: 25 },
+  'environment.wind.speedTrue':        { value: '11.2', unit: 'kn', percent: 28 },
+  'environment.wind.angleApparent':    { value: '050',  unit: '°S', percent: 14 },
+  'environment.wind.angleTrueWater':   { value: '075',  unit: '°S', percent: 21 },
+  'navigation.speedOverGround':        { value: '6.3',  unit: 'kn', percent: 42 },
+  'navigation.speedThroughWater':      { value: '6.0',  unit: 'kn', percent: 40 },
+  'navigation.courseOverGroundTrue':   { value: '047',  unit: '°',  percent: 13 },
+  'navigation.headingTrue':            { value: '047',  unit: '°',  percent: 13 },
+  'navigation.position':               { value: "41°23.16'N\n2°10.43'E", unit: '', percent: 0 },
+  'environment.depth.belowTransducer': { value: '12.4', unit: 'm',  percent: 41 },
+  'environment.depth.belowKeel':       { value: '11.6', unit: 'm',  percent: 39 },
+  'environment.water.temperature':     { value: '18.3', unit: '°C', percent: 53 },
+  'environment.outside.temperature':   { value: '21.0', unit: '°C', percent: 64 },
+  'electrical.batteries.house.voltage':         { value: '12.74', unit: 'V', percent: 64 },
+  'electrical.batteries.house.stateOfCharge':   { value: '78',    unit: '%', percent: 78 },
+  'tanks.fuel.0.currentLevel':         { value: '62', unit: '%', percent: 62 },
+  'tanks.freshWater.0.currentLevel':   { value: '85', unit: '%', percent: 85 },
+  'navigation.courseRhumbline.crossTrackError':       { value: '8',    unit: 'm',  percent: 8 },
+  'navigation.courseRhumbline.nextPoint.bearingTrue': { value: '093',  unit: '°',  percent: 26 },
+  'navigation.courseRhumbline.nextPoint.distance':    { value: '1.42', unit: 'nm', percent: 35 },
+  'navigation.courseRhumbline.bearingTrackTrue':      { value: '090',  unit: '°',  percent: 25 },
+  'navigation.courseRhumbline.velocityMadeGood':      { value: '5.1',  unit: 'kn', percent: 34 },
+  'steering.autopilot.target.headingTrue':            { value: '048',  unit: '°',  percent: 13 },
+  'steering.autopilot.state':                         { value: 'AUTO', unit: '',   percent: 0 },
+  'environment.current.setTrue':                      { value: '230',  unit: '°',  percent: 64 },
+  'environment.current.drift':                        { value: '0.4',  unit: 'kn', percent: 4 }
+};
+
+function sampleFor (tile, fallback) {
+  // Look up by primary path first, then any string field, then fallback.
+  if (tile) {
+    const candidates = [tile.primary, tile.aws, tile.awa, tile.heading];
+    for (const path of candidates) {
+      if (typeof path === 'string' && PATH_SAMPLES[path]) return PATH_SAMPLES[path];
+    }
+  }
+  return fallback || { value: '--', unit: '', percent: 0 };
+}
+
 function widgetPreview (widget, tile) {
   if (!widget) {
     return el('div', { className: 'wpreview empty' }, 'pick a widget type');
   }
   const title = (tile && tile.title) ? tile.title.toUpperCase() : '';
   switch (widget) {
-    case 'numeric':
+    case 'numeric': {
+      const s = sampleFor(tile, { value: '9.7', unit: 'kn' });
       return el('div', { className: 'wpreview' },
         el('div', { className: 'num-stack' },
           el('div', { className: 'num-row' },
-            el('span', { className: 'num-primary' }, '9.7'),
-            el('span', { className: 'num-unit' }, 'kn')),
-          el('div', { className: 'num-secondary' }, title || 'sample value')));
-    case 'compass':
+            el('span', { className: 'num-primary' }, s.value),
+            el('span', { className: 'num-unit' }, s.unit)),
+          el('div', { className: 'num-secondary' }, title || (tile && tile.primary) || 'sample value')));
+    }
+    case 'compass': {
+      const s = sampleFor(tile, { value: '047' });
+      const cts = (tile && tile.secondary && PATH_SAMPLES[tile.secondary])
+        ? 'CTS ' + PATH_SAMPLES[tile.secondary].value : 'CTS 052';
       return el('div', { className: 'wpreview' },
         el('div', { className: 'compass' },
           el('div', { className: 'marker' }, '▲'),
-          el('div', { className: 'heading' }, '047'),
-          el('div', { className: 'cts' }, 'CTS 052')));
-    case 'windRose':
+          el('div', { className: 'card card-n' }, 'N'),
+          el('div', { className: 'card card-e' }, 'E'),
+          el('div', { className: 'card card-s' }, 'S'),
+          el('div', { className: 'card card-w' }, 'W'),
+          el('div', { className: 'heading' }, s.value),
+          el('div', { className: 'cts' }, cts)));
+    }
+    case 'windRose': {
+      const s = sampleFor(tile, { value: '9.7' });
       return el('div', { className: 'wpreview' },
-        el('div', { className: 'rose' }, 'AWS 9.7'));
+        el('div', { className: 'rose' }, 'AWS ' + s.value));
+    }
     case 'windDial': {
       // Full-screen wind dial preview that matches the device's
       // src/ui/screen_wind.cpp render: outer bezel ring, N/E/S/W
@@ -474,27 +541,60 @@ function widgetPreview (widget, tile) {
       return wrap;
     }
     case 'gauge': {
-      // Simple SVG arc gauge with needle at 65%.
+      // 270-degree sweep arc with grid-color background and accent fill.
+      // Adding tick marks at 0/25/50/75/100% improves readability over the
+      // bare arc - the operator can see at-a-glance where the needle sits
+      // relative to the range.
+      const s = sampleFor(tile, { percent: 65 });
+      const pct = Math.max(0, Math.min(100, s.percent || 0));
       const svgNS = 'http://www.w3.org/2000/svg';
       const svg = document.createElementNS(svgNS, 'svg');
       svg.setAttribute('viewBox', '0 0 100 100');
-      svg.innerHTML = '<path d="M10 80 A 40 40 0 0 1 90 80" fill="none" stroke="#52736f" stroke-width="8"/>' +
-                      '<path d="M10 80 A 40 40 0 0 1 75 30" fill="none" stroke="#57c7d8" stroke-width="8"/>' +
-                      '<text x="50" y="62" font-family="Montserrat" font-size="22" font-weight="700" fill="#57c7d8" text-anchor="middle">65%</text>';
+      // Arc geometry: 270° sweep from 135° (bottom-left) through top to 45° (bottom-right).
+      function polar (deg, r) {
+        const rad = (deg - 90) * Math.PI / 180;
+        return [50 + r * Math.cos(rad), 50 + r * Math.sin(rad)];
+      }
+      // Sweep angles
+      const A0 = -135, A1 = 135;  // -135° (bottom-left) to 135° (bottom-right)
+      function arcPath (start, end, r) {
+        const [x0, y0] = polar(start, r);
+        const [x1, y1] = polar(end, r);
+        const large = (end - start) > 180 ? 1 : 0;
+        return `M ${x0} ${y0} A ${r} ${r} 0 ${large} 1 ${x1} ${y1}`;
+      }
+      const fillEnd = A0 + (A1 - A0) * (pct / 100);
+      let ticks = '';
+      for (let i = 0; i <= 4; ++i) {
+        const a = A0 + (A1 - A0) * (i / 4);
+        const [tx, ty] = polar(a, 36);
+        const [tx2, ty2] = polar(a, 30);
+        ticks += `<line x1="${tx}" y1="${ty}" x2="${tx2}" y2="${ty2}" stroke="#8fa59d" stroke-width="1"/>`;
+      }
+      svg.innerHTML =
+        `<path d="${arcPath(A0, A1, 40)}" fill="none" stroke="#52736f" stroke-width="8" stroke-linecap="round"/>` +
+        `<path d="${arcPath(A0, fillEnd, 40)}" fill="none" stroke="#57c7d8" stroke-width="8" stroke-linecap="round"/>` +
+        ticks +
+        `<text x="50" y="58" font-family="Montserrat" font-size="22" font-weight="700" fill="#57c7d8" text-anchor="middle">${pct}%</text>` +
+        `<text x="50" y="74" font-family="Montserrat" font-size="9" fill="#8fa59d" text-anchor="middle">${title || (tile && tile.primary && tile.primary.split('.').pop()) || ''}</text>`;
       const wrap = el('div', { className: 'wpreview' });
       const gauge = el('div', { className: 'gauge' });
       gauge.append(svg);
       wrap.append(gauge);
       return wrap;
     }
-    case 'bar':
+    case 'bar': {
+      const s = sampleFor(tile, { percent: 65 });
+      const pct = Math.max(0, Math.min(100, s.percent || 0));
+      const fill = el('div', { className: 'bar-fill' });
+      fill.style.width = pct + '%';
       return el('div', { className: 'wpreview' },
         el('div', { className: 'bar' },
           el('div', { className: 'bar-row' },
-            el('span', null, title || 'level'),
-            el('span', null, '65%')),
-          el('div', { className: 'bar-outer' },
-            el('div', { className: 'bar-fill' }))));
+            el('span', null, title || (tile && tile.primary && tile.primary.split('.').pop()) || 'level'),
+            el('span', null, pct + '%')),
+          el('div', { className: 'bar-outer' }, fill)));
+    }
     case 'trend': {
       const svgNS = 'http://www.w3.org/2000/svg';
       const svg = document.createElementNS(svgNS, 'svg');

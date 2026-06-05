@@ -363,6 +363,20 @@ static void paint_compass_body(QuadGridTile &t, const MetricBinding &m, int w, i
     lv_obj_align_to(marker, ring, LV_ALIGN_OUT_TOP_MID, 0, 4);
     lv_obj_clear_flag(marker, LV_OBJ_FLAG_CLICKABLE);
 
+    // N/E/S/W cardinal labels on the ring perimeter for at-a-glance
+    // orientation (matches editor .compass .card-* placement).
+    static const char *cardinals[4] = {"N", "E", "S", "W"};
+    static const lv_align_t aligns[4] = {LV_ALIGN_TOP_MID, LV_ALIGN_RIGHT_MID, LV_ALIGN_BOTTOM_MID,
+                                         LV_ALIGN_LEFT_MID};
+    for (int i = 0; i < 4; ++i) {
+        lv_obj_t *c = lv_label_create(ring);
+        lv_label_set_text(c, cardinals[i]);
+        lv_obj_set_style_text_font(c, &lv_font_montserrat_14, 0);
+        lv_obj_set_style_text_color(c, lv_color_hex(i == 0 ? theme.fg : theme.fg_dim), 0);
+        lv_obj_align(c, aligns[i], 0, 0);
+        lv_obj_clear_flag(c, LV_OBJ_FLAG_CLICKABLE);
+    }
+
     // Center heading text.
     t.value = lv_label_create(ring);
     lv_label_set_text(t.value, "--");
@@ -382,30 +396,59 @@ static void paint_compass_body(QuadGridTile &t, const MetricBinding &m, int w, i
 
 // Gauge widget: LVGL arc spanning 270° with the value fill in accent
 // and a center percent label. Mirrors editor .wpreview .gauge.
-static void paint_gauge_body(QuadGridTile &t, const MetricBinding & /*m*/, int w, int h) {
+static void paint_gauge_body(QuadGridTile &t, const MetricBinding &m, int w, int h) {
     int dia = (w < h ? w : h) - 56;
     if (dia < 80) dia = 80;
     lv_obj_t *arc = lv_arc_create(t.root);
     lv_obj_set_size(arc, dia, dia);
     lv_obj_align(arc, LV_ALIGN_CENTER, 0, 6);
-    lv_arc_set_bg_angles(arc, 135, 45);  // 270° sweep (bottom open)
+    lv_arc_set_bg_angles(arc, 135, 45);  // 270 degree sweep (bottom open)
     lv_arc_set_range(arc, 0, 100);
     lv_arc_set_value(arc, 0);
     lv_obj_remove_style(arc, NULL, LV_PART_KNOB);
     lv_obj_clear_flag(arc, LV_OBJ_FLAG_CLICKABLE);
     lv_obj_set_style_arc_color(arc, lv_color_hex(theme.grid), LV_PART_MAIN);
-    lv_obj_set_style_arc_width(arc, 8, LV_PART_MAIN);
+    lv_obj_set_style_arc_width(arc, 10, LV_PART_MAIN);
+    lv_obj_set_style_arc_rounded(arc, true, LV_PART_MAIN);
     lv_obj_set_style_arc_color(arc, lv_color_hex(theme.accent), LV_PART_INDICATOR);
-    lv_obj_set_style_arc_width(arc, 8, LV_PART_INDICATOR);
+    lv_obj_set_style_arc_width(arc, 10, LV_PART_INDICATOR);
+    lv_obj_set_style_arc_rounded(arc, true, LV_PART_INDICATOR);
     t.aux = arc;
 
-    // Center percent label.
+    // Tick marks at 0/25/50/75/100% improve at-a-glance readability so
+    // the operator can tell where the needle sits relative to range.
+    // Use lv_scale for the tick ring (LVGL 9 native scale widget).
+    lv_obj_t *scale = lv_scale_create(t.root);
+    lv_obj_set_size(scale, dia, dia);
+    lv_obj_align(scale, LV_ALIGN_CENTER, 0, 6);
+    lv_scale_set_mode(scale, LV_SCALE_MODE_ROUND_INNER);
+    lv_scale_set_angle_range(scale, 270);
+    lv_scale_set_rotation(scale, 135);
+    lv_scale_set_total_tick_count(scale, 5);
+    lv_scale_set_major_tick_every(scale, 1);
+    lv_scale_set_range(scale, 0, 100);
+    lv_obj_set_style_length(scale, 6, LV_PART_INDICATOR);
+    lv_obj_set_style_line_color(scale, lv_color_hex(theme.fg_dim), LV_PART_INDICATOR);
+    lv_obj_set_style_line_width(scale, 1, LV_PART_INDICATOR);
+    lv_obj_set_style_bg_opa(scale, LV_OPA_TRANSP, 0);
+    lv_obj_set_style_arc_opa(scale, LV_OPA_TRANSP, 0);
+    lv_obj_clear_flag(scale, LV_OBJ_FLAG_CLICKABLE);
+    lv_obj_clear_flag(scale, LV_OBJ_FLAG_SCROLLABLE);
+
+    // Center percent label + small caption underneath = bound metric path tail.
     t.value = lv_label_create(t.root);
     lv_label_set_text(t.value, "--");
     lv_obj_set_style_text_font(t.value, &lv_font_montserrat_28, 0);
     lv_obj_set_style_text_color(t.value, lv_color_hex(theme.accent), 0);
-    lv_obj_align(t.value, LV_ALIGN_CENTER, 0, 6);
+    lv_obj_align(t.value, LV_ALIGN_CENTER, 0, 0);
     lv_obj_clear_flag(t.value, LV_OBJ_FLAG_CLICKABLE);
+
+    lv_obj_t *cap = lv_label_create(t.root);
+    lv_label_set_text(cap, (m.label && m.label[0]) ? m.label : "");
+    lv_obj_set_style_text_font(cap, &lv_font_montserrat_14, 0);
+    lv_obj_set_style_text_color(cap, lv_color_hex(theme.fg_dim), 0);
+    lv_obj_align(cap, LV_ALIGN_CENTER, 0, 22);
+    lv_obj_clear_flag(cap, LV_OBJ_FLAG_CLICKABLE);
 }
 
 // Bar widget: title row (label left, percent right) + LVGL bar fill.
