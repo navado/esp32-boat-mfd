@@ -119,7 +119,10 @@ static bool build_png_from_snapshot(uint8_t **out, size_t *out_len) {
     }
 
     // Feed each row through DEFLATE. Filter byte = 0 (None). Convert
-    // RGB565 source pixels to RGB888 (PNG expects 8-bit samples).
+    // RGB565 source pixels to RGB888 (PNG expects 8-bit samples). Yield
+    // every 32 rows so the SK heartbeat task and the LVGL refresh task
+    // get scheduled - PNG encoding 480 rows takes long enough that
+    // without a yield, the SK stall detector escalates to wifi reset.
     const uint8_t *src = (const uint8_t *)buf->data;
     for (uint32_t y = 0; y < h; ++y) {
         row_buf[0] = 0;  // filter = None
@@ -141,6 +144,7 @@ static bool build_png_from_snapshot(uint8_t **out, size_t *out_len) {
             lv_draw_buf_destroy(buf);
             return false;
         }
+        if ((y & 0x1f) == 0x1f) vTaskDelay(1);  // yield ~15x during encode
     }
     if (tdefl_compress_buffer(deflator, nullptr, 0, TDEFL_FINISH) != TDEFL_STATUS_DONE) {
         heap_caps_free(zlib_buf);
