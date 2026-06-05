@@ -744,9 +744,6 @@ static void update_quad_grid(lv_obj_t *root, const ScreenVariantSpec &spec, cons
             break;
         }
         case WidgetKind::Autopilot:
-            // value = AP state (already formatted in `pri` if source=APState),
-            // secondary = target heading (use `sec` if format_metric supplied one,
-            // else format it from sec text below).
             ui::set_text_if_changed(t.value, t.last_value, sizeof(t.last_value), pri);
             if (t.secondary) {
                 char tgt[24];
@@ -757,6 +754,27 @@ static void update_quad_grid(lv_obj_t *root, const ScreenVariantSpec &spec, cons
             break;
         case WidgetKind::Button:
             // Static label; no update needed.
+            break;
+        case WidgetKind::Compass:
+            ui::set_text_if_changed(t.value, t.last_value, sizeof(t.last_value), pri);
+            if (t.secondary) {
+                // Compass CTS line: prefer extras[0] (operator-bound second
+                // path like CTS or COG); fall back to format_metric's secondary.
+                char cts[24];
+                if (m.extras_count > 0 && m.extras[0].source != MetricSource::None) {
+                    MetricBinding eb = {};
+                    eb.source = m.extras[0].source;
+                    char ep[24], esec[24];
+                    format_metric(eb, data, ep, sizeof(ep), esec, sizeof(esec));
+                    snprintf(cts, sizeof(cts), "%s %s",
+                             m.extras[0].label && m.extras[0].label[0] ? m.extras[0].label : "CTS",
+                             ep);
+                } else {
+                    snprintf(cts, sizeof(cts), "%s", sec);
+                }
+                ui::set_text_if_changed(t.secondary, t.last_secondary, sizeof(t.last_secondary),
+                                        cts);
+            }
             break;
         default:
             // Numeric, Compass, WindRose, Text, Trend fallback - all use
