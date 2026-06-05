@@ -14,6 +14,8 @@
 # Usage:
 #   tools/ota_flash.sh <ip> <firmware.bin> [--remote user@host]
 #
+# Set ESPDISP_OTA_PASSWORD or OTA_PASSWORD to pass ArduinoOTA auth.
+#
 # If --remote is given, scp the binary + espota.py to that host and
 # run there (used to flash a device on a network only reachable from
 # the lab box).
@@ -34,10 +36,12 @@ TIMEOUT_BOOT_HARD=120
 DEVICE_IP=""
 FW=""
 REMOTE=""
+OTA_AUTH="${ESPDISP_OTA_PASSWORD:-${OTA_PASSWORD:-}}"
 while [ $# -gt 0 ]; do
     case "$1" in
         --remote) REMOTE="$2"; shift 2;;
         --port) PORT="$2"; shift 2;;
+        --auth) OTA_AUTH="$2"; shift 2;;
         --espota) ESPOTA_DEFAULT="$2"; shift 2;;
         -h|--help)
             grep '^#' "$0" | sed 's/^# \?//'
@@ -85,15 +89,23 @@ MARKER="$(fw_build_marker)"
 log "expected build marker: ${MARKER}"
 
 run_espota() {
+    local auth_args=()
+    if [ -n "${OTA_AUTH}" ]; then
+        auth_args=(-a "${OTA_AUTH}")
+    fi
     if [ -n "${REMOTE}" ]; then
         log "flashing via ${REMOTE}"
         ssh "${REMOTE}" 'rm -rf /tmp/espdisp-ota && mkdir -p /tmp/espdisp-ota'
         scp -q "${ESPOTA_DEFAULT}" "${FW}" "${REMOTE}:/tmp/espdisp-ota/"
-        ssh "${REMOTE}" "python3 /tmp/espdisp-ota/espota.py -i ${DEVICE_IP} -p ${PORT} -f /tmp/espdisp-ota/$(basename "${FW}")" \
+        local auth_remote=""
+        if [ -n "${OTA_AUTH}" ]; then
+            printf -v auth_remote ' -a %q' "${OTA_AUTH}"
+        fi
+        ssh "${REMOTE}" "python3 /tmp/espdisp-ota/espota.py -i ${DEVICE_IP} -p ${PORT}${auth_remote} -f /tmp/espdisp-ota/$(basename "${FW}")" \
             2>&1 | tr '\r' '\n' | grep -E "Sending|Error|Uploading 1|Success|Result" | tail -3 || true
     else
         log "flashing direct (this host -> ${DEVICE_IP})"
-        python3 "${ESPOTA_DEFAULT}" -i "${DEVICE_IP}" -p "${PORT}" -f "${FW}" \
+        python3 "${ESPOTA_DEFAULT}" -i "${DEVICE_IP}" -p "${PORT}" "${auth_args[@]}" -f "${FW}" \
             2>&1 | tr '\r' '\n' | grep -E "Sending|Error|Uploading 1|Success|Result" | tail -3 || true
     fi
 }
