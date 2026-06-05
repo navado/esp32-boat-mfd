@@ -576,8 +576,9 @@ static void paint_autopilot_body(QuadGridTile &t, const MetricBinding & /*m*/, i
     for (int i = 0; i < 4; ++i) {
         lv_obj_t *b = lv_obj_create(t.root);
         lv_obj_set_size(b, btn_w, 22);
-        lv_obj_align(t.root, LV_ALIGN_BOTTOM_LEFT, 16 + i * (btn_w + 2), -8);
-        lv_obj_set_pos(b, 16 + i * (btn_w + 2), -1);
+        // Single align call on `b` (not t.root - that was a typo that
+        // repositioned the entire tile 4x per build, causing the tile
+        // to drift to bottom-left).
         lv_obj_align(b, LV_ALIGN_BOTTOM_LEFT, 16 + i * (btn_w + 2), -8);
         lv_obj_set_style_bg_color(b, lv_color_hex(theme.panel_edge), 0);
         lv_obj_set_style_bg_opa(b, LV_OPA_COVER, 0);
