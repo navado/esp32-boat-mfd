@@ -451,6 +451,73 @@ def cmd_watch(args) -> int:
         time.sleep(args.interval)
 
 
+def _soak_sample(doc: Optional[dict], t: int):
+    """Map a /api/state doc into a soak_verdict.Sample. A None doc (device
+    didn't respond) becomes an uptime_ms=0 row, which analyze() treats as a
+    non-responding tick rather than a reboot/stall."""
+    from soak_verdict import Sample
+    if doc is None:
+        return Sample(t=t, uptime_ms=0, heap=0, sk_live=False)
+    dev = doc.get("device", {})
+    sk = doc.get("sk", {})
+    # Prefer an explicit staleness age if the firmware exposes one; the field
+    # name has varied, so probe a few before falling back to the state flag.
+    age = None
+    for key in ("last_update_age_ms", "lastUpdateAgeMs", "age_ms", "data_age_ms"):
+        if isinstance(sk.get(key), int):
+            age = sk[key]
+            break
+    return Sample(
+        t=t,
+        uptime_ms=int(dev.get("uptime_ms", 0) or 0),
+        heap=int(dev.get("heap_free", 0) or 0),
+        sk_live=(sk.get("state") == "live"),
+        sk_age_ms=age,
+    )
+
+
+def cmd_soak(args) -> int:
+    """Unattended stability soak: poll /api/state on an interval, append each
+    tick to JSONL, and print a pass/fail verdict (reboots, stalls, min heap)
+    at the end. Run on a host on the device subnet (e.g. via
+    --remote compulab@mythra-nav). Stops on Ctrl-C or after --duration."""
+    from soak_verdict import analyze, format_verdict
+    ip = resolve_ip(args)
+    if not ip:
+        return 1
+    out_path = args.out or f"soak-{datetime.datetime.now():%Y%m%d-%H%M%S}.jsonl"
+    samples = []
+    start = time.time()
+    sys.stdout.write(f"# soak -> {out_path} (interval {args.interval}s, "
+                     f"target http://{ip}/api/state)\n")
+    sys.stdout.flush()
+    try:
+        with open(out_path, "a", buffering=1) as fh:
+            while True:
+                t = int(time.time() - start)
+                doc = http_get_json(f"http://{ip}/api/state", args.timeout, args.remote)
+                s = _soak_sample(doc, t)
+                samples.append(s)
+                ts = datetime.datetime.now().isoformat(timespec="seconds")
+                rec = {"ts": ts, "t": t, "uptime_ms": s.uptime_ms,
+                       "heap": s.heap, "sk_live": s.sk_live,
+                       "sk_age_ms": s.sk_age_ms,
+                       "reachable": doc is not None}
+                fh.write(json.dumps(rec) + "\n")
+                state = "live" if s.sk_live else ("--" if doc is None else "stalled")
+                sys.stdout.write(f"{ts}  t={t}s  up={s.uptime_ms // 1000}s  "
+                                 f"heap={s.heap // 1024}k  sk={state}\n")
+                sys.stdout.flush()
+                if args.duration and (time.time() - start) >= args.duration:
+                    break
+                time.sleep(args.interval)
+    except KeyboardInterrupt:
+        sys.stdout.write("\n# interrupted\n")
+    v = analyze(samples, stall_ms=int(args.stall_ms))
+    sys.stdout.write(format_verdict(v) + "\n")
+    return 0 if v.passed else 1
+
+
 # ---------- CLI plumbing ----------
 
 def die(msg: str, code: int = 2) -> None:
@@ -576,6 +643,17 @@ def main(argv: Optional[list[str]] = None) -> int:
     add_common_args(p_watch)
     p_watch.add_argument("--interval", type=float, default=5.0)
 
+    p_soak = sub.add_parser("soak", help="Unattended stability soak -> JSONL + verdict")
+    add_common_args(p_soak)
+    p_soak.add_argument("--interval", type=float, default=30.0,
+                        help="Seconds between polls (default 30).")
+    p_soak.add_argument("--duration", type=float, default=0,
+                        help="Stop after N seconds (0 = until Ctrl-C).")
+    p_soak.add_argument("--stall-ms", dest="stall_ms", type=float, default=30000,
+                        help="Data-age threshold for a stall (default 30000).")
+    p_soak.add_argument("--out", default=None,
+                        help="JSONL output path (default soak-<ts>.jsonl).")
+
     args = parser.parse_args(argv)
     apply_env_defaults(args)
 
@@ -602,6 +680,8 @@ def main(argv: Optional[list[str]] = None) -> int:
         return cmd_recover(args)
     if args.cmd == "watch":
         return cmd_watch(args)
+    if args.cmd == "soak":
+        return cmd_soak(args)
     parser.error(f"unknown command: {args.cmd}")
     return 2
 
