@@ -31,6 +31,7 @@ enum class CommandType : uint8_t {
                           // calls manager_screens::apply() then frees.
     ShowOverlay,          // a = message text (spec 17 §8 overlay.show)
     ClearOverlay,         // (spec 17 §8 overlay.clear)
+    Knob,                 // i = knob::Event value; b[0] = '1' if button held during detent
 };
 
 struct Command {
