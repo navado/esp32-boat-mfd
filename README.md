@@ -41,8 +41,16 @@ personal, research, educational, and other noncommercial use.
   <img src="docs/images/screen-wifi.png" alt="WiFi setup screen test screenshot" width="150">
   <img src="docs/images/screen-touch-grid.png" alt="Touch grid test screenshot" width="150">
   <br>
-  <em>System-test screenshots captured from the device/test harness artifacts.</em>
+  <em>Live screenshots captured from the device (glass-cockpit theme).</em>
 </p>
+
+> **Latest UI (2026-06):** a "glass-cockpit" redesign — bordered gradient
+> cells, a cool high-contrast palette, large hero numerals (custom 64 px
+> font), semantic color, and a single consolidated style source. The wind
+> screen shows wind/heading/speed readouts inside the rose plus a live tidal
+> **current vector**; tapping a dashboard tile opens a full-screen single-value
+> **zoom** view. See [docs/user-guide-signalk.md](docs/user-guide-signalk.md)
+> for managing displays, dashboards, and OTA firmware from SignalK.
 
 ## Features
 
