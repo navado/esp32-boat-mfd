@@ -52,6 +52,17 @@ personal, research, educational, and other noncommercial use.
 > **zoom** view. See [docs/user-guide-signalk.md](docs/user-guide-signalk.md)
 > for managing displays, dashboards, and OTA firmware from SignalK.
 
+<p align="center">
+  <img src="docs/sim-shots/dash-480x480.png" alt="Dashboard 480x480" width="150">
+  <img src="docs/sim-shots/dash-800x480.png" alt="Dashboard 800x480" width="250">
+  <br>
+  <img src="docs/sim-shots/dash-1024x600.png" alt="Dashboard 1024x600" width="320">
+  <br>
+  <em>Same dashboard rendered at every supported display class (480×480,
+  800×480, 1024×600) by the headless LVGL host harness — <code>make sim</code>.
+  It runs the real layout code and asserts no-overlap/in-bounds per resolution.</em>
+</p>
+
 ## Features
 
 - **SignalK over WebSocket** — subscribes to navigation, wind, depth, water temp, battery, tanks, route, and autopilot state

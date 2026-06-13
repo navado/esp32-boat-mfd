@@ -130,6 +130,34 @@ int main(int argc, char **argv) {
     }
     lv_refr_now(disp);
 
+    // No-overlap / in-bounds assertion: every tile panel (direct child of the
+    // screen root) must sit within the display and not overlap a sibling.
+    int rc = 0;
+    uint32_t n = lv_obj_get_child_count(root);
+    lv_area_t a[16];
+    uint32_t na = 0;
+    for (uint32_t i = 0; i < n && na < 16; ++i) {
+        lv_obj_t *c = lv_obj_get_child(root, i);
+        lv_area_t ar;
+        lv_obj_get_coords(c, &ar);
+        if (ar.x1 < 0 || ar.y1 < 0 || ar.x2 >= LCD_W || ar.y2 >= LCD_H) {
+            fprintf(stderr, "OVERLAP/BOUNDS: tile %u out of bounds (%d,%d)-(%d,%d) on %dx%d\n", i,
+                    ar.x1, ar.y1, ar.x2, ar.y2, LCD_W, LCD_H);
+            rc = 1;
+        }
+        a[na++] = ar;
+    }
+    for (uint32_t i = 0; i < na; ++i)
+        for (uint32_t j = i + 1; j < na; ++j) {
+            bool overlap =
+                !(a[i].x2 < a[j].x1 || a[j].x2 < a[i].x1 || a[i].y2 < a[j].y1 || a[j].y2 < a[i].y1);
+            if (overlap) {
+                fprintf(stderr, "OVERLAP: tiles %u and %u overlap on %dx%d\n", i, j, LCD_W, LCD_H);
+                rc = 1;
+            }
+        }
+    if (rc == 0) printf("layout ok (%u tiles, no overlap, in bounds) %dx%d\n", na, LCD_W, LCD_H);
+
     lv_draw_buf_t *snap = lv_snapshot_take(lv_screen_active(), LV_COLOR_FORMAT_RGB565);
     if (!snap) {
         fprintf(stderr, "snapshot failed\n");
@@ -138,5 +166,5 @@ int main(int argc, char **argv) {
     write_bmp(out, (const uint8_t *)snap->data, snap->header.w, snap->header.h,
               snap->header.stride);
     lv_draw_buf_destroy(snap);
-    return 0;
+    return rc;
 }

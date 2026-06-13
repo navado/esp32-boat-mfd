@@ -69,6 +69,9 @@ build: setup version-check  ## Build firmware
 test: version-check  ## Run host-side unit tests
 	$(PIO) test -e native
 
+sim:  ## Render dashboard at all resolutions via headless LVGL harness -> docs/sim-shots/
+	bash tools/sim_render.sh
+
 sys-test:  ## Run unattended system tests against ESPDISP_HOST (set env var)
 	@if [ -z "$$ESPDISP_HOST" ]; then \
 		echo "ESPDISP_HOST not set. Example: ESPDISP_HOST=esp32-boat-mfd.local make sys-test"; \
@@ -324,7 +327,7 @@ clean:  ## Remove build artifacts (keeps include/secrets.h)
 	$(PIO) run -t clean 2>/dev/null || true
 	rm -rf .pio
 
-.PHONY: help setup version version-check version-set build test sys-test sys-test-remote \
+.PHONY: help setup version version-check version-set build test sim sys-test sys-test-remote \
         sys-test-mac sys-test-attended flash ota monitor ble ble-cmd provision logs \
         demo-up demo-down demo-up-remote demo-down-remote \
         server-setup server-sk-only server-status server-teardown \
