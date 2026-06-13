@@ -9,4 +9,6 @@ export const validate = {
   Attach: validator("Attach"), AttachAck: validator("AttachAck"),
   Switch: validator("Switch"), SwitchAck: validator("SwitchAck"),
   DeviceRecord: validator("DeviceRecord"), ControlState: validator("ControlState"),
+  Heartbeat: validator("Heartbeat"), HeartbeatAck: validator("HeartbeatAck"),
+  Detach: validator("Detach"),
 };
