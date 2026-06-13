@@ -483,11 +483,11 @@ lv_obj_t *build(lv_obj_t *parent) {
     //   upper-left  : AWS (amber) + AWA secondary
     //   upper-right : TWS + TWA secondary
     //   top-centre  : HDG
-    const int dxl = -120;  // left column
-    const int dxr = 120;   // right column
-    inner_readout(s_root, "AWS", dxl, -64, &lv_font_montserrat_48, 0xf6a21a, &lbl_aws_value,
+    const int dxl = -96;  // left column (pulled toward centre)
+    const int dxr = 96;   // right column
+    inner_readout(s_root, "AWS", dxl, 0, &lv_font_montserrat_48, 0xf6a21a, &lbl_aws_value,
                   &lbl_awa_value);
-    inner_readout(s_root, "TWS", dxr, -64, &lv_font_montserrat_48, theme.fg, &lbl_tws_value,
+    inner_readout(s_root, "TWS", dxr, 0, &lv_font_montserrat_48, theme.fg, &lbl_tws_value,
                   &lbl_twa_value);
     inner_readout(s_root, "HDG", 0, -134, &lv_font_montserrat_48, theme.accent, &lbl_hdg_value,
                   nullptr);

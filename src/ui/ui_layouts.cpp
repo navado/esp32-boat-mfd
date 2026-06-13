@@ -415,28 +415,33 @@ static void paint_numeric_body(QuadGridTile &t, const MetricBinding &m, int w, i
     }
 }
 
-// A thin rotating needle pinned to a ring's centre, pointing up at 0°.
-// Rotated live (transform_rotation, 0.1° units) to show heading / wind angle.
-// Returned in t.aux2 so update_quad_grid can spin it.
-static lv_obj_t *make_needle(lv_obj_t *ring, int dia, uint32_t color) {
-    int len = dia / 2 - 8;
-    if (len < 12) len = 12;
-    lv_obj_t *n = lv_obj_create(ring);
-    lv_obj_set_size(n, 4, len);
-    // Place the needle's bottom at the ring centre, extending up.
-    lv_obj_align(n, LV_ALIGN_CENTER, 0, -len / 2);
-    lv_obj_set_style_bg_color(n, lv_color_hex(color), 0);
-    lv_obj_set_style_bg_opa(n, LV_OPA_COVER, 0);
-    lv_obj_set_style_border_width(n, 0, 0);
-    lv_obj_set_style_radius(n, 2, 0);
-    lv_obj_set_style_pad_all(n, 0, 0);
-    // Pivot at the needle's bottom-centre == ring centre, so rotation sweeps
-    // the tip around the dial.
-    lv_obj_set_style_transform_pivot_x(n, 2, 0);
-    lv_obj_set_style_transform_pivot_y(n, len, 0);
-    lv_obj_clear_flag(n, LV_OBJ_FLAG_SCROLLABLE);
-    lv_obj_clear_flag(n, LV_OBJ_FLAG_CLICKABLE);
-    return n;
+// A direction marker that orbits OUTSIDE the ring (so it never overlaps the
+// centre number): a transparent holder concentric with the ring, pivoting at
+// its centre, carrying a triangle (LV_SYMBOL_DOWN) at its top edge. Rotating
+// the holder (transform_rotation, 0.1° units) sweeps the triangle around the
+// outside of the dial, always pointing inward. `cy_off` matches the ring's
+// vertical alignment offset in the tile. Returned in t.aux2 so update spins it.
+static lv_obj_t *make_dir_marker(lv_obj_t *parent, int dia, int cy_off, uint32_t color) {
+    const int margin = 18;  // triangle sits this far outside the ring edge
+    const int side = dia + 2 * margin;
+    lv_obj_t *h = lv_obj_create(parent);
+    lv_obj_set_size(h, side, side);
+    lv_obj_align(h, LV_ALIGN_CENTER, 0, cy_off);  // concentric with the ring
+    lv_obj_set_style_bg_opa(h, LV_OPA_TRANSP, 0);
+    lv_obj_set_style_border_width(h, 0, 0);
+    lv_obj_set_style_pad_all(h, 0, 0);
+    lv_obj_set_style_transform_pivot_x(h, side / 2, 0);
+    lv_obj_set_style_transform_pivot_y(h, side / 2, 0);
+    lv_obj_clear_flag(h, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_clear_flag(h, LV_OBJ_FLAG_CLICKABLE);
+
+    lv_obj_t *tri = lv_label_create(h);
+    lv_label_set_text(tri, LV_SYMBOL_DOWN);  // points inward at rotation 0
+    lv_obj_set_style_text_font(tri, &lv_font_montserrat_28, 0);
+    lv_obj_set_style_text_color(tri, lv_color_hex(color), 0);
+    lv_obj_align(tri, LV_ALIGN_TOP_MID, 0, -4);
+    lv_obj_clear_flag(tri, LV_OBJ_FLAG_CLICKABLE);
+    return h;
 }
 
 // Compass widget: round bezel with accent border, heading number in the
@@ -461,16 +466,9 @@ static void paint_compass_body(QuadGridTile &t, const MetricBinding &m, int w, i
     lv_obj_clear_flag(ring, LV_OBJ_FLAG_CLICKABLE);
     t.aux = ring;
 
-    // Heading needle (rotated live in update_quad_grid to the heading bearing).
-    t.aux2 = make_needle(ring, dia, theme.accent);
-
-    // Fixed top marker (lubber line) so the heading needle reads against it.
-    lv_obj_t *marker = lv_label_create(t.root);
-    lv_label_set_text(marker, "^");
-    lv_obj_set_style_text_font(marker, &lv_font_montserrat_14, 0);
-    lv_obj_set_style_text_color(marker, lv_color_hex(theme.warn), 0);
-    lv_obj_align_to(marker, ring, LV_ALIGN_OUT_TOP_MID, 0, 2);
-    lv_obj_clear_flag(marker, LV_OBJ_FLAG_CLICKABLE);
+    // Heading triangle orbiting OUTSIDE the ring (rotated live to the heading
+    // bearing). Keeps the direction indicator clear of the centre number.
+    t.aux2 = make_dir_marker(t.root, dia, 4, theme.accent);
 
     // N/E/S/W cardinals: padded in from the ring border so they don't
     // visually merge with the heading number (which is centered).
@@ -488,11 +486,13 @@ static void paint_compass_body(QuadGridTile &t, const MetricBinding &m, int w, i
         lv_obj_clear_flag(c, LV_OBJ_FLAG_CLICKABLE);
     }
 
-    // Center heading - the dominant element. Font scales with ring
-    // diameter: small tiles -> 28, medium -> 38, large -> 48.
-    const lv_font_t *vfont = &lv_font_montserrat_28;
-    if (dia >= 110) vfont = &lv_font_montserrat_38;
-    if (dia >= 160) vfont = &lv_font_montserrat_48;
+    // Center heading - the dominant element. With the direction marker now
+    // outside the ring, the centre number can fill the dial: big tiles get the
+    // 64px hero font, stepping down on smaller rings.
+    const lv_font_t *vfont = &lv_font_montserrat_38;
+    if (dia >= 110) vfont = &lv_font_montserrat_48;
+    if (dia >= 135) vfont = &font_xl_64;
+    if (dia < 90) vfont = &lv_font_montserrat_28;
     t.value = lv_label_create(ring);
     lv_label_set_text(t.value, "--");
     lv_obj_set_style_text_font(t.value, vfont, 0);
@@ -617,14 +617,16 @@ static void paint_wind_rose_body(QuadGridTile &t, const MetricBinding & /*m*/, i
     lv_obj_clear_flag(ring, LV_OBJ_FLAG_CLICKABLE);
     t.aux = ring;
 
-    // Apparent-wind needle (rotated live in update_quad_grid to AWA). Drawn
-    // before the value label so the number sits on top at the hub.
-    t.aux2 = make_needle(ring, dia, theme.warn);
+    // Apparent-wind triangle orbiting OUTSIDE the ring (rotated live to AWA),
+    // so it never overlaps the centre AWS number.
+    t.aux2 = make_dir_marker(t.root, dia, 4, theme.warn);
 
-    // Wind speed (AWS) is the hero number, sized to dominate the ring.
-    const lv_font_t *vfont = &lv_font_montserrat_28;
-    if (dia >= 110) vfont = &lv_font_montserrat_38;
-    if (dia >= 160) vfont = &lv_font_montserrat_48;
+    // Wind speed (AWS) is the hero number, sized to dominate the ring (the
+    // marker is now outside, so the number can fill the dial).
+    const lv_font_t *vfont = &lv_font_montserrat_38;
+    if (dia >= 110) vfont = &lv_font_montserrat_48;
+    if (dia >= 135) vfont = &font_xl_64;
+    if (dia < 90) vfont = &lv_font_montserrat_28;
     t.value = lv_label_create(ring);
     lv_label_set_text(t.value, "--");
     lv_obj_set_style_text_font(t.value, vfont, 0);
