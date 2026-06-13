@@ -81,6 +81,7 @@ static void test_home_longpress_opens_mode_picker() {
     Action a = step(m, in, Event::LongPress, false);
     TEST_ASSERT_EQUAL_INT((int)ActionType::NoAction, (int)a.type);
     TEST_ASSERT_EQUAL_INT((int)Level::ModePicker, (int)m.level);
+    TEST_ASSERT_EQUAL_INT(1, m.highlight);  // default last_engaged_mode = 1 (COMPASS)
 }
 
 static void test_mode_picker_scroll_and_select_wind() {
@@ -116,6 +117,17 @@ static void test_mode_picker_select_standby_disengages() {
     Action a = step(m, in, Event::Click, false);
     TEST_ASSERT_EQUAL_STRING("standby", a.arg_str);
     TEST_ASSERT_FALSE(m.engaged);
+}
+
+static void test_home_adjust_seeds_from_ap_target_when_no_pending() {
+    Model m;
+    init(m);
+    Inputs in = base_inputs();
+    in.ap_target_rad = 90.0 * M_PI / 180.0;  // known target 90 deg
+    in.heading_rad = 180.0 * M_PI / 180.0;   // different heading
+    Action a = step(m, in, Event::DetentCW, false);
+    TEST_ASSERT_EQUAL_INT((int)ActionType::ApSetTargetRad, (int)a.type);
+    TEST_ASSERT_DOUBLE_WITHIN(1e-6, 91.0 * M_PI / 180.0, a.arg_f);  // 90 + 1, not 181
 }
 
 static Inputs remote_inputs() {
@@ -163,6 +175,31 @@ static void test_select_view_click_emits_switch_view() {
     TEST_ASSERT_EQUAL_INT((int)Level::SelectView, (int)m.level);  // stays
 }
 
+static void test_select_view_ccw_wraps() {
+    Model m;
+    init(m);
+    Inputs in = remote_inputs();
+    step(m, in, Event::DoubleClick, false);  // Home -> SelectDisplay
+    step(m, in, Event::Click, false);        // -> SelectView, highlight 0
+    step(m, in, Event::DetentCCW, false);    // 0 -> wrap to 3
+    TEST_ASSERT_EQUAL_INT((int)Level::SelectView, (int)m.level);
+    TEST_ASSERT_EQUAL_INT(3, m.highlight);
+}
+
+static void test_select_view_stays_on_repeated_clicks() {
+    Model m;
+    init(m);
+    Inputs in = remote_inputs();
+    step(m, in, Event::DoubleClick, false);  // SelectDisplay
+    step(m, in, Event::Click, false);        // SelectView
+    Action a1 = step(m, in, Event::Click, false);
+    TEST_ASSERT_EQUAL_INT((int)ActionType::SwitchView, (int)a1.type);
+    TEST_ASSERT_EQUAL_INT((int)Level::SelectView, (int)m.level);
+    Action a2 = step(m, in, Event::Click, false);
+    TEST_ASSERT_EQUAL_INT((int)ActionType::SwitchView, (int)a2.type);
+    TEST_ASSERT_EQUAL_INT((int)Level::SelectView, (int)m.level);
+}
+
 static void test_double_click_back_chain() {
     Model m;
     init(m);
@@ -183,12 +220,15 @@ int main(int, char **) {
     RUN_TEST(test_home_adjust_accumulates_into_pending);
     RUN_TEST(test_home_click_engages_last_mode_then_standby);
     RUN_TEST(test_home_longpress_opens_mode_picker);
+    RUN_TEST(test_home_adjust_seeds_from_ap_target_when_no_pending);
     RUN_TEST(test_mode_picker_scroll_and_select_wind);
     RUN_TEST(test_mode_picker_doubleclick_cancels);
     RUN_TEST(test_mode_picker_select_standby_disengages);
     RUN_TEST(test_select_display_scroll_and_drill_in);
     RUN_TEST(test_select_display_wraps);
     RUN_TEST(test_select_view_click_emits_switch_view);
+    RUN_TEST(test_select_view_ccw_wraps);
+    RUN_TEST(test_select_view_stays_on_repeated_clicks);
     RUN_TEST(test_double_click_back_chain);
     return UNITY_END();
 }
