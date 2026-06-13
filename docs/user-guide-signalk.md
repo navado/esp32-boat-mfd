@@ -100,8 +100,46 @@ identical helm repeaters.
 - **Reach a device on another subnet** for any HTTP/ping op: add
   `--remote <user@server>` to `espdisp.py` to relay through the SignalK host.
 
+## 6. Using the rotary knob remote
+
+The **Waveshare ESP32-S3-Knob 1.8** (`waveshare-knob-1_8`) is a round 360×360
+**rotary remote**, not a full dashboard. It carries four dedicated round views
+and can drive the autopilot and switch the active view on your other displays.
+
+<p align="center">
+  <img src="sim-shots/knob-gallery.png" alt="Knob round views: Autopilot HUD, Compass, Wind, Big number" width="420">
+</p>
+
+**The four views:**
+
+- **Autopilot HUD** — mode badge, big target heading, current HDG + delta (home).
+- **Compass** — round heading ring with HDG / COG.
+- **Wind angle** — apparent wind angle on the round dial + AWS.
+- **Big number** — one large value (depth or SOG).
+
+**Controlling the autopilot** (from the Autopilot HUD, which is home):
+
+- **Scroll** the knob to adjust the target heading ±1° (apparent wind angle in
+  Wind mode); **hold the button while scrolling** for ±5°.
+- **Click** to engage / disengage (toggle Standby ⇄ the last active mode).
+- **Long-press** to open the mode picker (Standby / Compass / Wind / Route),
+  scroll to a mode and click to engage it.
+
+**Switching what other displays show:**
+
+- **Double-click** to open the menu: **Select Display** (the knob itself plus
+  your other MFDs) → click a display → **Select View** → click a view to switch
+  that display to it. The change applies instantly. **Double-click** goes back a
+  level.
+
+Inside any menu: scroll moves, click selects/enters, double-click goes back.
+
+For flashing and provisioning the knob, see
+[Deploy & use the remote knob](remote-knob.md).
+
 ## Related docs
 
+- [`docs/remote-knob.md`](remote-knob.md) — deploy & use the rotary knob remote.
 - [`docs/layout-editor-guide.md`](layout-editor-guide.md) — layout editor walkthrough.
 - [`docs/signalk-espdisp-manager.md`](signalk-espdisp-manager.md) — plugin design.
 - [`docs/roadmap.md`](roadmap.md) — milestones.

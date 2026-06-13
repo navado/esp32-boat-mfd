@@ -182,6 +182,12 @@ abstraction and report their geometry to the device identity/status APIs:
 | `waveshare-touch-lcd-5_1024x600` | Waveshare Touch LCD 5 | 1024x600 landscape | `landscape-1024x600` |
 | `waveshare-touch-lcd-7_800x480` | Waveshare Touch LCD 7 | 800x480 landscape | `landscape-800x480` |
 | `waveshare-touch-lcd-7b_1024x600` | Waveshare Touch LCD 7B | 1024x600 landscape | `landscape-1024x600` |
+| `waveshare-knob-1_8` | Waveshare ESP32-S3-Knob 1.8 (rotary remote) | 360x360 **round** (ST77916 QSPI) | `square-compact` |
+
+The `waveshare-knob-1_8` profile is a **rotary-encoder remote controller** with
+a small set of dedicated round views rather than a full dashboard panel — see
+[Remote Knob](#remote-knob) below and the
+[deploy & use guide](docs/remote-knob.md).
 
 These profiles share the current RGB/LVGL initialization path. They are build
 profiles and geometry/layout contracts until each physical board passes the
@@ -197,6 +203,70 @@ The firmware reports board metadata including resolution, shape, density,
 layout class, usable area, display bus, touch controller, touch interrupt, and
 NMEA 2000 CAN capability so the SignalK manager can select presets by geometry
 instead of hardcoded board names.
+
+## Remote Knob
+
+The **Waveshare ESP32-S3-Knob-Touch-LCD-1.8** (`waveshare-knob-1_8`) runs the
+same firmware as a dedicated **rotary remote controller** instead of a full
+dashboard. It is a 360×360 **round** ST77916 QSPI panel driven by a rotary
+encoder with a push button: scroll the knob to adjust, click to select,
+long-press / double-click for menus. It carries a small set of round views and
+can drive **other** displays on the network through the `espdisp-manager`
+plugin (switching their active view, instant-apply via `configPush`).
+
+<p align="center">
+  <img src="docs/sim-shots/knob-gallery.png" alt="Knob round views: Autopilot HUD, Compass, Wind, Big number" width="480">
+  <br>
+  <em>The four dedicated round views — Autopilot HUD, Compass, Wind angle, Big
+  number — rendered at 360×360 by the <code>make sim</code> harness.</em>
+</p>
+
+### Gesture cheat-sheet
+
+The **Autopilot HUD** is home. Gestures there control the autopilot directly:
+
+| Gesture | Action (Autopilot HUD / home) |
+|---------|-------------------------------|
+| Scroll | Adjust target heading ±1° (apparent wind angle in Wind mode) |
+| Hold + scroll | Adjust ±5° |
+| Click | Engage / disengage (toggle Standby ⇄ last active mode) |
+| Long-press | Open the **mode picker** (Standby / Compass / Wind / Route) |
+| Double-click | Open the **menu** (Select Display → Select View) |
+
+Scrolling while in Standby pre-sets the target so engaging Compass holds it.
+
+Inside menus the vocabulary is uniform: **scroll** moves the highlight,
+**click** selects/enters, **double-click** goes back one level.
+
+### Menu map
+
+```text
+Autopilot HUD  (home)
+  long-press  -> Mode Picker  (Standby / Compass / Wind / Route)
+  double-click-> Select Display
+                   click on a display -> Select View
+                                           click on a view -> switch that
+                                                              display to it
+                   double-click -> back to home
+```
+
+The display list = the knob itself (its four round views) plus the remote MFDs
+discovered through the manager. "Select View" switches the chosen display's
+active view.
+
+The four dedicated round views:
+
+<p align="center">
+  <img src="docs/sim-shots/knob-ap_hud.png" alt="Knob Autopilot HUD" width="120">
+  <img src="docs/sim-shots/knob-compass.png" alt="Knob Compass" width="120">
+  <img src="docs/sim-shots/knob-wind.png" alt="Knob Wind angle" width="120">
+  <img src="docs/sim-shots/knob-big.png" alt="Knob Big number" width="120">
+  <br>
+  <em>Autopilot HUD · Compass · Wind angle · Big number (depth/SOG).</em>
+</p>
+
+For flashing, provisioning, and using the knob to drive other displays, see
+[Deploy & use the remote knob](docs/remote-knob.md).
 
 ## Onboard setup
 

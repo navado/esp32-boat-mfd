@@ -15,6 +15,47 @@ then queue commands that cause devices to pull the latest generated dashboard
 configuration. Firmware update metadata and OTA jobs use the same
 registry/command/status model.
 
+## Install the SignalK plugin
+
+For a normal SignalK server, install the packed plugin tarball attached to the
+matching GitHub release — see
+[signalk/README.md → Install ESP Display Manager From This Repo](../signalk/README.md#install-esp-display-manager-from-this-repo).
+
+To install the in-repo source directly (lab / development), the plugin lives at
+`signalk/plugins/signalk-espdisp-manager/`. The repo-owned lab stack
+(`make demo-up`) already mounts and enables it; install it into any other
+SignalK server like this:
+
+1. Copy or symlink the plugin into the SignalK plugin directory:
+
+   ```sh
+   cp -r signalk/plugins/signalk-espdisp-manager ~/.signalk/node_modules/
+   # or, from a packed tarball built locally:
+   #   npm pack signalk/plugins/signalk-espdisp-manager
+   #   (cd ~/.signalk && npm install /path/to/signalk-espdisp-manager-<version>.tgz)
+   ```
+
+2. Restart the SignalK server.
+
+3. In the SignalK admin UI (`http://<server>:3000`), open
+   **Server → Plugin Config → ESP Display Manager**, enable it, and save. The
+   plugin UI is then served at `/plugins/espdisp-manager/ui` (and the App Dock
+   tile `ESP Displays`).
+
+> **First-run admin user.** A fresh SignalK server has no users; the bundled
+> `signalk/signalk-server` Docker image used by `make demo-up` rejects
+> anonymous writes by default. The demo scripts assume the first admin user is
+> created as **username `admin` / password `admin`** — log in with those
+> credentials before enabling the plugin or issuing manager commands. On a real
+> boat server, use your own SignalK admin credentials.
+
+The lab fixture also uses the device-level token `espdisp-dev` in
+`dev-shared-token` mode (see [Auth](#auth)); production-style deployments should
+issue per-device provisioning tokens instead.
+
+Once the plugin is enabled, flash and provision a display (or the
+[remote knob](remote-knob.md)) so it registers with the manager.
+
 ## Concepts
 
 ```text
