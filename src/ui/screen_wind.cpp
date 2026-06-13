@@ -2,6 +2,7 @@
 #include "ui_theme.h"
 #include "ui_data.h"
 #include "ui_dirty.h"
+#include "ui_fonts.h"
 #include "signalk.h"
 #include "board_pins.h"
 
@@ -39,6 +40,7 @@ static lv_obj_t *waypoint_marker = nullptr;
 static lv_obj_t *lbl_aws_value, *lbl_tws_value;
 static lv_obj_t *lbl_awa_value, *lbl_twa_value;
 static lv_obj_t *lbl_hdg_value, *lbl_cog_value;
+static lv_obj_t *lbl_sog_value, *lbl_stw_value;
 static lv_obj_t *lbl_tide_speed;
 
 // Geometry derived from LCD_W/LCD_H so the same source compiles for
@@ -349,40 +351,47 @@ static void build_waypoint(lv_obj_t *parent) {
     lv_obj_add_flag(waypoint_marker, LV_OBJ_FLAG_HIDDEN);
 }
 
-// ---- corner data boxes -------------------------------------------------
+// ---- inner readouts ----------------------------------------------------
 
-static void make_data_box(lv_obj_t *parent, const char *label, const char *unit, int x, int y,
-                          int w, int h, lv_obj_t **out_value, uint32_t value_color,
-                          uint32_t accent_color) {
-    // Glass-cockpit corner box (gradient + chrome tokens, no accent rail).
-    // accent_color is retained in the signature for call-site compatibility
-    // but no longer drawn as a left rail.
-    (void)accent_color;
-    lv_obj_t *box = lv_obj_create(parent);
-    lv_obj_set_size(box, w, h);
-    lv_obj_set_pos(box, x, y);
-    style_panel(box);
-    lv_obj_set_style_pad_all(box, 6, 0);
-    lv_obj_clear_flag(box, LV_OBJ_FLAG_CLICKABLE);
-
-    lv_obj_t *cap = lv_label_create(box);
-    lv_label_set_text(cap, label);
-    lv_obj_set_style_text_font(cap, &lv_font_montserrat_14, 0);
+// Borderless readout placed INSIDE the dial face (no panel chrome - the rose
+// is the backdrop). A small caption sits above a large value; the group is
+// centred on (cx, cy). Used to fill the blank quadrants inside the ring with
+// the largest legible numbers. `secondary` (optional) renders a smaller line
+// under the value (e.g. wind angle under wind speed).
+// dx/dy are offsets from screen centre (CX,CY); LV_ALIGN_CENTER keeps the
+// placement robust regardless of label content width. Caption sits ~38 px
+// above the value, optional secondary ~40 px below.
+static void inner_readout(lv_obj_t *parent, const char *cap_txt, int dx, int dy,
+                          const lv_font_t *vfont, uint32_t vcolor, lv_obj_t **out_value,
+                          lv_obj_t **out_secondary) {
+    lv_obj_t *cap = lv_label_create(parent);
+    lv_label_set_text(cap, cap_txt);
+    lv_obj_set_style_text_font(cap, &lv_font_montserrat_20, 0);
     lv_obj_set_style_text_color(cap, lv_color_hex(theme.fg_dim), 0);
-    lv_obj_set_pos(cap, 4, 3);
+    lv_obj_set_width(cap, 120);
+    lv_obj_set_style_text_align(cap, LV_TEXT_ALIGN_CENTER, 0);
+    lv_obj_align(cap, LV_ALIGN_CENTER, dx, dy - 40);
 
-    lv_obj_t *unit_lbl = lv_label_create(box);
-    lv_label_set_text(unit_lbl, unit);
-    lv_obj_set_style_text_font(unit_lbl, &lv_font_montserrat_14, 0);
-    lv_obj_set_style_text_color(unit_lbl, lv_color_hex(theme.fg_dim), 0);
-    lv_obj_align(unit_lbl, LV_ALIGN_TOP_RIGHT, 0, 3);
-
-    lv_obj_t *val = lv_label_create(box);
-    lv_label_set_text(val, "-");
-    lv_obj_set_style_text_font(val, &lv_font_montserrat_20, 0);
-    lv_obj_set_style_text_color(val, lv_color_hex(value_color), 0);
-    lv_obj_align(val, LV_ALIGN_BOTTOM_LEFT, 4, 0);
+    lv_obj_t *val = lv_label_create(parent);
+    lv_label_set_text(val, "--");
+    lv_obj_set_style_text_font(val, vfont, 0);
+    lv_obj_set_style_text_color(val, lv_color_hex(vcolor), 0);
+    lv_obj_set_width(val, 160);
+    lv_obj_set_style_text_align(val, LV_TEXT_ALIGN_CENTER, 0);
+    lv_obj_align(val, LV_ALIGN_CENTER, dx, dy);
+    lv_obj_clear_flag(val, LV_OBJ_FLAG_CLICKABLE);
     *out_value = val;
+
+    if (out_secondary) {
+        lv_obj_t *sec = lv_label_create(parent);
+        lv_label_set_text(sec, "");
+        lv_obj_set_style_text_font(sec, &lv_font_montserrat_20, 0);
+        lv_obj_set_style_text_color(sec, lv_color_hex(theme.fg_dim), 0);
+        lv_obj_set_width(sec, 120);
+        lv_obj_set_style_text_align(sec, LV_TEXT_ALIGN_CENTER, 0);
+        lv_obj_align(sec, LV_ALIGN_CENTER, dx, dy + 42);
+        *out_secondary = sec;
+    }
 }
 
 lv_obj_t *build(lv_obj_t *parent) {
@@ -432,26 +441,26 @@ lv_obj_t *build(lv_obj_t *parent) {
     build_bezel(s_root);
     build_waypoint(s_root);
 
-    // ---- four corner data boxes + bow/stern strip ---------------------
-    // Top-left: AWS. Top-right would conflict with the global MOB pill
-    // (LV_ALIGN_TOP_RIGHT -6, 6, 56x56, on lv_layer_top) so TWS is
-    // shifted down below the safe zone. Keep visual pairing by also
-    // pushing AWS slightly so they share a baseline.
-    // Corner boxes sized to 88×54 so their inner corners clear the bezel ring.
-    // AWA/TWA moved from y=211 (right on the 90° scale text) to y=265
-    // (below the 90° zone at y≈230-250, above the 120° zone at y≈322).
-    make_data_box(s_root, "AWS", "kn", 12, 10, 88, 54, &lbl_aws_value, theme.fg, 0xf6a21a);
-    make_data_box(s_root, "TWS", "kn", LCD_W - 100, 70, 88, 54, &lbl_tws_value, theme.fg,
-                  theme.fg_dim);
-    // Mid-left: AWA  /  Mid-right: TWA  (below the 90° wind-scale labels)
-    make_data_box(s_root, "AWA", "deg", 12, 265, 88, 54, &lbl_awa_value, 0xf6a21a, 0xf6a21a);
-    make_data_box(s_root, "TWA", "deg", LCD_W - 100, 265, 88, 54, &lbl_twa_value, theme.fg,
-                  theme.fg_dim);
-    // Bottom-left: HDG  /  Bottom-right: COG
-    make_data_box(s_root, "HDG", "T", 12, LCD_H - 68, 88, 54, &lbl_hdg_value, theme.accent,
-                  theme.accent);
-    make_data_box(s_root, "COG", "T", LCD_W - 100, LCD_H - 68, 88, 54, &lbl_cog_value, theme.fg,
-                  theme.fg_dim);
+    // ---- big readouts INSIDE the dial face ----------------------------
+    // The four speed/angle groups fill the blank quadrants between the boat
+    // and the ring, using the custom 64px font for maximum legibility. The
+    // boat hull sits in the central column; left/right groups flank it, HDG
+    // rides above the bow, current drift stays at centre.
+    //   upper-left  : AWS (amber) + AWA secondary
+    //   upper-right : TWS + TWA secondary
+    //   lower-left  : SOG
+    //   lower-right : SOW (speed through water)
+    // dx/dy are offsets from screen centre. Left/right columns flank the boat
+    // hull; HDG rides above the bow; SOG/SOW sit low in the bottom quadrants.
+    const int dxl = -118;  // left column
+    const int dxr = 118;   // right column
+    inner_readout(s_root, "AWS", dxl, -82, &font_xl_64, 0xf6a21a, &lbl_aws_value, &lbl_awa_value);
+    inner_readout(s_root, "TWS", dxr, -82, &font_xl_64, theme.fg, &lbl_tws_value, &lbl_twa_value);
+    inner_readout(s_root, "SOG", dxl, 104, &font_xl_64, theme.good, &lbl_sog_value, nullptr);
+    inner_readout(s_root, "SOW", dxr, 104, &font_xl_64, theme.accent, &lbl_stw_value, nullptr);
+    inner_readout(s_root, "HDG", 0, -150, &lv_font_montserrat_48, theme.accent, &lbl_hdg_value,
+                  nullptr);
+    lbl_cog_value = nullptr;  // COG replaced by SOW per layout
 
     return s_root;
 }
@@ -489,6 +498,8 @@ static char s_last_awa[16] = {(char)0xFF};
 static char s_last_twa[16] = {(char)0xFF};
 static char s_last_hdg[16] = {(char)0xFF};
 static char s_last_cog[16] = {(char)0xFF};
+static char s_last_sog[16] = {(char)0xFF};
+static char s_last_stw[16] = {(char)0xFF};
 static char s_last_tide[16] = {(char)0xFF};
 static int16_t s_last_awa_rot = INT16_MIN;
 static int16_t s_last_twa_rot = INT16_MIN;
@@ -569,11 +580,18 @@ void refresh() {
         set_text_if_changed(lbl_hdg_value, s_last_hdg, sizeof(s_last_hdg), "--\xC2\xB0");
     }
 
-    if (!isnan(d.cogTrue)) {
-        snprintf(buf, sizeof(buf), "%03.0f\xC2\xB0", rad_to_deg_pos(d.cogTrue));
-        set_text_if_changed(lbl_cog_value, s_last_cog, sizeof(s_last_cog), buf);
+    // SOG / SOW (speed over ground / through water), in knots.
+    if (!isnan(d.sog)) {
+        snprintf(buf, sizeof(buf), "%.1f", mps_to_kn(d.sog));
+        set_text_if_changed(lbl_sog_value, s_last_sog, sizeof(s_last_sog), buf);
     } else {
-        set_text_if_changed(lbl_cog_value, s_last_cog, sizeof(s_last_cog), "--\xC2\xB0");
+        set_text_if_changed(lbl_sog_value, s_last_sog, sizeof(s_last_sog), "--");
+    }
+    if (!isnan(d.stw)) {
+        snprintf(buf, sizeof(buf), "%.1f", mps_to_kn(d.stw));
+        set_text_if_changed(lbl_stw_value, s_last_stw, sizeof(s_last_stw), buf);
+    } else {
+        set_text_if_changed(lbl_stw_value, s_last_stw, sizeof(s_last_stw), "--");
     }
 
     // --- tide arrow ---
