@@ -46,6 +46,18 @@ static double seed_target(const Model &m, const Inputs &in) {
     return 0.0;
 }
 
+static Action set_state(int picker_idx) {
+    Action a;
+    a.type = ActionType::ApSetState;
+    strncpy(a.arg_str, mode_state_string(picker_idx), sizeof(a.arg_str) - 1);
+    return a;
+}
+
+static int wrap_idx(int i, int n) {
+    if (n <= 0) return 0;
+    return ((i % n) + n) % n;
+}
+
 static Action adjust(Model &m, const Inputs &in, int sign, bool held) {
     int deg = (held ? kStepBigDeg : kStepSmallDeg) * sign;
     double t = wrap_2pi(seed_target(m, in) + deg * M_PI / 180.0);
@@ -62,7 +74,51 @@ Action step(Model &m, const Inputs &in, Event ev, bool held) {
     case Level::Home:
         if (ev == Event::DetentCW) return adjust(m, in, +1, held);
         if (ev == Event::DetentCCW) return adjust(m, in, -1, held);
+        if (ev == Event::Click) {
+            if (m.engaged) {
+                m.engaged = false;
+                return set_state(0);  // standby
+            }
+            m.engaged = true;
+            return set_state(m.last_engaged_mode);
+        }
+        if (ev == Event::LongPress) {
+            m.level = Level::ModePicker;
+            m.highlight = m.last_engaged_mode;
+            return a;
+        }
+        if (ev == Event::DoubleClick) {
+            m.level = Level::SelectDisplay;
+            m.highlight = 0;
+            return a;
+        }
         break;
+
+    case Level::ModePicker:
+        if (ev == Event::DetentCW) {
+            m.highlight = wrap_idx(m.highlight + 1, kModeCount);
+            return a;
+        }
+        if (ev == Event::DetentCCW) {
+            m.highlight = wrap_idx(m.highlight - 1, kModeCount);
+            return a;
+        }
+        if (ev == Event::Click) {
+            m.level = Level::Home;
+            if (m.highlight == 0) {
+                m.engaged = false;
+            } else {
+                m.engaged = true;
+                m.last_engaged_mode = m.highlight;
+            }
+            return set_state(m.highlight);
+        }
+        if (ev == Event::DoubleClick) {
+            m.level = Level::Home;
+            return a;
+        }
+        break;
+
     default:
         break;
     }
