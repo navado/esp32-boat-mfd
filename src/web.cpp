@@ -30,6 +30,8 @@
 #include <esp_heap_caps.h>
 #include "build_version.h"
 #include "psram_json.h"
+#include "proto_target.h"
+#include "proto/proto.h"
 
 // Gesture diagnostics live in main.cpp (top-level - not in any namespace).
 extern "C" {
@@ -1479,6 +1481,128 @@ static void handle_probe() {
     }
 }
 
+// ---- /api/p2p/* : espdisp control protocol (target side) ----------------
+// Versioned HTTP/JSON binding of the control protocol. POST bodies are parsed
+// with ArduinoJson -> proto::from_json, gated by version_compatible, handled by
+// proto_target (auth + session table + UI-task view switch), and the ack is
+// serialized back. GETs reflect the device record / control state. The shared
+// key inside the message gates control; require_api_auth() is intentionally not
+// applied here so peer controllers can attach without the web admin token.
+
+static bool p2p_read_body(JsonDocument &doc) {
+    if (!server.hasArg("plain")) {
+        server.send(400, "application/json", "{\"error\":\"empty_body\"}");
+        return false;
+    }
+    const String &body = server.arg("plain");
+    if (deserializeJson(doc, body) != DeserializationError::Ok) {
+        server.send(400, "application/json", "{\"error\":\"bad_json\"}");
+        return false;
+    }
+    return true;
+}
+
+template <typename Ack> static void p2p_send_ack(const Ack &ack) {
+    JsonDocument out(&espdisp::psram_json);
+    proto::to_json(out.to<JsonObject>(), ack);
+    String payload;
+    serializeJson(out, payload);
+    server.sendHeader("Access-Control-Allow-Origin", "*");
+    server.sendHeader("Cache-Control", "no-store");
+    server.send(200, "application/json", payload);
+}
+
+static void handle_p2p_device() {
+    JsonDocument out(&espdisp::psram_json);
+    proto::DeviceRecord r;
+    proto_target::fill_device_record(r);
+    proto::to_json(out.to<JsonObject>(), r);
+    String payload;
+    serializeJson(out, payload);
+    server.sendHeader("Access-Control-Allow-Origin", "*");
+    server.sendHeader("Cache-Control", "no-store");
+    server.send(200, "application/json", payload);
+}
+
+static void handle_p2p_attach() {
+    JsonDocument doc(&espdisp::psram_json);
+    if (!p2p_read_body(doc)) return;
+    proto::Attach req;
+    proto::from_json(doc.as<JsonObjectConst>(), req);
+    if (!proto::version_compatible(req.v)) {
+        server.send(400, "application/json", "{\"error\":\"incompatible_version\"}");
+        return;
+    }
+    proto::AttachAck ack;
+    proto_target::handle_attach(req, ack);
+    p2p_send_ack(ack);
+}
+
+static void handle_p2p_switch() {
+    JsonDocument doc(&espdisp::psram_json);
+    if (!p2p_read_body(doc)) return;
+    proto::Switch req;
+    proto::from_json(doc.as<JsonObjectConst>(), req);
+    if (!proto::version_compatible(req.v)) {
+        server.send(400, "application/json", "{\"error\":\"incompatible_version\"}");
+        return;
+    }
+    proto::SwitchAck ack;
+    proto_target::handle_switch(req, ack);
+    p2p_send_ack(ack);
+}
+
+static void handle_p2p_heartbeat() {
+    JsonDocument doc(&espdisp::psram_json);
+    if (!p2p_read_body(doc)) return;
+    proto::Heartbeat req;
+    proto::from_json(doc.as<JsonObjectConst>(), req);
+    if (!proto::version_compatible(req.v)) {
+        server.send(400, "application/json", "{\"error\":\"incompatible_version\"}");
+        return;
+    }
+    bool ok = proto_target::handle_heartbeat(req.sessionId);
+    proto::HeartbeatAck ack;
+    strncpy(ack.v, "1.0", sizeof(ack.v) - 1);
+    ack.ok = ok;
+    ack.ttlMs = proto::kDefaultTtlMs;
+    p2p_send_ack(ack);
+}
+
+static void handle_p2p_detach() {
+    JsonDocument doc(&espdisp::psram_json);
+    if (!p2p_read_body(doc)) return;
+    proto::Detach req;
+    proto::from_json(doc.as<JsonObjectConst>(), req);
+    if (!proto::version_compatible(req.v)) {
+        server.send(400, "application/json", "{\"error\":\"incompatible_version\"}");
+        return;
+    }
+    bool ok = proto_target::handle_detach(req.sessionId);
+    JsonDocument out(&espdisp::psram_json);
+    JsonObject o = out.to<JsonObject>();
+    o["v"] = "1.0";
+    o["t"] = "detachAck";
+    o["ok"] = ok;
+    String payload;
+    serializeJson(out, payload);
+    server.sendHeader("Access-Control-Allow-Origin", "*");
+    server.sendHeader("Cache-Control", "no-store");
+    server.send(200, "application/json", payload);
+}
+
+static void handle_p2p_state() {
+    JsonDocument out(&espdisp::psram_json);
+    proto::ControlState cs;
+    proto_target::fill_state(cs);
+    proto::to_json(out.to<JsonObject>(), cs);
+    String payload;
+    serializeJson(out, payload);
+    server.sendHeader("Access-Control-Allow-Origin", "*");
+    server.sendHeader("Cache-Control", "no-store");
+    server.send(200, "application/json", payload);
+}
+
 static void bind_routes() {
     server.on("/", HTTP_GET, handle_root);
 
@@ -1499,6 +1623,12 @@ static void bind_routes() {
     server.on("/api/config/status", HTTP_GET, handle_config_status);
     server.on("/api/security", HTTP_GET, handle_security);
     server.on("/api/screens", HTTP_GET, handle_screens);
+    server.on("/api/p2p/device", HTTP_GET, handle_p2p_device);
+    server.on("/api/p2p/attach", HTTP_POST, handle_p2p_attach);
+    server.on("/api/p2p/switch", HTTP_POST, handle_p2p_switch);
+    server.on("/api/p2p/heartbeat", HTTP_POST, handle_p2p_heartbeat);
+    server.on("/api/p2p/detach", HTTP_POST, handle_p2p_detach);
+    server.on("/api/p2p/state", HTTP_GET, handle_p2p_state);
     server.on("/api/sk", HTTP_GET, handle_sk_data);
     server.on("/api/boat", HTTP_GET, handle_boat);
     server.on("/api/logs", HTTP_GET, handle_logs);
@@ -1611,6 +1741,7 @@ static void web_task(void *) {
 
 void setup() {
     if (started) return;
+    proto_target::setup();
     bind_routes();
     BaseType_t r = xTaskCreatePinnedToCore(web_task, "web", 8192, nullptr, 1 /* low prio */,
                                            &s_task, 0 /* core 0 */);
