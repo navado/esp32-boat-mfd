@@ -219,6 +219,27 @@ static String controlDeviceJson() {
 
     String out;
     serializeJson(doc, out);
+
+    // Byte guard: even with 4 views, long ids/titles can exceed the 512-byte
+    // GATT attribute cap. Drop views entirely and re-serialize; zero views is
+    // ~200 bytes so comfortably fits. viewsTruncated stays true so the central
+    // knows to fetch the full list over IP (GET /api/p2p/device).
+    if (out.length() > 512) {
+        r.views_count = 0;
+        doc.clear();
+        JsonObject o2 = doc.to<JsonObject>();
+        proto::to_json(o2, r);
+        o2["viewsTruncated"] = true;
+        out = "";
+        serializeJson(doc, out);
+    }
+
+    // Hard cap: should never trigger after empty-views re-serialize, but
+    // prevents NimBLE from receiving an over-cap buffer in any edge case.
+    if (out.length() > 512) {
+        out.remove(512);
+    }
+
     return out;
 }
 
