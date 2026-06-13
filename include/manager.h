@@ -82,4 +82,10 @@ Status status();
 // Returns true iff the device has a saved endpoint AND a token.
 bool is_provisioned();
 
+// Push-live: request an immediate generated-config fetch (instead of waiting
+// for the next command poll). Called when the manager plugin emits a
+// configPush SignalK delta targeting this device. Thread-safe (sets a flag the
+// manager worker drains).
+void request_config_fetch();
+
 }  // namespace manager

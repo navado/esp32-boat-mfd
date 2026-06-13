@@ -1,6 +1,8 @@
 #include "signalk.h"
 #include "board.h"
 #include "build_config.h"
+#include "device_identity.h"
+#include "manager.h"
 #include "net_health.h"
 #include "psram_json.h"
 #include "signalk_parser.h"
@@ -90,6 +92,9 @@ static void subscribe() {
         "steering.autopilot.state",
         "environment.current.setTrue",
         "environment.current.drift",
+        // Push-live: manager plugin emits this when a view is applied; the
+        // onText handler triggers an immediate config fetch for our device.
+        "network.espdisp.configPush",
     };
     for (auto p : paths) {
         JsonObject o = arr.add<JsonObject>();
@@ -106,7 +111,27 @@ static void subscribe() {
     net::logf("[sk] subscribed to %d paths", (int)(sizeof(paths) / sizeof(paths[0])));
 }
 
+// Bounded substring search (payload may not be NUL-terminated).
+static bool frame_contains(const uint8_t *hay, size_t n, const char *needle) {
+    if (!needle || !*needle) return false;
+    size_t m = strlen(needle);
+    if (m > n) return false;
+    for (size_t i = 0; i + m <= n; ++i)
+        if (memcmp(hay + i, needle, m) == 0) return true;
+    return false;
+}
+
 static void onText(uint8_t *payload, size_t len) {
+    // Push-live: the manager plugin emits a `configPush` delta carrying this
+    // device's id when a new view is applied. Seeing it (we subscribe to the
+    // path) triggers an immediate config fetch instead of waiting for the poll.
+    if (frame_contains(payload, len, "configPush")) {
+        const char *did = device_identity::get().device_id;
+        if (did && *did && frame_contains(payload, len, did)) {
+            manager::request_config_fetch();
+            net::logf("[sk] configPush for us -> immediate config fetch");
+        }
+    }
     if (s_data_mtx) xSemaphoreTake(s_data_mtx, portMAX_DELAY);
     int n = applyDelta((const char *)payload, len, data, &espdisp::psram_json);
     uint32_t now = millis();

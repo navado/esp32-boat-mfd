@@ -1892,6 +1892,12 @@ bool is_provisioned() {
     return s_endpoint.length() > 0 && s_token.length() > 0;
 }
 
+void request_config_fetch() {
+    // The manager worker drains this on its next loop (~500 ms), giving a
+    // near-instant config apply instead of waiting for the command poll.
+    s_config_fetch_pending = true;
+}
+
 Status status() {
     Status s;
     s.auth = s_auth;

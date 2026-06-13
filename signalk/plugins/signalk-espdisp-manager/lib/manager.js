@@ -1256,6 +1256,25 @@ class EspDispManager {
     this.store.commands.commands.push(command)
     this.store.saveCommands()
     this.store.audit('command.created', id, { commandId: command.id, type: command.type })
+    // Push-live: a config.reload command is normally picked up on the device's
+    // command poll. Also emit a configPush SignalK delta so a subscribed device
+    // fetches the new generated config immediately (the firmware's onText sees
+    // it and requests a config fetch). Best-effort; the poll remains the
+    // fallback.
+    if (command.type === 'config.reload' && this.app && typeof this.app.handleMessage === 'function') {
+      try {
+        this.app.handleMessage('espdisp-manager', {
+          updates: [{
+            values: [{
+              path: 'network.espdisp.configPush',
+              value: { deviceId: id, at: command.createdAt, payload: command.payload }
+            }]
+          }]
+        })
+      } catch (e) {
+        if (this.app.debug) this.app.debug(`configPush emit failed: ${e.message}`)
+      }
+    }
     return command
   }
 
