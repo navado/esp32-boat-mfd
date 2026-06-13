@@ -158,6 +158,16 @@ All messages share an envelope `{ "v": "<major>.<minor>", "t": "<type>", ... }`.
   `configPush`/registry features are preserved behind the protocol.
 - **Phone app** — future; same JS lib; out of scope for v1 but the protocol/auth/color model is
   designed to accommodate it.
+- **Headless test harness** — a new firmware build for a bare **ESP32-S3-DevKitC-1** (no display,
+  no LVGL/touch): a controller that runs the same shared protocol C++ lib and the same
+  controller logic as the knob, but driven by an **automated loop** (discover → attach with a
+  configurable color/key → enumerate views → switch through each view → heartbeat → detach →
+  assert acks/`ControlState`) plus a console mode for single commands. Logs pass/fail over
+  serial and UDP. This is the **on-hardware verification vehicle** in place of the knob: it
+  exercises the controller side of both transports (IP and on-demand BLE central) against a real
+  target (a Sunton display running the target firmware), so the protocol — including the
+  NimBLE-central risk — gets real two-node hardware coverage. The base board for the production
+  envs is already `esp32-s3-devkitc-1`, so the harness env is a thin display-less variant.
 
 ## 6. Shared libraries (the "common module")
 
@@ -170,17 +180,25 @@ All messages share an envelope `{ "v": "<major>.<minor>", "t": "<type>", ... }`.
 - **Conformance tests** — `test/test_proto` (Unity, C++) and `proto/js` (node:test) both load
   `proto/fixtures/*.json` and assert identical parse/serialize/version-compat behavior.
 
-## 7. Phasing (decomposition — each phase its own plan, independently shippable)
+## 7. Build order (delivered together as one implementation)
+
+Per the decision to **implement everything together**, the phases below are a build/dependency
+ordering inside a single combined plan — not separate releases. Everything lands in one body of
+work; the ordering exists only so dependencies are built before their consumers.
 
 1. **Protocol foundation** — schema + codegen (C++ + JS) + both libs + conformance fixtures +
    version/auth/session pure logic. No device behavior change. Fully host/CI-tested.
-2. **IP binding** — displays serve `/api/p2p/*` + session table + the colored frame overlay;
-   knob discovers via mDNS browse and controls over IP; `knob_remote` multi-source merge.
-   *Delivers working IP P2P with the controlled-frame.*
-3. **BLE binding** — Control GATT service on displays; on-demand BLE central on the knob
+2. **Test harness firmware** — the headless ESP32-S3-DevKitC-1 controller + automated loop
+   (built early, against Phase 1's lib, so it can exercise each subsequent transport as it lands).
+3. **IP binding** — displays serve `/api/p2p/*` + session table + the colored frame overlay;
+   controllers discover via mDNS browse and control over IP; `knob_remote` multi-source merge.
+4. **BLE binding** — Control GATT service on displays; on-demand BLE central on the controller
    (sdkconfig central role, heap budget, soak); BLE fallback discovery + control.
-4. **Plugin migration** — plugin adopts the JS lib for discovery + control; reframe REST.
-5. *(Future)* phone app.
+5. **Plugin migration** — plugin adopts the JS lib for discovery + control; reframe REST.
+6. **Knob integration** — wire the knob's existing Select-Display/Select-View menu to the
+   protocol registry/control (build-verified; hardware-verified only indirectly via the harness,
+   which shares the controller path).
+7. *(Future, out of scope)* phone app.
 
 ## 8. Testing
 
@@ -192,8 +210,16 @@ All messages share an envelope `{ "v": "<major>.<minor>", "t": "<type>", ... }`.
   borders + name pill) at 360 round and 480 square; bounds assertions.
 - **Build:** all firmware envs incl. the knob's BLE-central sdkconfig; CI checks generated code
   is up to date (`make proto && git diff --exit-code`).
-- **Device (hardware-gated, documented):** IP attach/switch/frame across two real displays; BLE
-  on-demand central discover+switch off-grid; NimBLE soak with the central role enabled.
+- **Device (hardware, via the harness):** the **ESP32-S3-DevKitC-1 harness** is the primary
+  on-hardware verifier (the knob can't be tested). Two-node setup: harness (controller) ↔ a
+  Sunton display running the target firmware. The harness loop asserts: mDNS discovery finds the
+  target; IP `attach`→`switch` through every view→`detach` returns correct acks and the target's
+  `ControlState`/`currentView` track; the colored frame appears/clears on the target (confirmed
+  via `/api/screenshot.png` pulled by the harness, and visually); on-demand BLE central
+  discovers + switches when IP is disabled; auth deny/accept with/without the shared key; session
+  reaping on dropped heartbeat. NimBLE soak runs with the central role enabled on the harness.
+  The knob's own controller path is the same shared code, so it's covered transitively (its
+  display wiring is build-verified).
 
 ## 9. Memory-trap / risk compliance
 
