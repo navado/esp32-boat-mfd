@@ -1754,9 +1754,21 @@ void worker(void *) {
         if (WiFi.status() == WL_CONNECTED && !net::otaInProgress() &&
             millis() >= next_ip_discovery_ms) {
             knob_remote::refresh_ip_peers();  // blocking mDNS browse, worker task
+            next_ip_discovery_ms = millis() + IP_DISCOVERY_INTERVAL_MS;
+        }
+
+        // Drain UI-task-queued remote requests on EVERY tick, before the
+        // !have_endpoint early-return below. On a manager-less knob the loop
+        // bails out at !have_endpoint, so draining only inside the manager
+        // HTTP cycle (or the 15 s discovery gate) stalled a peer-to-peer IP
+        // view-switch up to a full discovery interval. These calls are no-ops
+        // when nothing is pending and dispatch by the entry's transport (IP or
+        // Manager), so a single pair here covers both paths. Gated on WiFi up
+        // and not-OTA because the drain does blocking HTTP and the
+        // !have_endpoint return we jump in front of was the only WiFi gate.
+        if (WiFi.status() == WL_CONNECTED && !net::otaInProgress()) {
             knob_remote::drain_pending_views_fetch();
             knob_remote::drain_pending_switch();
-            next_ip_discovery_ms = millis() + IP_DISCOVERY_INTERVAL_MS;
         }
 #endif
 
@@ -1884,24 +1896,12 @@ void worker(void *) {
 #if defined(BOARD_ID_WAVESHARE_KNOB_1_8)
             // Knob remote enumeration piggybacks the command poll cadence: a
             // cheap GET /devices/summary each poll keeps the Select-Display
-            // list fresh without its own task. Lazy per-display view fetches
-            // are drained here too (drill-in sets a pending flag from the UI
-            // task; the blocking HTTP runs on this worker, never on LVGL).
+            // list fresh without its own task. The pending view-fetch / switch
+            // drains run unconditionally near the top of every tick (before the
+            // !have_endpoint return), so they are not repeated here.
             knob_remote::refresh_from_manager();
-            knob_remote::drain_pending_views_fetch();
-            knob_remote::drain_pending_switch();
 #endif
         }
-#if defined(BOARD_ID_WAVESHARE_KNOB_1_8)
-        else if (prov) {
-            // Even between polls, service a pending drill-in view fetch
-            // promptly so the Select-View list fills without waiting a full
-            // poll interval. The remote view-switch POST is drained here too
-            // so a knob turn -> remote switch isn't stalled a poll interval.
-            knob_remote::drain_pending_views_fetch();
-            knob_remote::drain_pending_switch();
-        }
-#endif
         vTaskDelay(pdMS_TO_TICKS(500));
     }
 }
