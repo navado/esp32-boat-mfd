@@ -40,6 +40,7 @@ async def main():
             t = time.time() - t0
             # Synthesize sinusoidal boat data
             sog = 4.0 + 1.5 * math.sin(t / 30)               # 2.5..5.5 m/s
+            stw = sog * 0.92                                  # through-water ~ a touch less
             cog = math.radians((50 + 10 * math.sin(t / 60)) % 360)
             heading = cog + 0.05
             depth = 12.0 + 4 * math.sin(t / 45)              # 8..16 m
@@ -65,6 +66,7 @@ async def main():
                     "values": [
                         {"path": "navigation.position", "value": {"latitude": lat, "longitude": lon}},
                         {"path": "navigation.speedOverGround", "value": sog},
+                        {"path": "navigation.speedThroughWater", "value": stw},
                         {"path": "navigation.courseOverGroundTrue", "value": cog},
                         {"path": "navigation.headingTrue", "value": heading},
                         {"path": "environment.wind.angleApparent", "value": awa},
