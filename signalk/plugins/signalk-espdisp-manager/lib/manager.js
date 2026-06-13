@@ -17,6 +17,18 @@ const PROTOCOL = 'espdisp.management.v1'
 const SIGNALK_DISCOVERY_QUERY = 'espdisp.signalk.discover.v1'
 const SIGNALK_DISCOVERY_PROTOCOL = 'espdisp.signalk.discovery.v1'
 const DEVICE_ANNOUNCE_PROTOCOL = 'espdisp.device.announce.v1'
+// Standard known view ids a display falls back to when it has no stored
+// screen list yet (e.g. freshly registered, layout not seeded). Mirrors the
+// default preset screen ids so the knob's Select-View menu is never empty.
+const KNOWN_VIEW_IDS = ['dashboard', 'wind', 'nav', 'depth', 'autopilot', 'system']
+const KNOWN_VIEW_TITLES = {
+  dashboard: 'Dashboard',
+  wind: 'Wind',
+  nav: 'Nav',
+  depth: 'Depth',
+  autopilot: 'Autopilot',
+  system: 'System'
+}
 const ESPDISP_MDNS_SERVICE = '_espdisp._tcp.local'
 const ESPDISP_MGMT_MDNS_SERVICE = '_espdisp-mgmt._tcp.local'
 const MDNS_MULTICAST = '224.0.0.251'
@@ -339,6 +351,56 @@ class EspDispManager {
     return {
       devices: values.sort((a, b) => a.id.localeCompare(b.id))
     }
+  }
+
+  // Lightweight summary list for remote enumeration (the Waveshare knob's
+  // Select-Display menu). Each entry is the minimum the knob needs to render
+  // a row and target a screen.set: id, label, role, online flag and the
+  // device's current on-screen view. Distinct from listDevices() (which
+  // returns the full management projection) so the firmware fetch stays small.
+  deviceSummaries () {
+    const nowMs = Date.now()
+    const onlineWindowMs = Math.max(this.options.heartbeatMs * 3, 15000)
+    const devices = Object.values(this.store.registry.devices)
+      .map((device) => {
+        const lastSeenMs = device.lastSeen ? Date.parse(device.lastSeen) : 0
+        const online = lastSeenMs > 0 && nowMs - lastSeenMs <= onlineWindowMs
+        return {
+          id: device.id,
+          name: device.name || device.id,
+          role: device.role || 'display',
+          online,
+          currentScreen: (device.status && device.status.ui && device.status.ui.screen) || null
+        }
+      })
+      .sort((a, b) => a.id.localeCompare(b.id))
+    return { devices }
+  }
+
+  // The set of views (screens) a device can switch between, for the knob's
+  // Select-View menu. Derived from the device's generated layout screen list;
+  // each view is { id, title }. `current` is the device's active screen id (if
+  // reported via heartbeat). When the device has no stored/resolved screen
+  // list, fall back to the standard known view ids so the menu is still usable.
+  deviceViews (id) {
+    const device = this.getDevice(id)
+    let views = []
+    try {
+      const config = this.generateConfig(id)
+      const screens = (config.layout && Array.isArray(config.layout.screens))
+        ? config.layout.screens
+        : []
+      views = screens
+        .filter((screen) => screen && screen.id)
+        .map((screen) => ({ id: String(screen.id), title: String(screen.title || screen.id) }))
+    } catch (err) {
+      views = []
+    }
+    if (views.length === 0) {
+      views = KNOWN_VIEW_IDS.map((id) => ({ id, title: KNOWN_VIEW_TITLES[id] || id }))
+    }
+    const current = (device.status && device.status.ui && device.status.ui.screen) || null
+    return { views, current }
   }
 
   listDiscoveredDevices () {

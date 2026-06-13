@@ -354,6 +354,20 @@ function registerRoutes (router, getManager) {
     res.json(manager.listDevices(req.query || {}))
   }))
 
+  // Lightweight summary list for the Waveshare knob's remote Select-Display
+  // menu: [{ id, name, role, online, currentScreen }]. Registered before the
+  // ':id' routes so the literal path is matched first.
+  router.get('/devices/summary', wrap(getManager, (manager, req, res) => {
+    res.json(manager.deviceSummaries())
+  }))
+
+  // Views (screens) a device can switch between, for the knob's Select-View
+  // menu: { views: [{ id, title }], current }. Derived from the device's
+  // resolved layout, falling back to the standard known view ids.
+  router.get('/devices/:id/views', wrap(getManager, (manager, req, res) => {
+    res.json(manager.deviceViews(req.params.id))
+  }))
+
   router.get('/discovery/devices', wrap(getManager, (manager, req, res) => {
     res.json(manager.listDiscoveredDevices())
   }))
