@@ -34,6 +34,7 @@ static lv_obj_t *bezel = nullptr;
 static lv_obj_t *awa_marker = nullptr;
 static lv_obj_t *twa_marker = nullptr;
 static lv_obj_t *tide_arrow = nullptr;
+static lv_obj_t *tide_zero = nullptr;  // circle shown when current ~ 0
 static lv_obj_t *waypoint_marker = nullptr;
 
 // Hero readouts
@@ -275,7 +276,7 @@ static void build_boat(lv_obj_t *parent) {
 
 static lv_obj_t *make_wind_marker(lv_obj_t *parent, const char *letter, uint32_t bg, uint32_t fg) {
     lv_obj_t *m = lv_obj_create(parent);
-    lv_obj_set_size(m, 28, 32);
+    lv_obj_set_size(m, 42, 30);
     lv_obj_set_style_bg_color(m, lv_color_hex(bg), 0);
     lv_obj_set_style_bg_opa(m, LV_OPA_COVER, 0);
     lv_obj_set_style_border_color(m, lv_color_hex(theme.panel_edge), 0);
@@ -284,7 +285,7 @@ static lv_obj_t *make_wind_marker(lv_obj_t *parent, const char *letter, uint32_t
     lv_obj_set_style_pad_all(m, 0, 0);
     lv_obj_clear_flag(m, LV_OBJ_FLAG_SCROLLABLE);
     lv_obj_clear_flag(m, LV_OBJ_FLAG_CLICKABLE);
-    apply_pivot_center(m, 14, R_MARKER);
+    apply_pivot_center(m, 21, R_MARKER);
 
     lv_obj_t *l = lv_label_create(m);
     lv_label_set_text(l, letter);
@@ -294,35 +295,40 @@ static lv_obj_t *make_wind_marker(lv_obj_t *parent, const char *letter, uint32_t
     return m;
 }
 
-// ---- tide arrow --------------------------------------------------------
-// A small triangle (head) + rectangle (tail) at dial center, rotating
-// around the center. Distinct cool-blue color, hidden when no current.
+// ---- tide / current vector ---------------------------------------------
+// A centered current vector: the SHAFT is symmetric about the dial centre
+// (its middle sits exactly on CX,CY) and the HEAD points in the current's set
+// direction; the whole thing rotates around the centre. When the current is
+// ~0 (calm), the arrow hides and a small ring is shown at the centre instead.
+static constexpr int TIDE_H = 132;           // box height
+static constexpr int TIDE_MID = TIDE_H / 2;  // pivot row == dial centre
 static void build_tide(lv_obj_t *parent) {
     tide_arrow = lv_obj_create(parent);
-    lv_obj_set_size(tide_arrow, 22, 80);
+    lv_obj_set_size(tide_arrow, 24, TIDE_H);
     lv_obj_set_style_bg_opa(tide_arrow, LV_OPA_TRANSP, 0);
     lv_obj_set_style_border_width(tide_arrow, 0, 0);
     lv_obj_set_style_pad_all(tide_arrow, 0, 0);
     lv_obj_clear_flag(tide_arrow, LV_OBJ_FLAG_SCROLLABLE);
     lv_obj_clear_flag(tide_arrow, LV_OBJ_FLAG_CLICKABLE);
-    apply_pivot_center(tide_arrow, 11, 40);
+    apply_pivot_center(tide_arrow, 12, TIDE_MID);
 
-    // Tail
-    lv_obj_t *tail = lv_obj_create(tide_arrow);
-    lv_obj_set_size(tail, 6, 50);
-    lv_obj_set_pos(tail, 8, 22);
-    lv_obj_set_style_bg_color(tail, lv_color_hex(0x288cff), 0);
-    lv_obj_set_style_bg_opa(tail, LV_OPA_70, 0);
-    lv_obj_set_style_border_width(tail, 0, 0);
-    lv_obj_set_style_radius(tail, 2, 0);
-    lv_obj_set_style_pad_all(tail, 0, 0);
-    lv_obj_clear_flag(tail, LV_OBJ_FLAG_SCROLLABLE);
-    lv_obj_clear_flag(tail, LV_OBJ_FLAG_CLICKABLE);
+    // Shaft: symmetric about the box centre (TIDE_MID), so its middle is at
+    // the dial centre. Extends ~46 px each way.
+    lv_obj_t *shaft = lv_obj_create(tide_arrow);
+    lv_obj_set_size(shaft, 5, 92);
+    lv_obj_set_pos(shaft, 9, TIDE_MID - 46);
+    lv_obj_set_style_bg_color(shaft, lv_color_hex(0x288cff), 0);
+    lv_obj_set_style_bg_opa(shaft, LV_OPA_COVER, 0);
+    lv_obj_set_style_border_width(shaft, 0, 0);
+    lv_obj_set_style_radius(shaft, 2, 0);
+    lv_obj_set_style_pad_all(shaft, 0, 0);
+    lv_obj_clear_flag(shaft, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_clear_flag(shaft, LV_OBJ_FLAG_CLICKABLE);
 
-    // Head (filled diamond, approximated with a wider rounded rect)
+    // Head (diamond) at the set-direction (top) end.
     lv_obj_t *head = lv_obj_create(tide_arrow);
     lv_obj_set_size(head, 22, 22);
-    lv_obj_set_pos(head, 0, 0);
+    lv_obj_set_pos(head, 1, 2);
     lv_obj_set_style_bg_color(head, lv_color_hex(0x288cff), 0);
     lv_obj_set_style_bg_opa(head, LV_OPA_COVER, 0);
     lv_obj_set_style_border_color(head, lv_color_hex(theme.fg), 0);
@@ -331,8 +337,20 @@ static void build_tide(lv_obj_t *parent) {
     lv_obj_set_style_pad_all(head, 0, 0);
     lv_obj_clear_flag(head, LV_OBJ_FLAG_SCROLLABLE);
     lv_obj_clear_flag(head, LV_OBJ_FLAG_CLICKABLE);
-
     lv_obj_add_flag(tide_arrow, LV_OBJ_FLAG_HIDDEN);
+
+    // Zero-current ring (shown when drift ~ 0): a hollow circle at the centre.
+    tide_zero = lv_obj_create(parent);
+    lv_obj_set_size(tide_zero, 26, 26);
+    apply_pivot_center(tide_zero, 13, 13);  // centred on the dial
+    lv_obj_set_style_bg_opa(tide_zero, LV_OPA_TRANSP, 0);
+    lv_obj_set_style_border_color(tide_zero, lv_color_hex(0x288cff), 0);
+    lv_obj_set_style_border_width(tide_zero, 3, 0);
+    lv_obj_set_style_radius(tide_zero, LV_RADIUS_CIRCLE, 0);
+    lv_obj_set_style_pad_all(tide_zero, 0, 0);
+    lv_obj_clear_flag(tide_zero, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_clear_flag(tide_zero, LV_OBJ_FLAG_CLICKABLE);
+    lv_obj_add_flag(tide_zero, LV_OBJ_FLAG_HIDDEN);
 }
 
 // ---- waypoint pip (small yellow marker at rim) -------------------------
@@ -470,8 +488,10 @@ lv_obj_t *build(lv_obj_t *parent) {
 
     // Wind markers (T white, A amber). T below A in z-order so amber wins
     // when they overlap (apparent is the one you steer to).
-    twa_marker = make_wind_marker(s_root, "T", 0xe3ebf2, 0x13253a);
-    awa_marker = make_wind_marker(s_root, "A", 0xf6a21a, 0x13253a);
+    // A/T markers carry a chevron (>>) so the apparent (amber) and true
+    // (white) wind indices read as inward-pointing direction arrows.
+    twa_marker = make_wind_marker(s_root, "T>>", 0xe3ebf2, 0x13253a);
+    awa_marker = make_wind_marker(s_root, "A>>", 0xf6a21a, 0x13253a);
 
     build_bezel(s_root);
     build_waypoint(s_root);
@@ -489,7 +509,7 @@ lv_obj_t *build(lv_obj_t *parent) {
                   &lbl_awa_value);
     inner_readout(s_root, "TWS", dxr, 0, &lv_font_montserrat_48, theme.fg, &lbl_tws_value,
                   &lbl_twa_value);
-    inner_readout(s_root, "HDG", 0, -134, &lv_font_montserrat_48, theme.accent, &lbl_hdg_value,
+    inner_readout(s_root, "HDG", 0, -96, &lv_font_montserrat_48, theme.accent, &lbl_hdg_value,
                   nullptr);
 
     // SOG / SOW in the bottom screen corners (outside the ring).
@@ -545,6 +565,7 @@ static int16_t s_last_wp_rot = INT16_MIN;
 static int8_t s_last_awa_hidden = -1;  // -1 = unset, 0 = shown, 1 = hidden
 static int8_t s_last_twa_hidden = -1;
 static int8_t s_last_tide_hidden = -1;
+static int8_t s_last_tide_zero_hidden = -1;
 static int8_t s_last_wp_hidden = -1;
 
 // Helpers moved to include/ui_dirty.h - shared across all screens.
@@ -630,20 +651,26 @@ void refresh() {
         set_text_if_changed(lbl_stw_value, s_last_stw, sizeof(s_last_stw), "--");
     }
 
-    // --- tide arrow ---
-    bool show_tide = !isnan(d.currentSetTrue) && !isnan(d.currentDrift) && d.currentDrift > 0.05 &&
-                     !isnan(hdg_deg);
-    if (show_tide) {
+    // --- tide / current vector ---
+    // Have current data + heading? Flowing current (>0.05 m/s) shows the
+    // centred arrow pointing to set; a calm/zero current shows the ring.
+    bool have_current = !isnan(d.currentSetTrue) && !isnan(d.currentDrift) && !isnan(hdg_deg);
+    bool flowing = have_current && d.currentDrift > 0.05;
+    if (flowing) {
         double tide_rel = rad_to_deg_pos(d.currentSetTrue) - hdg_deg;
         while (tide_rel < 0)
             tide_rel += 360;
         set_rot_if_changed(tide_arrow, &s_last_tide_rot, deg_to_lvgl(tide_rel));
         set_hidden_if_changed(tide_arrow, &s_last_tide_hidden, false);
+        set_hidden_if_changed(tide_zero, &s_last_tide_zero_hidden, true);
         snprintf(buf, sizeof(buf), "%.1f", mps_to_kn(d.currentDrift));
         set_text_if_changed(lbl_tide_speed, s_last_tide, sizeof(s_last_tide), buf);
     } else {
         set_hidden_if_changed(tide_arrow, &s_last_tide_hidden, true);
-        set_text_if_changed(lbl_tide_speed, s_last_tide, sizeof(s_last_tide), "");
+        // Calm current (have data, ~0 drift) -> ring; no data -> hide both.
+        set_hidden_if_changed(tide_zero, &s_last_tide_zero_hidden, !have_current);
+        set_text_if_changed(lbl_tide_speed, s_last_tide, sizeof(s_last_tide),
+                            have_current ? "0.0" : "");
     }
 
     // --- waypoint pip ---
