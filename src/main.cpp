@@ -28,6 +28,7 @@
 #include "autopilot.h"
 #include "board.h"
 #include "build_config.h"
+#include "proto_target.h"
 #if defined(BOARD_ID_WAVESHARE_KNOB_1_8)
 #include "knob_ui.h"
 #include "knob_input.h"
@@ -1857,6 +1858,15 @@ static void ui_refresh(lv_timer_t *) {
 
     t = micros();
     mob_refresh();
+    // Reap stale control sessions, then mirror the active set onto the
+    // "controlled" frame overlay. set_sessions() dirty-compares, so this is a
+    // cheap no-op when nothing changed. Runs on the UI/LVGL task (here).
+    proto_target::tick(millis());
+    {
+        proto::Session ctl_buf[proto::kMaxSessions];
+        int ctl_n = proto_target::active_session_snapshot(ctl_buf, proto::kMaxSessions);
+        ui::control_frame::set_sessions(ctl_buf, ctl_n);
+    }
 #if ESPDISP_ENABLE_STALL_TELEMETRY
     sk::pollStallTelemetry();
 #endif
@@ -2109,6 +2119,10 @@ void setup() {
     mob_build(top);
     alarms_build(top);
     breadcrumb_build(top);
+    // Per-controller "controlled" frame (Phase 3.2): stacked colored borders +
+    // name-pill on lv_layer_top(), refreshed from proto_target in ui_refresh.
+    // Self-attaches to lv_layer_top(); the parent arg is ignored.
+    ui::control_frame::build(nullptr);
 
     // (initial screen selection happens AFTER net::setup() runs below;
     // doing it here would always see WiFi as down because we haven't

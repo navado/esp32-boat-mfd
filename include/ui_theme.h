@@ -33,6 +33,22 @@ constexpr int panel_radius = 10;
 constexpr int panel_border = 1;
 constexpr int panel_pad = 10;
 constexpr int badge_radius = 6;
+
+// Per-controller "controlled" frame overlay (lv_layer_top()). Each active
+// session draws one thin nested border, inset by frame_step * i (outermost =
+// most-recent); a small name-pill (top-center) shows the most-recent
+// controller. Single source for these so the frame stays in lockstep with the
+// rest of the chrome. See src/ui/control_frame.cpp.
+namespace control_frame {
+constexpr int border_width = 3;     // thickness of each session border ring
+constexpr int frame_step = 5;       // inset between stacked rings (px)
+constexpr int rect_radius = 12;     // corner radius on rectangular panels
+constexpr int pill_pad_x = 10;      // name-pill horizontal padding
+constexpr int pill_pad_y = 4;       // name-pill vertical padding
+constexpr int pill_radius = 10;     // name-pill corner radius
+constexpr int pill_margin_top = 6;  // gap from top edge to the pill
+constexpr uint32_t pill_text = 0xffffff;
+}  // namespace control_frame
 }  // namespace chrome
 
 extern Palette theme;

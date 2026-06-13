@@ -148,11 +148,16 @@ bool handle_switch(const proto::Switch &s, proto::SwitchAck &ack) {
     }
 
     // Drive the view change via the UI-task command queue (never lv_obj_* /
-    // ui::* from here). Mirrors web.cpp handle_screen_set.
+    // ui::* from here). Mirrors web.cpp handle_screen_set: a full UI queue is a
+    // dropped switch, so NAK it ("busy") instead of acking ok=true.
     app::Command cmd;
     cmd.type = app::CommandType::ShowScreen;
     strncpy(cmd.a, s.viewId, sizeof(cmd.a) - 1);
-    app::post(cmd, 50);
+    if (!app::post(cmd, 50)) {
+        ack.ok = false;
+        strncpy(ack.reason, "busy", sizeof(ack.reason) - 1);
+        return false;
+    }
 
     ack.ok = true;
     strncpy(ack.currentView, s.viewId, sizeof(ack.currentView) - 1);

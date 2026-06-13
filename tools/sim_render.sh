@@ -71,6 +71,28 @@ for m in "${KNOB_MENUS[@]}"; do
   fi
 done
 
+# "Controlled" frame overlay (env:sim-control). Renders the REAL control_frame
+# overlay (src/ui/control_frame.cpp) driven by synthetic proto::Session structs:
+# one session and three stacked sessions, on both the rectangular 480x480 panel
+# and the round 360x360 knob panel. Shape + count are runtime argv, so a single
+# binary covers all four.
+echo "=== rendering control-frame overlay ==="
+pio run -e sim-control >/dev/null
+ctl_bin=".pio/build/sim-control/program"
+# "<shape> <count> <name>"
+CTL_CASES=("rect 1 control-frame-rect-1" "rect 3 control-frame-rect-3" \
+  "round 1 control-frame-round-1" "round 3 control-frame-round-3")
+for c in "${CTL_CASES[@]}"; do
+  set -- $c
+  shape="$1"; count="$2"; name="$3"
+  "$ctl_bin" "$shape" "$count" "docs/sim-shots/${name}.bmp"
+  if command -v sips >/dev/null 2>&1; then
+    sips -s format png "docs/sim-shots/${name}.bmp" \
+      --out "docs/sim-shots/${name}.png" >/dev/null
+    rm -f "docs/sim-shots/${name}.bmp"
+  fi
+done
+
 # Optional 2x2 composite of the four round views (requires ImageMagick montage).
 if command -v montage >/dev/null 2>&1; then
   montage \
