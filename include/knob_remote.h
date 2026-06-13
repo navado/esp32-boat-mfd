@@ -12,10 +12,13 @@ namespace knob_remote {
 constexpr size_t kMaxDisplays = 12;
 constexpr size_t kMaxViews = 12;
 
-// How a remote entry is reached when switch_view() drives it.
+// How a remote entry is reached when switch_view() drives it. Ordered by
+// preference for dedup: a higher-preference transport is never downgraded to a
+// lower one for the same deviceId (IP > BLE; both > Manager). See ingest_*.
 enum class Transport {
     Local = 0,    // entry 0: ui::show_by_id on the knob itself
     Manager = 1,  // manager screen.set POST (Phase F source)
+    BLE = 3,      // on-demand BLE central (proto_ble, Phase 4.2) — IP-less fallback
     IP = 2,       // espdisp control protocol over HTTP (proto_ip, Phase 3.3)
 };
 
@@ -29,6 +32,9 @@ struct DisplayEntry {
     int current_view;     // index of the display's active view (-1 unknown)
     Transport transport;  // how switch_view() reaches this entry
     char base_url[40];    // "http://<ip>:<port>" for Transport::IP (else empty)
+    char ble_addr[24];    // BLE address for Transport::BLE (else empty). Set even
+                          // on IP/Manager entries when BLE is also seen, so the
+                          // fallback is available without re-scanning.
 };
 
 void setup();  // seeds entry 0 (the knob's own dedicated views)
@@ -121,5 +127,26 @@ bool ingest_ip_peer(const char *id, const char *name, const char *base_url, cons
 // LVGL task. Returns the number of peers ingested/updated, or -1 on a board
 // without IP discovery. Safe to call with no manager provisioned.
 int refresh_ip_peers();
+
+// --- BLE-discovered peer source (Phase 4.2) --------------------------------
+// On-demand BLE central. BLE is the FALLBACK transport (design §4.3): a peer
+// reachable over IP is controlled over IP, never BLE. ingest_ble_peer() is
+// IP-preferred — it NEVER downgrades an existing IP entry; it only records the
+// BLE address on it (so the fallback exists) without changing its transport.
+// A peer seen ONLY over BLE (no IP/manager entry) becomes a Transport::BLE
+// entry whose switch_view() drives proto_ble::switch_on_peer on the worker, and
+// whose views are fetched lazily via proto_ble::get_device_on_peer.
+//
+// `ble_addr` is NimBLEAddress::toString() ("aa:bb:cc:dd:ee:ff"). Returns true if
+// the registry changed (new BLE entry, or a BLE address newly recorded).
+bool ingest_ble_peer(const char *id, const char *name, const char *ble_addr);
+
+// Scan for Control-service peers via proto_ble and ingest each as a BLE peer
+// (ingest_ble_peer per result, IP-preferred dedup). BLOCKING (the scan window)
+// — worker task only, never the LVGL task. BLE is scanned on a SLOW cadence and
+// only as a fallback (see manager.cpp worker), to bound NimBLE radio/RAM
+// pressure. Returns the number of peers ingested/updated, or -1 on a board
+// without the BLE central.
+int refresh_ble_peers();
 
 }  // namespace knob_remote

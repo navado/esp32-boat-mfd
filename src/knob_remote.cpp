@@ -12,6 +12,7 @@
 #include "device_identity.h"
 #include "manager.h"
 #include "proto/proto.h"
+#include "proto_ble.h"
 #include "proto_discovery.h"
 #include "proto_ip.h"
 #include "storage.h"
@@ -150,10 +151,14 @@ bool switch_view(int dev_idx, int view_idx) {
     copy_str(s_pending_switch.dev_id, sizeof(s_pending_switch.dev_id), e.id);
     copy_str(s_pending_switch.view_id, sizeof(s_pending_switch.view_id), e.view_id[view_idx]);
     // Carry the transport so the worker drains it via the right path: an IP peer
-    // (mDNS-discovered) is driven with proto_ip attach/switch/detach; a
-    // manager-only peer falls back to the manager screen.set POST.
+    // (mDNS-discovered) is driven with proto_ip attach/switch/detach; a BLE-only
+    // peer with proto_ble on-demand central; a manager-only peer falls back to
+    // the manager screen.set POST. The pending slot's `base_url` carries the
+    // reach address for whichever transport: the HTTP base for IP, the BLE
+    // address for BLE.
     s_pending_switch.transport = e.transport;
-    copy_str(s_pending_switch.base_url, sizeof(s_pending_switch.base_url), e.base_url);
+    copy_str(s_pending_switch.base_url, sizeof(s_pending_switch.base_url),
+             e.transport == Transport::BLE ? e.ble_addr : e.base_url);
     // Optimistically reflect the requested view in the registry for the menu;
     // the actual device state is reconciled by the next summary refresh.
     if (dev_idx >= 0 && dev_idx < s_count) s_displays[dev_idx].current_view = view_idx;
@@ -304,18 +309,29 @@ bool fetch_views_for(int dev_idx) {
     // fetch with the mutex released.
     Transport transport = Transport::Manager;
     char base_url[40] = {0};
+    char ble_addr[24] = {0};
     lock();
     if (dev_idx > 0 && dev_idx < s_count) {
         transport = s_displays[dev_idx].transport;
         copy_str(base_url, sizeof(base_url), s_displays[dev_idx].base_url);
+        copy_str(ble_addr, sizeof(ble_addr), s_displays[dev_idx].ble_addr);
     }
     unlock();
 
-    if (transport == Transport::IP) {
-        if (!base_url[0]) return false;
-        // GET /api/p2p/device returns the full DeviceRecord incl. its view list.
+    // Either transport that speaks the control protocol fills views from a
+    // DeviceRecord: IP reads GET /api/p2p/device; BLE reads the DEVICE
+    // characteristic via an on-demand connect (proto_ble::get_device_on_peer).
+    if (transport == Transport::IP || transport == Transport::BLE) {
         proto::DeviceRecord rec{};
-        if (!proto_ip::get_device(String(base_url), rec)) return false;
+        bool got = false;
+        if (transport == Transport::IP) {
+            if (!base_url[0]) return false;
+            got = proto_ip::get_device(String(base_url), rec);
+        } else {
+            if (!ble_addr[0]) return false;
+            got = proto_ble::get_device_on_peer(ble_addr, rec);
+        }
+        if (!got) return false;
         const char *ids[kMaxViews] = {nullptr};
         const char *titles[kMaxViews] = {nullptr};
         int count = rec.views_count;
@@ -377,14 +393,9 @@ void read_shared_key(char *out, size_t cap) {
     copy_str(out, cap, k.c_str());
 }
 
-// Drive an IP peer for one view switch over the control protocol. Blocking
-// (attach -> switch -> detach); runs on the worker task only. Returns true if
-// the switch ack reported the target moved to the requested view.
-bool ip_switch(const char *base_url, const char *view_id) {
-    if (!base_url || !*base_url) return false;
-    String base(base_url);
-
-    proto::Attach a{};
+// Build the controller's Attach (id/name/color/key/ttl) from device identity +
+// the NVS-persisted proto color/key. Shared by the IP and BLE switch paths.
+void build_attach(proto::Attach &a) {
     strncpy(a.v, "1.0", sizeof(a.v) - 1);
     strncpy(a.controllerId, device_identity::get().device_id, sizeof(a.controllerId) - 1);
     strncpy(a.name, device_identity::get().device_id, sizeof(a.name) - 1);
@@ -395,6 +406,31 @@ bool ip_switch(const char *base_url, const char *view_id) {
     read_shared_key(key, sizeof(key));
     strncpy(a.key, key, sizeof(a.key) - 1);
     a.ttlMs = proto::kDefaultTtlMs;
+}
+
+// Drive a BLE-only peer for one view switch via the on-demand central. Blocking
+// (scan-free connect -> attach -> switch -> detach -> disconnect+deleteClient,
+// all inside proto_ble); worker task only. Returns true if the switch ack
+// reported ok.
+bool ble_switch(const char *ble_addr, const char *view_id) {
+    if (!ble_addr || !*ble_addr) return false;
+    proto::Attach a{};
+    build_attach(a);
+    proto::Switch sw{};
+    strncpy(sw.v, "1.0", sizeof(sw.v) - 1);
+    strncpy(sw.viewId, view_id ? view_id : "", sizeof(sw.viewId) - 1);
+    return proto_ble::switch_on_peer(ble_addr, a, sw);
+}
+
+// Drive an IP peer for one view switch over the control protocol. Blocking
+// (attach -> switch -> detach); runs on the worker task only. Returns true if
+// the switch ack reported the target moved to the requested view.
+bool ip_switch(const char *base_url, const char *view_id) {
+    if (!base_url || !*base_url) return false;
+    String base(base_url);
+
+    proto::Attach a{};
+    build_attach(a);
 
     proto::AttachAck ack{};
     if (!proto_ip::attach(base, a, ack) || !ack.accepted) return false;
@@ -436,6 +472,8 @@ bool drain_pending_switch() {
     unlock();
     if (!pending) return false;
     if (transport == Transport::IP) return ip_switch(base_url, view_id);
+    // base_url carries the BLE address for a BLE-transport pending switch.
+    if (transport == Transport::BLE) return ble_switch(base_url, view_id);
     return manager::knob_post_screen_set(dev_id, view_id);
 #else
     return false;
@@ -489,6 +527,75 @@ bool ingest_ip_peer(const char *id, const char *name, const char *base_url, cons
     (void)board;
     (void)display;
     return false;
+#endif
+}
+
+bool ingest_ble_peer(const char *id, const char *name, const char *ble_addr) {
+#if defined(BOARD_ID_WAVESHARE_KNOB_1_8)
+    if (!id || !*id || !ble_addr || !*ble_addr) return false;
+    // Skip our own advertisement — entry 0 is already the local knob.
+    const char *own = device_identity::get().device_id;
+    if (own && *own && strcmp(own, id) == 0) return false;
+
+    bool changed = false;
+    lock();
+    int idx = find_by_id_locked(id);
+    if (idx >= 0) {
+        // The device already exists via IP or the manager. BLE is the fallback
+        // transport (IP-preferred): do NOT downgrade the entry's transport.
+        // Just record the BLE address so the fallback is available without a
+        // re-scan if the IP path later goes away. The transport stays as-is.
+        DisplayEntry &e = s_displays[idx];
+        if (strncmp(e.ble_addr, ble_addr, sizeof(e.ble_addr)) != 0) {
+            copy_str(e.ble_addr, sizeof(e.ble_addr), ble_addr);
+            changed = true;
+        }
+    } else if (s_count < (int)kMaxDisplays) {
+        // BLE-only peer (no IP/manager entry): create a Transport::BLE entry.
+        DisplayEntry &e = s_displays[s_count];
+        memset(&e, 0, sizeof(e));
+        copy_str(e.id, sizeof(e.id), id);
+        copy_str(e.name, sizeof(e.name), name && *name ? name : id);
+        e.is_local = false;
+        e.current_view = -1;
+        e.view_count = 0;  // filled lazily on drill-in via fetch_views_for()
+        e.transport = Transport::BLE;
+        copy_str(e.ble_addr, sizeof(e.ble_addr), ble_addr);
+        s_count++;
+        changed = true;
+    }
+    unlock();
+    return changed;
+#else
+    (void)id;
+    (void)name;
+    (void)ble_addr;
+    return false;
+#endif
+}
+
+#if defined(BOARD_ID_WAVESHARE_KNOB_1_8)
+namespace {
+// BLE scan callback: merge each Control-service peer into the registry as a BLE
+// peer (IP-preferred dedup in ingest_ble_peer). Counts changes via the ctx int.
+void on_ble_peer(const proto_ble::Peer &p, void *ctx) {
+    if (ingest_ble_peer(p.device_id, p.device_id, p.addr)) {
+        if (ctx) (*static_cast<int *>(ctx))++;
+    }
+}
+}  // namespace
+#endif
+
+int refresh_ble_peers() {
+#if defined(BOARD_ID_WAVESHARE_KNOB_1_8)
+    int changed = 0;
+    // ~3 s active scan window. BLE is the fallback transport, scanned on a slow
+    // cadence by the worker (see manager.cpp) to bound NimBLE radio/RAM pressure.
+    int found = proto_ble::scan(3000, on_ble_peer, &changed);
+    if (found < 0) return -1;
+    return changed;
+#else
+    return -1;
 #endif
 }
 

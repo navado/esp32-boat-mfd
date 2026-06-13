@@ -1737,6 +1737,15 @@ void worker(void *) {
     // worker task, never on LVGL.
     constexpr uint32_t IP_DISCOVERY_INTERVAL_MS = 15000;
     uint32_t next_ip_discovery_ms = 0;
+    // BLE discovery cadence — much slower than IP. BLE is the FALLBACK transport
+    // (design §4.3): a peer reachable over IP is controlled over IP, never BLE.
+    // The on-demand central scan competes with the radio and holds NimBLE
+    // central state, so it runs infrequently (every ~60 s) and only when the
+    // last IP browse found nothing — i.e. when there may be a BLE-only peer to
+    // reach. ingest_ble_peer is IP-preferred, so even if it runs it never
+    // downgrades an IP entry.
+    constexpr uint32_t BLE_DISCOVERY_INTERVAL_MS = 60000;
+    uint32_t next_ble_discovery_ms = 30000;  // first BLE scan ~30 s after boot
 #endif
     for (;;) {
         // Snapshot mutable state under the mutex so CLI updates can't
@@ -1751,10 +1760,23 @@ void worker(void *) {
         // IP peer discovery runs independently of the manager endpoint so the
         // knob finds + controls displays over mDNS/HTTP with no manager. Gated
         // on WiFi up and skipped during OTA (mDNS query competes for the radio).
+        int ip_peers_found = -1;
         if (WiFi.status() == WL_CONNECTED && !net::otaInProgress() &&
             millis() >= next_ip_discovery_ms) {
-            knob_remote::refresh_ip_peers();  // blocking mDNS browse, worker task
+            ip_peers_found = knob_remote::refresh_ip_peers();  // blocking mDNS browse
             next_ip_discovery_ms = millis() + IP_DISCOVERY_INTERVAL_MS;
+        }
+
+        // BLE fallback scan: only when warranted. Run on the slow cadence AND
+        // only when the most recent IP browse turned up nothing new (so we go
+        // looking for BLE-only peers rather than re-scanning when IP already
+        // covers the field). Skipped during OTA — the scan competes for the
+        // radio. ip_peers_found == -1 means "no IP browse this tick", which is
+        // also fine to fall back from. WiFi does not gate BLE (an off-grid knob
+        // with no WiFi is exactly when BLE matters), only OTA does.
+        if (!net::otaInProgress() && millis() >= next_ble_discovery_ms && ip_peers_found <= 0) {
+            knob_remote::refresh_ble_peers();  // blocking BLE scan, worker task
+            next_ble_discovery_ms = millis() + BLE_DISCOVERY_INTERVAL_MS;
         }
 
         // Drain UI-task-queued remote requests on EVERY tick, before the
