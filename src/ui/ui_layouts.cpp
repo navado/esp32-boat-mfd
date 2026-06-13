@@ -415,6 +415,30 @@ static void paint_numeric_body(QuadGridTile &t, const MetricBinding &m, int w, i
     }
 }
 
+// A thin rotating needle pinned to a ring's centre, pointing up at 0°.
+// Rotated live (transform_rotation, 0.1° units) to show heading / wind angle.
+// Returned in t.aux2 so update_quad_grid can spin it.
+static lv_obj_t *make_needle(lv_obj_t *ring, int dia, uint32_t color) {
+    int len = dia / 2 - 8;
+    if (len < 12) len = 12;
+    lv_obj_t *n = lv_obj_create(ring);
+    lv_obj_set_size(n, 4, len);
+    // Place the needle's bottom at the ring centre, extending up.
+    lv_obj_align(n, LV_ALIGN_CENTER, 0, -len / 2);
+    lv_obj_set_style_bg_color(n, lv_color_hex(color), 0);
+    lv_obj_set_style_bg_opa(n, LV_OPA_COVER, 0);
+    lv_obj_set_style_border_width(n, 0, 0);
+    lv_obj_set_style_radius(n, 2, 0);
+    lv_obj_set_style_pad_all(n, 0, 0);
+    // Pivot at the needle's bottom-centre == ring centre, so rotation sweeps
+    // the tip around the dial.
+    lv_obj_set_style_transform_pivot_x(n, 2, 0);
+    lv_obj_set_style_transform_pivot_y(n, len, 0);
+    lv_obj_clear_flag(n, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_clear_flag(n, LV_OBJ_FLAG_CLICKABLE);
+    return n;
+}
+
 // Compass widget: round bezel with accent border, heading number in the
 // center, small "▲" marker at top, CTS label at bottom. Mirrors editor
 // .wpreview .compass.
@@ -437,7 +461,10 @@ static void paint_compass_body(QuadGridTile &t, const MetricBinding &m, int w, i
     lv_obj_clear_flag(ring, LV_OBJ_FLAG_CLICKABLE);
     t.aux = ring;
 
-    // Top marker (warn-colored triangle approximation via label).
+    // Heading needle (rotated live in update_quad_grid to the heading bearing).
+    t.aux2 = make_needle(ring, dia, theme.accent);
+
+    // Fixed top marker (lubber line) so the heading needle reads against it.
     lv_obj_t *marker = lv_label_create(t.root);
     lv_label_set_text(marker, "^");
     lv_obj_set_style_text_font(marker, &lv_font_montserrat_14, 0);
@@ -589,6 +616,10 @@ static void paint_wind_rose_body(QuadGridTile &t, const MetricBinding & /*m*/, i
     lv_obj_clear_flag(ring, LV_OBJ_FLAG_SCROLLABLE);
     lv_obj_clear_flag(ring, LV_OBJ_FLAG_CLICKABLE);
     t.aux = ring;
+
+    // Apparent-wind needle (rotated live in update_quad_grid to AWA). Drawn
+    // before the value label so the number sits on top at the hub.
+    t.aux2 = make_needle(ring, dia, theme.warn);
 
     // Wind speed (AWS) is the hero number, sized to dominate the ring.
     const lv_font_t *vfont = &lv_font_montserrat_28;
@@ -799,6 +830,18 @@ static lv_obj_t *create_quad_grid(lv_obj_t *parent, const ScreenVariantSpec &spe
     return root;
 }
 
+// Rotate a tile's needle (t.aux2) to `deg` (display degrees, 0 = up/N).
+// Quantized to whole degrees; last value cached in t.last_aux_pct to skip
+// redundant transforms. No-op if the tile has no needle or data is NaN.
+static void rotate_needle(QuadGridTile &t, double deg) {
+    if (!t.aux2 || isnan(deg)) return;
+    int d = ((int)lround(deg)) % 360;
+    if (d < 0) d += 360;
+    if (d == t.last_aux_pct) return;
+    lv_obj_set_style_transform_rotation(t.aux2, d * 10, 0);
+    t.last_aux_pct = d;
+}
+
 static void update_quad_grid(lv_obj_t *root, const ScreenVariantSpec &spec, const sk::Data &data) {
     if (!root) return;
     auto *st = (QuadGridState *)lv_obj_get_user_data(root);
@@ -867,6 +910,8 @@ static void update_quad_grid(lv_obj_t *root, const ScreenVariantSpec &spec, cons
                 ui::set_text_if_changed(t.secondary, t.last_secondary, sizeof(t.last_secondary),
                                         cts);
             }
+            // Spin the heading needle live to the heading bearing.
+            rotate_needle(t, metric_scalar(m, data));
             break;
         default:
             // Numeric, Compass, WindRose, Text, Trend fallback - all use
@@ -875,6 +920,12 @@ static void update_quad_grid(lv_obj_t *root, const ScreenVariantSpec &spec, cons
             if (t.secondary) {
                 ui::set_text_if_changed(t.secondary, t.last_secondary, sizeof(t.last_secondary),
                                         sec);
+            }
+            // WindRose: spin the apparent-wind needle to AWA.
+            if (t.kind == WidgetKind::WindRose) {
+                MetricBinding awa = {};
+                awa.source = MetricSource::AWA_deg;
+                rotate_needle(t, metric_scalar(awa, data));
             }
             break;
         }
