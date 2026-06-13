@@ -12,6 +12,13 @@ namespace knob_remote {
 constexpr size_t kMaxDisplays = 12;
 constexpr size_t kMaxViews = 12;
 
+// How a remote entry is reached when switch_view() drives it.
+enum class Transport {
+    Local = 0,    // entry 0: ui::show_by_id on the knob itself
+    Manager = 1,  // manager screen.set POST (Phase F source)
+    IP = 2,       // espdisp control protocol over HTTP (proto_ip, Phase 3.3)
+};
+
 struct DisplayEntry {
     char id[40];    // device id ("" for the local knob -> use local)
     char name[40];  // human label
@@ -19,7 +26,9 @@ struct DisplayEntry {
     int view_count;
     char view_id[kMaxViews][24];
     char view_title[kMaxViews][24];
-    int current_view;  // index of the display's active view (-1 unknown)
+    int current_view;     // index of the display's active view (-1 unknown)
+    Transport transport;  // how switch_view() reaches this entry
+    char base_url[40];    // "http://<ip>:<port>" for Transport::IP (else empty)
 };
 
 void setup();  // seeds entry 0 (the knob's own dedicated views)
@@ -93,5 +102,24 @@ void copy_device_id(int dev_idx, char *out, size_t out_cap);
 // device's active screen id (may be empty/null). Takes the lock.
 void set_views(int dev_idx, const char *const *view_ids, const char *const *view_titles, int count,
                const char *current);
+
+// --- IP-discovered peer source (Phase 3.3) ---------------------------------
+// mDNS-discovered displays are merged in as an additive transport source,
+// alongside the manager source. The worker browses _espdisp._tcp (see
+// proto_discovery) and calls ingest_ip_peer() for each non-self peer. Dedup is
+// by deviceId: if a manager entry with the same id already exists, it is
+// upgraded in place to Transport::IP + the base URL (IP is preferred — it works
+// with no manager); otherwise a new entry is appended. Worker-task only; takes
+// the lock. `base_url` is "http://<ip>:<port>". Returns true if the registry
+// changed (new entry or upgraded transport).
+bool ingest_ip_peer(const char *id, const char *name, const char *base_url, const char *board,
+                    const char *display);
+
+// Browse _espdisp._tcp via mDNS and ingest each discovered display as an IP
+// peer (ingest_ip_peer per result, deduped by deviceId). BLOCKING (the mDNS
+// query waits for responses) — call from the manager/worker task only, NOT the
+// LVGL task. Returns the number of peers ingested/updated, or -1 on a board
+// without IP discovery. Safe to call with no manager provisioned.
+int refresh_ip_peers();
 
 }  // namespace knob_remote

@@ -1729,6 +1729,15 @@ void worker(void *) {
     uint32_t next_heartbeat_ms = 0;
     uint32_t next_command_poll_ms = 0;
     uint32_t next_manager_http_ms = 0;
+#if defined(BOARD_ID_WAVESHARE_KNOB_1_8)
+    // IP discovery cadence. Independent of the manager: the knob browses
+    // _espdisp._tcp every ~15 s so the Select-Display menu fills with
+    // mDNS-discovered displays even with no manager provisioned (design §4.1).
+    // The browse blocks for the mDNS query window, so it runs only here on the
+    // worker task, never on LVGL.
+    constexpr uint32_t IP_DISCOVERY_INTERVAL_MS = 15000;
+    uint32_t next_ip_discovery_ms = 0;
+#endif
     for (;;) {
         // Snapshot mutable state under the mutex so CLI updates can't
         // race the HTTP path mid-call.
@@ -1737,6 +1746,19 @@ void worker(void *) {
         bool prov = is_provisioned();
         bool force = s_force_register;
         unlock_state();
+
+#if defined(BOARD_ID_WAVESHARE_KNOB_1_8)
+        // IP peer discovery runs independently of the manager endpoint so the
+        // knob finds + controls displays over mDNS/HTTP with no manager. Gated
+        // on WiFi up and skipped during OTA (mDNS query competes for the radio).
+        if (WiFi.status() == WL_CONNECTED && !net::otaInProgress() &&
+            millis() >= next_ip_discovery_ms) {
+            knob_remote::refresh_ip_peers();  // blocking mDNS browse, worker task
+            knob_remote::drain_pending_views_fetch();
+            knob_remote::drain_pending_switch();
+            next_ip_discovery_ms = millis() + IP_DISCOVERY_INTERVAL_MS;
+        }
+#endif
 
         if (!have_endpoint) {
             s_health = HealthState::Idle;

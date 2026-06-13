@@ -5,10 +5,16 @@
 #include "ui_screens.h"
 
 #if defined(BOARD_ID_WAVESHARE_KNOB_1_8)
+#include <Arduino.h>
 #include <freertos/FreeRTOS.h>
 #include <freertos/semphr.h>
 
+#include "device_identity.h"
 #include "manager.h"
+#include "proto/proto.h"
+#include "proto_discovery.h"
+#include "proto_ip.h"
+#include "storage.h"
 #endif
 
 namespace knob_remote {
@@ -42,8 +48,10 @@ struct PendingSwitch {
     bool pending;
     char dev_id[40];
     char view_id[24];
+    Transport transport;
+    char base_url[40];
 };
-PendingSwitch s_pending_switch = {false, {0}, {0}};
+PendingSwitch s_pending_switch = {false, {0}, {0}, Transport::Manager, {0}};
 
 void lock() {
     if (s_mtx) xSemaphoreTake(s_mtx, portMAX_DELAY);
@@ -79,6 +87,7 @@ void add_local() {
     }
     e.view_count = 4;
     e.current_view = 0;
+    e.transport = Transport::Local;
     s_count = 1;
 }
 
@@ -140,6 +149,11 @@ bool switch_view(int dev_idx, int view_idx) {
     s_pending_switch.pending = true;
     copy_str(s_pending_switch.dev_id, sizeof(s_pending_switch.dev_id), e.id);
     copy_str(s_pending_switch.view_id, sizeof(s_pending_switch.view_id), e.view_id[view_idx]);
+    // Carry the transport so the worker drains it via the right path: an IP peer
+    // (mDNS-discovered) is driven with proto_ip attach/switch/detach; a
+    // manager-only peer falls back to the manager screen.set POST.
+    s_pending_switch.transport = e.transport;
+    copy_str(s_pending_switch.base_url, sizeof(s_pending_switch.base_url), e.base_url);
     // Optimistically reflect the requested view in the registry for the menu;
     // the actual device state is reconciled by the next summary refresh.
     if (dev_idx >= 0 && dev_idx < s_count) s_displays[dev_idx].current_view = view_idx;
@@ -176,6 +190,14 @@ void ingest_display(const char *id, const char *name, const char *current_screen
     copy_str(e.name, sizeof(e.name), name && *name ? name : id);
     e.is_local = false;
     e.current_view = -1;
+    e.transport = Transport::Manager;
+    // Preserve an IP transport already discovered for this id across a manager
+    // summary refresh — IP is preferred and must not be downgraded to Manager
+    // just because the slow summary GET re-ran.
+    if (had_prev && prev.transport == Transport::IP) {
+        e.transport = Transport::IP;
+        copy_str(e.base_url, sizeof(e.base_url), prev.base_url);
+    }
     if (had_prev) {
         e.view_count = prev.view_count;
         for (int v = 0; v < prev.view_count && v < (int)kMaxViews; ++v) {
@@ -253,8 +275,59 @@ int refresh_from_manager() {
 #endif
 }
 
+#if defined(BOARD_ID_WAVESHARE_KNOB_1_8)
+namespace {
+// mDNS browse callback: merge each discovered display into the registry. Counts
+// how many entries were added/upgraded via the ctx int.
+void on_ip_peer(const proto_discovery::Peer &p, void *ctx) {
+    if (ingest_ip_peer(p.device_id, p.device_id, p.base_url, p.board, p.display)) {
+        if (ctx) (*static_cast<int *>(ctx))++;
+    }
+}
+}  // namespace
+#endif
+
+int refresh_ip_peers() {
+#if defined(BOARD_ID_WAVESHARE_KNOB_1_8)
+    int changed = 0;
+    int found = proto_discovery::browse(on_ip_peer, &changed);
+    if (found < 0) return -1;
+    return changed;
+#else
+    return -1;
+#endif
+}
+
 bool fetch_views_for(int dev_idx) {
 #if defined(BOARD_ID_WAVESHARE_KNOB_1_8)
+    // Resolve the transport + base URL under the lock, then do the blocking
+    // fetch with the mutex released.
+    Transport transport = Transport::Manager;
+    char base_url[40] = {0};
+    lock();
+    if (dev_idx > 0 && dev_idx < s_count) {
+        transport = s_displays[dev_idx].transport;
+        copy_str(base_url, sizeof(base_url), s_displays[dev_idx].base_url);
+    }
+    unlock();
+
+    if (transport == Transport::IP) {
+        if (!base_url[0]) return false;
+        // GET /api/p2p/device returns the full DeviceRecord incl. its view list.
+        proto::DeviceRecord rec{};
+        if (!proto_ip::get_device(String(base_url), rec)) return false;
+        const char *ids[kMaxViews] = {nullptr};
+        const char *titles[kMaxViews] = {nullptr};
+        int count = rec.views_count;
+        if (count > (int)kMaxViews) count = (int)kMaxViews;
+        for (int i = 0; i < count; ++i) {
+            ids[i] = rec.views[i].id;
+            titles[i] = rec.views[i].title;
+        }
+        set_views(dev_idx, ids, titles, count, rec.currentView);
+        return true;
+    }
+
     if (!manager_available()) return false;
     return manager::knob_fetch_views(dev_idx);
 #else
@@ -282,23 +355,139 @@ bool drain_pending_views_fetch() {
 #endif
 }
 
+#if defined(BOARD_ID_WAVESHARE_KNOB_1_8)
+namespace {
+
+// Default controller color (design §6 makes this configurable; a fixed cyan is
+// fine for 3.3). The shared key, if any, is read from NVS namespace "proto",
+// key "key" (open/no-auth when unset).
+constexpr const char *kDefaultControllerColor = "#00bcd4";
+
+void read_controller_color(char *out, size_t cap) {
+    // Phase 6 will persist an operator-chosen color in NVS proto/color; until
+    // then use the default. Honor it early if already set so 3.3 + 6 compose.
+    storage::Namespace ns("proto", true);
+    std::string c = ns.get_string("color", kDefaultControllerColor);
+    copy_str(out, cap, c.empty() ? kDefaultControllerColor : c.c_str());
+}
+
+void read_shared_key(char *out, size_t cap) {
+    storage::Namespace ns("proto", true);
+    std::string k = ns.get_string("key", "");
+    copy_str(out, cap, k.c_str());
+}
+
+// Drive an IP peer for one view switch over the control protocol. Blocking
+// (attach -> switch -> detach); runs on the worker task only. Returns true if
+// the switch ack reported the target moved to the requested view.
+bool ip_switch(const char *base_url, const char *view_id) {
+    if (!base_url || !*base_url) return false;
+    String base(base_url);
+
+    proto::Attach a{};
+    strncpy(a.v, "1.0", sizeof(a.v) - 1);
+    strncpy(a.controllerId, device_identity::get().device_id, sizeof(a.controllerId) - 1);
+    strncpy(a.name, device_identity::get().device_id, sizeof(a.name) - 1);
+    char color[16];
+    read_controller_color(color, sizeof(color));
+    strncpy(a.color, color, sizeof(a.color) - 1);
+    char key[40];
+    read_shared_key(key, sizeof(key));
+    strncpy(a.key, key, sizeof(a.key) - 1);
+    a.ttlMs = proto::kDefaultTtlMs;
+
+    proto::AttachAck ack{};
+    if (!proto_ip::attach(base, a, ack) || !ack.accepted) return false;
+
+    proto::Switch sw{};
+    strncpy(sw.v, "1.0", sizeof(sw.v) - 1);
+    strncpy(sw.sessionId, ack.sessionId, sizeof(sw.sessionId) - 1);
+    strncpy(sw.viewId, view_id ? view_id : "", sizeof(sw.viewId) - 1);
+    proto::SwitchAck sa{};
+    bool ok = proto_ip::do_switch(base, sw, sa) && sa.ok;
+
+    // Release the session — the knob does not hold a live attachment between
+    // turns (per the on-demand control model). The colored frame on the target
+    // clears on detach / TTL.
+    proto_ip::detach(base, ack.sessionId);
+    return ok;
+}
+
+}  // namespace
+#endif
+
 bool drain_pending_switch() {
 #if defined(BOARD_ID_WAVESHARE_KNOB_1_8)
     // Copy the request out under the lock and clear it, then release the lock
-    // before the blocking POST so the mutex is never held across HTTP.
+    // before the blocking I/O so the mutex is never held across HTTP.
     char dev_id[40];
     char view_id[24];
+    char base_url[40];
+    Transport transport = Transport::Manager;
     lock();
     bool pending = s_pending_switch.pending;
     if (pending) {
         s_pending_switch.pending = false;
         copy_str(dev_id, sizeof(dev_id), s_pending_switch.dev_id);
         copy_str(view_id, sizeof(view_id), s_pending_switch.view_id);
+        copy_str(base_url, sizeof(base_url), s_pending_switch.base_url);
+        transport = s_pending_switch.transport;
     }
     unlock();
     if (!pending) return false;
+    if (transport == Transport::IP) return ip_switch(base_url, view_id);
     return manager::knob_post_screen_set(dev_id, view_id);
 #else
+    return false;
+#endif
+}
+
+bool ingest_ip_peer(const char *id, const char *name, const char *base_url, const char *board,
+                    const char *display) {
+#if defined(BOARD_ID_WAVESHARE_KNOB_1_8)
+    (void)board;
+    (void)display;
+    if (!id || !*id || !base_url || !*base_url) return false;
+    // Skip our own advertisement — entry 0 is already the local knob.
+    const char *own = device_identity::get().device_id;
+    if (own && *own && strcmp(own, id) == 0) return false;
+
+    bool changed = false;
+    lock();
+    int idx = find_by_id_locked(id);
+    if (idx >= 0) {
+        // Existing entry (likely from the manager source): upgrade it to IP,
+        // which is preferred because it needs no manager. View list, name and
+        // current_view are preserved.
+        DisplayEntry &e = s_displays[idx];
+        if (e.transport != Transport::IP ||
+            strncmp(e.base_url, base_url, sizeof(e.base_url)) != 0) {
+            e.transport = Transport::IP;
+            copy_str(e.base_url, sizeof(e.base_url), base_url);
+            if ((!e.name[0]) && name && *name) copy_str(e.name, sizeof(e.name), name);
+            changed = true;
+        }
+    } else if (s_count < (int)kMaxDisplays) {
+        DisplayEntry &e = s_displays[s_count];
+        memset(&e, 0, sizeof(e));
+        copy_str(e.id, sizeof(e.id), id);
+        copy_str(e.name, sizeof(e.name), name && *name ? name : id);
+        e.is_local = false;
+        e.current_view = -1;
+        e.view_count = 0;  // filled lazily on drill-in via fetch_views_for()
+        e.transport = Transport::IP;
+        copy_str(e.base_url, sizeof(e.base_url), base_url);
+        s_count++;
+        changed = true;
+    }
+    unlock();
+    return changed;
+#else
+    (void)id;
+    (void)name;
+    (void)base_url;
+    (void)board;
+    (void)display;
     return false;
 #endif
 }

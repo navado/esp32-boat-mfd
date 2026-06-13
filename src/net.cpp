@@ -564,6 +564,12 @@ static void refresh_mdns_device_txt(const char *reason) {
     MDNS.addServiceTxt(device_discovery::MDNS_SERVICE, "tcp", "board", info.board_id);
     MDNS.addServiceTxt(device_discovery::MDNS_SERVICE, "tcp", "firmware", info.firmware_name);
     MDNS.addServiceTxt(device_discovery::MDNS_SERVICE, "tcp", "version", info.firmware_version);
+    // Control-protocol advertisement (design §4.1): pv = protocol version,
+    // role = display|controller|both. A controller browsing _espdisp._tcp reads
+    // these to decide it can attach + drive this device over IP. Every espdisp
+    // node is a display that also accepts remote control, so role = "both".
+    MDNS.addServiceTxt(device_discovery::MDNS_SERVICE, "tcp", "pv", "1.0");
+    MDNS.addServiceTxt(device_discovery::MDNS_SERVICE, "tcp", "role", "both");
     MDNS.addServiceTxt(device_discovery::MDNS_SERVICE, "tcp", "display",
                        String(info.display_width) + "x" + String(info.display_height));
     MDNS.addServiceTxt(device_discovery::MDNS_SERVICE, "tcp", "auth",
