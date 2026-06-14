@@ -46,11 +46,37 @@ personal, research, educational, and other noncommercial use.
 
 > **Latest UI (2026-06):** a "glass-cockpit" redesign — bordered gradient
 > cells, a cool high-contrast palette, large hero numerals (custom 64 px
-> font), semantic color, and a single consolidated style source. The wind
-> screen shows wind/heading/speed readouts inside the rose plus a live tidal
-> **current vector**; tapping a dashboard tile opens a full-screen single-value
-> **zoom** view. See [docs/user-guide-signalk.md](docs/user-guide-signalk.md)
-> for managing displays, dashboards, and OTA firmware from SignalK.
+> font), semantic color, and a single consolidated style source. The
+> **autopilot** and **wind** screens were reworked into a reference HUD style:
+> a semicircular heading compass (white band, green rail, red cardinals, amber
+> target bug), a centered HDG readout with COG/SOG, a cross-track-error strip,
+> and clean numeric tiles. The wind rose keeps the full 360° (wind can blow
+> from any bearing) plus a live tidal **current vector**, with all numbers moved
+> out to tiles. Tapping a dashboard tile opens a full-screen **zoom** view. See
+> [docs/user-guide-signalk.md](docs/user-guide-signalk.md) for managing
+> displays, dashboards, and OTA firmware from SignalK.
+
+<p align="center">
+  <img src="docs/sim-shots/ap-480x480.png" alt="Autopilot HUD 480x480" width="200">
+  <img src="docs/sim-shots/ap-800x480.png" alt="Autopilot HUD 800x480" width="300">
+  <br>
+  <img src="docs/sim-shots/ap-1024x600.png" alt="Autopilot HUD 1024x600" width="340">
+  <br>
+  <em>Autopilot HUD — semicircular compass, target bug, XTE strip, and numeric
+  tiles — rendered at every supported display class (480×480 square, 800×480 and
+  1024×600 wide). Engage/standby and mode are touch (long-press = mode picker)
+  or driven by the external network knob.</em>
+</p>
+
+<p align="center">
+  <img src="docs/sim-shots/wind-480x480.png" alt="Wind dial 480x480" width="190">
+  <img src="docs/sim-shots/wind-800x480.png" alt="Wind dial 800x480" width="300">
+  <br>
+  <img src="docs/sim-shots/wind-1024x600.png" alt="Wind dial 1024x600" width="340">
+  <br>
+  <em>Wind dial — full 360° rose with apparent/true wind indices, close-hauled
+  sectors, and the tidal current vector; AWS/AWA/TWS/TWA in tiles.</em>
+</p>
 
 <p align="center">
   <img src="docs/sim-shots/dash-480x480.png" alt="Dashboard 480x480" width="150">
@@ -58,9 +84,12 @@ personal, research, educational, and other noncommercial use.
   <br>
   <img src="docs/sim-shots/dash-1024x600.png" alt="Dashboard 1024x600" width="320">
   <br>
-  <em>Same dashboard rendered at every supported display class (480×480,
-  800×480, 1024×600) by the headless LVGL host harness — <code>make sim</code>.
-  It runs the real layout code and asserts no-overlap/in-bounds per resolution.</em>
+  <img src="docs/sim-shots/knob-ap_hud.png" alt="Round autopilot control (Waveshare knob)" width="150">
+  <br>
+  <em>Dashboard at every supported display class (480×480, 800×480, 1024×600),
+  and the round autopilot control on the Waveshare knob (360×360). All produced
+  by the headless LVGL host harness — <code>make sim</code> — which runs the real
+  screen code and asserts no-overlap/in-bounds per resolution.</em>
 </p>
 
 ## Features

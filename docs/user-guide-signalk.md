@@ -10,6 +10,58 @@ installed on your SignalK server and at least one device has registered.
 > `/plugins/espdisp-manager`, and a synthetic data source (`fake_boat.py`,
 > `fake-boat.service`) feeds live values for bench testing.
 
+## 0. The display screens
+
+The same firmware drives every supported panel size; the layout adapts to the
+aspect ratio. The autopilot and wind screens use the reference glass-cockpit
+HUD — a semicircular heading compass (white band, green rail, red cardinals,
+amber target bug), a centered HDG readout with COG/SOG, a cross-track-error
+strip, and clean numeric tiles. Wind keeps the full 360° rose (wind can come
+from dead astern) with all numbers moved out to tiles. These renders come from
+`make sim`, which runs the real screen code headlessly; the bigger panels are
+simulated, the round knob view is the live autopilot control surface.
+
+**Autopilot HUD** — 480×480 (square), 800×480 and 1024×600 (wide):
+
+<p align="center">
+  <img src="sim-shots/ap-480x480.png" alt="Autopilot HUD 480x480" width="200">
+  <img src="sim-shots/ap-800x480.png" alt="Autopilot HUD 800x480" width="300">
+  <br>
+  <img src="sim-shots/ap-1024x600.png" alt="Autopilot HUD 1024x600" width="340">
+</p>
+
+- **HDG** (big) with the **COG / SOG** sub-line; the amber bug on the rail is the
+  autopilot's target heading, the red lubber at top is the boat's head.
+- **XTE strip** shows cross-track error (PORT … STBD, ±1.0 nm).
+- **ON / STBY** button engages or disengages; **long-press** it for the mode
+  picker (Auto / Wind / Route / Standby). Tap the **port / starboard half** of
+  the dial to nudge the target ∓1° (long-press for ∓10°). The external network
+  knob controls the same autopilot in parallel.
+- Tiles: **DEPTH · SPEED · AWS · AWA**.
+
+**Wind dial** — 480×480, 800×480, 1024×600:
+
+<p align="center">
+  <img src="sim-shots/wind-480x480.png" alt="Wind dial 480x480" width="190">
+  <img src="sim-shots/wind-800x480.png" alt="Wind dial 800x480" width="300">
+  <br>
+  <img src="sim-shots/wind-1024x600.png" alt="Wind dial 1024x600" width="340">
+</p>
+
+- Full 360° rose with **A** (apparent, amber) and **T** (true) wind indices, the
+  red/green close-hauled sectors, the rotating heading bezel, and the blue tidal
+  **current vector** at centre. Numbers are in tiles: **AWS · AWA · TWS · TWA**.
+
+**Dashboard** and the **round autopilot control** (Waveshare knob, 360×360):
+
+<p align="center">
+  <img src="sim-shots/dash-480x480.png" alt="Dashboard 480x480" width="150">
+  <img src="sim-shots/dash-800x480.png" alt="Dashboard 800x480" width="250">
+  <br>
+  <img src="sim-shots/dash-1024x600.png" alt="Dashboard 1024x600" width="320">
+  <img src="sim-shots/knob-ap_hud.png" alt="Round autopilot control" width="150">
+</p>
+
 ## 1. Opening the manager
 
 1. Open the SignalK admin UI (`http://<server>:3000`) and log in.
