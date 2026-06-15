@@ -647,6 +647,24 @@ function registerRoutes (router, getManager) {
     res.end()
   }))
 
+  // Switch a single device to a specific screen (live), without changing its
+  // assigned profile. Queues a `screen.set` command (createCommand also drives
+  // the control-protocol path directly when the device speaks it); the firmware
+  // maps screen.set -> show_by_id on its next command poll.
+  router.post('/ui/devices/:id/switch-screen', wrap(getManager, (manager, req, res) => {
+    const screenId = (req.body && req.body.screenId) || ''
+    let status = 'no-screen'
+    if (screenId) {
+      manager.createCommand(req.params.id, { type: 'screen.set', payload: { screen: screenId } })
+      status = 'screen-set'
+    }
+    res.statusCode = 303
+    res.setHeader('location',
+      `/plugins/espdisp-manager/ui/devices/${encodeURIComponent(req.params.id)}` +
+      `?status=${encodeURIComponent(status)}`)
+    res.end()
+  }))
+
   router.get('/ui/firmware', wrap(getManager, (manager, req, res) => {
     res.setHeader('content-type', 'text/html; charset=utf-8')
     res.end(renderUi(manager, 'firmware', req))
@@ -1189,6 +1207,12 @@ function renderDevicePage (manager, id, live = {}) {
     .map((p) => `<option value="${escapeHtml(p.id)}"${p.id === assigned ? ' selected' : ''}>` +
       `${escapeHtml(p.name || p.id)}</option>`)
     .join('')
+  const views = manager.deviceViews(id)
+  const currentScreen = views && views.current
+  const screenOptions = (views && Array.isArray(views.views) ? views.views : [])
+    .map((v) => `<option value="${escapeHtml(v.id)}"${v.id === currentScreen ? ' selected' : ''}>` +
+      `${escapeHtml(v.title || v.id)}</option>`)
+    .join('')
   return `
     <section class="panel">
       <h2>${escapeHtml(device.name || device.id)}</h2>
@@ -1207,6 +1231,17 @@ function renderDevicePage (manager, id, live = {}) {
         </div>
         <p class="muted">Assigns the selected dashboard/view and queues a
           <code>config.reload</code> so the device picks it up on its next poll.</p>
+      </form>
+      <form class="config-form" method="post"
+            action="/plugins/espdisp-manager/ui/devices/${encodeURIComponent(id)}/switch-screen">
+        <label for="switch-screen-id">Show screen on this device</label>
+        <div class="actions">
+          <select id="switch-screen-id" name="screenId">${screenOptions || '<option value="">(no screens)</option>'}</select>
+          <button type="submit" class="primary">Show screen</button>
+        </div>
+        <p class="muted">Switches the device to a single screen now via a
+          <code>screen.set</code> command (live; does not change the assigned
+          profile).</p>
       </form>
       <div class="config-grid">
         ${renderLiveStatusWidget(live.status, live.statusError)}

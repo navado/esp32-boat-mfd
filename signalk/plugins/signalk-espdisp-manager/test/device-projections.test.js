@@ -90,4 +90,14 @@ assert.ok(fallbackIds.includes('autopilot'), 'fallback includes autopilot')
 // Unknown device id is a 404 (httpError), consistent with getDevice().
 assert.throws(() => manager.deviceViews('espdisp-does-not-exist'), /device not found/)
 
+// --- screen.set command (backs POST /ui/devices/:id/switch-screen) ---------
+// The new per-screen switcher queues a screen.set command the firmware maps to
+// show_by_id on its next poll. Verify the command is well-formed + queued.
+const screenCmd = manager.createCommand(helmId, { type: 'screen.set', payload: { screen: 'depth' } })
+assert.strictEqual(screenCmd.type, 'screen.set', 'command type is screen.set')
+assert.strictEqual(screenCmd.payload.screen, 'depth', 'payload carries target screen id')
+const queuedScreenSet = manager.store.commands.commands.some(
+  (c) => c.id === screenCmd.id && c.type === 'screen.set' && c.payload.screen === 'depth')
+assert.ok(queuedScreenSet, 'screen.set command is queued for the device to poll')
+
 console.log('device-projections test passed')
