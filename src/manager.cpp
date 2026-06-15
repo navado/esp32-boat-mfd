@@ -611,6 +611,25 @@ void build_status_body(JsonDocument &doc) {
     JsonObject ui_o = doc["ui"].to<JsonObject>();
     ui_o["uptime_ms"] = millis();
     ui_o["screen"] = ui::current_id();
+    // Full switchable-view list so the manager can offer the device's REAL
+    // screens instead of a guessed/generated set (the firmware's loaded layout
+    // can diverge from the manager-generated config). Non-hidden screens only:
+    // hidden utility screens (settings, touch-cal, wifi) are not user switch
+    // targets. The doc is ArduinoJson v7 (elastic), so this small array grows
+    // on the heap and is freed with the doc after serialization.
+    {
+        JsonArray screens_a = ui_o["screens"].to<JsonArray>();
+        size_t n = ui::screen_count();
+        for (size_t i = 0; i < n; ++i) {
+            const char *sid = nullptr, *stitle = nullptr;
+            bool shidden = false;
+            if (!ui::screen_info((int)i, &sid, &stitle, &shidden)) continue;
+            if (shidden || !sid) continue;
+            JsonObject so = screens_a.add<JsonObject>();
+            so["id"] = sid;
+            so["title"] = stitle ? stitle : sid;
+        }
+    }
     ui_o["theme"] = theme_name;
     ui_o["brightness"] = ui::brightness();
     ui_o["layoutVariant"] = s_render_plan_valid ? s_render_plan->layout_variant : "";

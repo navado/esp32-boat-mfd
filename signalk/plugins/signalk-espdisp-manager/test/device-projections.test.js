@@ -100,4 +100,27 @@ const queuedScreenSet = manager.store.commands.commands.some(
   (c) => c.id === screenCmd.id && c.type === 'screen.set' && c.payload.screen === 'depth')
 assert.ok(queuedScreenSet, 'screen.set command is queued for the device to poll')
 
+// --- deviceViews prefers the device-reported screen list -------------------
+// When the firmware reports ui.screens in its heartbeat, deviceViews uses that
+// real list (authoritative) instead of the generated config — so the switcher
+// offers screen ids the device actually has.
+manager.updateStatus(helmId, {
+  time: new Date().toISOString(),
+  network: { mode: 'sta', ip: '192.168.1.10' },
+  ui: {
+    screen: 'wind_classic',
+    screens: [
+      { id: 'wind_classic', title: 'Wind (classic)' },
+      { id: 'dashboard', title: 'Dashboard' },
+      { id: 'depth', title: 'Depth' }
+    ]
+  }
+}, auth)
+const reportedViews = manager.deviceViews(helmId)
+assert.deepStrictEqual(reportedViews.views.map((v) => v.id), ['wind_classic', 'dashboard', 'depth'],
+  'deviceViews uses the device-reported screen list verbatim')
+assert.strictEqual(reportedViews.views.find((v) => v.id === 'wind_classic').title, 'Wind (classic)',
+  'reported titles are preserved')
+assert.strictEqual(reportedViews.current, 'wind_classic', 'current reflects the reported screen')
+
 console.log('device-projections test passed')

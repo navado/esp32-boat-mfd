@@ -399,17 +399,31 @@ class EspDispManager {
   deviceViews (id) {
     const device = this.getDevice(id)
     let views = []
-    try {
-      const config = this.generateConfig(id)
-      const screens = (config.layout && Array.isArray(config.layout.screens))
-        ? config.layout.screens
-        : []
-      views = screens
+    // 1. Prefer the device's self-reported screen list (heartbeat ui.screens).
+    // The firmware's actually-loaded layout can diverge from the manager's
+    // generated config, so the device's own list is authoritative when present
+    // — this is what makes switch-to-screen land on a real screen id.
+    const reported = device.status && device.status.ui && device.status.ui.screens
+    if (Array.isArray(reported) && reported.length > 0) {
+      views = reported
         .filter((screen) => screen && screen.id)
         .map((screen) => ({ id: String(screen.id), title: String(screen.title || screen.id) }))
-    } catch (err) {
-      views = []
     }
+    // 2. Fall back to the manager-generated config's screens.
+    if (views.length === 0) {
+      try {
+        const config = this.generateConfig(id)
+        const screens = (config.layout && Array.isArray(config.layout.screens))
+          ? config.layout.screens
+          : []
+        views = screens
+          .filter((screen) => screen && screen.id)
+          .map((screen) => ({ id: String(screen.id), title: String(screen.title || screen.id) }))
+      } catch (err) {
+        views = []
+      }
+    }
+    // 3. Last resort: the standard known view ids (so the menu is never empty).
     if (views.length === 0) {
       views = KNOWN_VIEW_IDS.map((id) => ({ id, title: KNOWN_VIEW_TITLES[id] || id }))
     }
