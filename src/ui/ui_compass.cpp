@@ -63,9 +63,10 @@ static void radial_tick(lv_obj_t *group, int gcx, int gcy, int deg, int len, int
 
 // ---- compass ----------------------------------------------------------------
 
-// Mid-band radius offset: where the upright degree labels sit (centre of the
-// white band). Kept in one place so build + layout agree.
-static constexpr int LABEL_INSET = 26;
+// Where the upright degree labels sit, as an inward offset from the rim radius.
+// Pushed well inside the rim so the (bigger) labels clear the tick marks. Kept
+// in one place so build + layout agree.
+static constexpr int LABEL_INSET = 44;
 
 // Cardinal labels are red; the numeric degree labels are dark ink so they read
 // against the white band.
@@ -84,8 +85,9 @@ Compass build_compass(lv_obj_t *parent, int ox, int oy, int w) {
 
     // Clip container: only the top semicircle (+ a sliver for the W/E labels at
     // the diameter) is shown; the rotating ring's lower half is clipped away.
+    cp.h = r + 24;  // top semicircle + clearance for the bigger diameter labels
     lv_obj_t *root = lv_obj_create(parent);
-    lv_obj_set_size(root, w, r + 18);
+    lv_obj_set_size(root, w, cp.h);
     lv_obj_set_pos(root, ox, oy);
     lv_obj_set_style_bg_color(root, lv_color_hex(theme.bg), 0);
     lv_obj_set_style_bg_opa(root, LV_OPA_COVER, 0);
@@ -93,9 +95,9 @@ Compass build_compass(lv_obj_t *parent, int ox, int oy, int w) {
     lv_obj_add_flag(root, LV_OBJ_FLAG_EVENT_BUBBLE);
     cp.root = root;
 
-    // Wide white band with a green outer rail (reference proportions).
-    band_arc(root, cx, cy, r, 8, theme.good, 180, 360, LV_OPA_COVER);
-    band_arc(root, cx, cy, r - 8, 34, theme.arc_band, 180, 360, LV_OPA_COVER);
+    // Extra-wide white band with a green outer rail (reference proportions).
+    band_arc(root, cx, cy, r, 10, theme.good, 180, 360, LV_OPA_COVER);
+    band_arc(root, cx, cy, r - 10, 52, theme.arc_band, 180, 360, LV_OPA_COVER);
 
     // Rotating scale: ONLY the ticks rotate (the degree labels stay upright and
     // are repositioned by compass_layout_labels so they never tilt or collide).
@@ -109,10 +111,10 @@ Compass build_compass(lv_obj_t *parent, int ox, int oy, int w) {
     lv_obj_set_style_transform_pivot_y(scale, r, 0);
     cp.scale = scale;
 
-    int rim = r - 8;
+    int rim = r - 10;
     for (int deg = 0; deg < 360; deg += 10) {
         bool major = (deg % 30) == 0;
-        radial_tick(scale, r, r, deg, major ? 16 : 9, major ? 3 : 2, rim,
+        radial_tick(scale, r, r, deg, major ? 12 : 7, major ? 3 : 2, rim,
                     major ? 0x16222f : 0x5a6b78);
     }
 
@@ -137,9 +139,9 @@ Compass build_compass(lv_obj_t *parent, int ox, int oy, int w) {
         lv_obj_t *l = lv_label_create(root);
         lv_label_set_text(l, txt);
         lv_obj_set_style_text_font(
-            l, is_cardinal(i) ? &lv_font_montserrat_20 : &lv_font_montserrat_14, 0);
+            l, is_cardinal(i) ? &lv_font_montserrat_28 : &lv_font_montserrat_20, 0);
         lv_obj_set_style_text_color(l, lv_color_hex(is_cardinal(i) ? theme.alarm : 0x16222f), 0);
-        lv_obj_set_width(l, 44);
+        lv_obj_set_width(l, 52);
         lv_obj_set_style_text_align(l, LV_TEXT_ALIGN_CENTER, 0);
         lv_obj_add_flag(l, LV_OBJ_FLAG_HIDDEN);
         cp.nums[i] = l;
@@ -190,8 +192,8 @@ void compass_layout_labels(const Compass &cp, double hdg_deg) {
         double a = rel * M_PI / 180.0;
         int x = cp.cx + (int)(R * sin(a));
         int y = cp.cy - (int)(R * cos(a));
-        int hh = is_cardinal(i) ? 13 : 10;
-        lv_obj_set_pos(cp.nums[i], x - 22, y - hh);
+        int hh = is_cardinal(i) ? 18 : 13;
+        lv_obj_set_pos(cp.nums[i], x - 26, y - hh);
         lv_obj_clear_flag(cp.nums[i], LV_OBJ_FLAG_HIDDEN);
     }
 }

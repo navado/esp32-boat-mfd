@@ -1816,28 +1816,15 @@ static bool handleMainCommand(const String &line) {
 }
 
 // ----- breadcrumb (current screen indicator) -----------------------------
-// Small chip top-center: "Wind 2/9" plus a row of pips below.
-static lv_obj_t *bc_label = nullptr;
+// A row of position pips top-center (current screen brighter). The screen-name
+// title chip was removed per product direction — the pips alone indicate where
+// you are without a label on every screen.
 static lv_obj_t *bc_pips = nullptr;
 
 void breadcrumb_build(lv_obj_t *scr) {
-    bc_label = lv_label_create(scr);
-    lv_label_set_text(bc_label, "");
-    lv_obj_set_style_text_font(bc_label, &lv_font_montserrat_14, 0);
-    lv_obj_set_style_text_color(bc_label, lv_color_hex(ui::theme.fg), 0);
-    lv_obj_set_style_bg_color(bc_label, lv_color_hex(0x000000), 0);
-    lv_obj_set_style_bg_opa(bc_label, LV_OPA_50, 0);
-    lv_obj_set_style_pad_hor(bc_label, 8, 0);
-    lv_obj_set_style_pad_ver(bc_label, 2, 0);
-    lv_obj_set_style_radius(bc_label, 8, 0);
-    lv_obj_align(bc_label, LV_ALIGN_TOP_MID, 0, 2);
-    // Don't let the chip eat touches that should land on the screen
-    // widgets underneath (settings "close", screen-tap handlers, etc.).
-    lv_obj_clear_flag(bc_label, LV_OBJ_FLAG_CLICKABLE);
-
     bc_pips = lv_obj_create(scr);
     lv_obj_set_size(bc_pips, 200, 8);
-    lv_obj_align(bc_pips, LV_ALIGN_TOP_MID, 0, 24);
+    lv_obj_align(bc_pips, LV_ALIGN_TOP_MID, 0, 6);
     lv_obj_set_style_bg_opa(bc_pips, LV_OPA_TRANSP, 0);
     lv_obj_set_style_border_width(bc_pips, 0, 0);
     lv_obj_set_style_pad_all(bc_pips, 0, 0);
@@ -1850,7 +1837,7 @@ void breadcrumb_build(lv_obj_t *scr) {
 }
 
 static void breadcrumb_refresh() {
-    if (!bc_label) return;
+    if (!bc_pips) return;
     // Build the dot strip lazily: visible screens get a pip, current one is brighter.
     static int last_index = -2;
     static size_t last_count = 0;
@@ -1859,10 +1846,6 @@ static void breadcrumb_refresh() {
     if (idx == last_index && cnt == last_count) return;  // unchanged
     last_index = idx;
     last_count = cnt;
-
-    char buf[32];
-    snprintf(buf, sizeof(buf), "%s  %d/%u", ui::current_title(), idx + 1, (unsigned)cnt);
-    lv_label_set_text(bc_label, buf);
 
     lv_obj_clean(bc_pips);
     for (size_t i = 0; i < cnt; ++i) {

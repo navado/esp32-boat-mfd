@@ -236,9 +236,9 @@ lv_obj_t *build(lv_obj_t *parent) {
     lv_obj_set_style_text_color(lbl_mode, lv_color_hex(theme.fg_dim), 0);
     lv_obj_align(lbl_mode, LV_ALIGN_TOP_MID, 0, 14);
 
-    // --- compass ---
+    // --- compass --- (wider on the roomy wide panels; square is width-bound)
     int top_bar_h = 56;
-    int cw = wide ? (LCD_H - 56) : (LCD_W - 40);
+    int cw = wide ? (LCD_H - 36) : (LCD_W - 32);
     int cox = (LCD_W - cw) / 2;
     int coy = top_bar_h;
     s_cp = ui::build_compass(s_root, cox, coy, cw);
@@ -276,19 +276,20 @@ lv_obj_t *build(lv_obj_t *parent) {
     dial_tap_zone(s_root, cox + 6, dz_y, s_cp.r - 12, dz_h, -1);
     dial_tap_zone(s_root, scx + 6, dz_y, s_cp.r - 12, dz_h, +1);
 
-    // --- XTE strip below the compass ---
-    int xte_y = coy + (s_cp.r + 18) + 6;
+    // --- XTE strip below the compass (placed by the compass's real height) ---
+    int xte_h = 44;
+    int xte_y = coy + s_cp.h + 4;
     int xte_x = wide ? cox : 16;
     int xte_w = wide ? cw : (LCD_W - 32);
-    s_xte = ui::build_xte_strip(s_root, xte_x, xte_y, xte_w, 50);
+    s_xte = ui::build_xte_strip(s_root, xte_x, xte_y, xte_w, xte_h);
 
     // --- numeric tiles ---
     const lv_font_t *tv = &lv_font_montserrat_38;
     if (!wide) {
         int n = 4, gap = 8;
         int tw = (LCD_W - gap * (n + 1)) / n;
-        int th = 132;
-        int ty = LCD_H - th - 8;
+        int ty = xte_y + xte_h + 6;
+        int th = LCD_H - ty - 8;
         tile_depth = ui::numeric_tile(s_root, gap, ty, tw, th, "DEPTH", "m", tv, theme.fg);
         tile_speed =
             ui::numeric_tile(s_root, gap * 2 + tw, ty, tw, th, "SPEED", "kn", tv, theme.fg);

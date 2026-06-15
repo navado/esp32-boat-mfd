@@ -23,6 +23,7 @@ struct Compass {
     lv_obj_t *bug;       // amber target bug (rotated by target - heading)
     lv_obj_t *nums[12];  // upright degree labels, repositioned per heading
     int cx, cy, r;
+    int h;  // total root height (top semicircle + label clearance)
 };
 
 // Build a compass occupying a `w`-wide region at (ox, oy) in `parent`.
