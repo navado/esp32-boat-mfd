@@ -27,11 +27,13 @@ namespace ui::wind_classic {
 
 static lv_obj_t *s_root = nullptr;
 
-// North-up: the cardinal bezel stays FIXED (N at the top, labels upright); the
-// boat-relative graphics (hull, close-hauled sectors, wind-angle scale) live in
-// boat_grp and rotate with heading instead.
+// Heading-up: the bezel (dial) rotates with heading; the cardinal labels live in
+// a separate UPRIGHT overlay (card_lbl), repositioned per heading so they stay
+// horizontal and readable instead of tilting/upside-down with the dial.
 static lv_obj_t *bezel = nullptr;
-static lv_obj_t *boat_grp = nullptr;
+static lv_obj_t *card_lbl[8];
+static const int kCardBearing[8] = {0, 45, 90, 135, 180, 225, 270, 315};
+static const char *kCardText[8] = {"N", "NE", "E", "SE", "S", "SW", "W", "NW"};
 
 // Static markers (relative to the boat)
 static lv_obj_t *awa_marker = nullptr;
@@ -157,22 +159,9 @@ static void build_bezel(lv_obj_t *parent) {
     make_ring_at(bezel, bcx, bcy, R_BEZEL * 2 + 10, 2, 0x111a26);  // outer shadow
     make_ring_at(bezel, bcx, bcy, R_BEZEL * 2 - 14, 1, 0x0c1828);  // inner highlight
 
-    // Cardinal labels (N/E/S/W large; NE/SE/SW/NW small) - polar from bezel center
-    make_label_at_polar_at(bezel, bcx, bcy, "N", 0, R_BEZEL - 22, &lv_font_montserrat_20, theme.fg);
-    make_label_at_polar_at(bezel, bcx, bcy, "E", 90, R_BEZEL - 22, &lv_font_montserrat_20,
-                           theme.fg);
-    make_label_at_polar_at(bezel, bcx, bcy, "S", 180, R_BEZEL - 22, &lv_font_montserrat_20,
-                           theme.fg);
-    make_label_at_polar_at(bezel, bcx, bcy, "W", 270, R_BEZEL - 22, &lv_font_montserrat_20,
-                           theme.fg);
-    make_label_at_polar_at(bezel, bcx, bcy, "NE", 45, R_BEZEL - 22, &lv_font_montserrat_14,
-                           theme.fg_dim);
-    make_label_at_polar_at(bezel, bcx, bcy, "SE", 135, R_BEZEL - 22, &lv_font_montserrat_14,
-                           theme.fg_dim);
-    make_label_at_polar_at(bezel, bcx, bcy, "SW", 225, R_BEZEL - 22, &lv_font_montserrat_14,
-                           theme.fg_dim);
-    make_label_at_polar_at(bezel, bcx, bcy, "NW", 315, R_BEZEL - 22, &lv_font_montserrat_14,
-                           theme.fg_dim);
+    // Cardinal labels are NOT children of the rotating bezel — they live in a
+    // separate upright overlay (build_cardinals / layout_cardinals) so the dial
+    // rotates (heading-up) while the labels stay horizontal and readable.
 
     // 22.5deg tick marks (between cardinals + intercardinals)
     for (int deg = 0; deg < 360; deg += 45) {
@@ -457,6 +446,36 @@ static void inner_readout(lv_obj_t *parent, const char *cap_txt, int dx, int dy,
     }
 }
 
+// Upright cardinal overlay: created here, repositioned per heading in refresh.
+static void build_cardinals(lv_obj_t *parent) {
+    for (int i = 0; i < 8; ++i) {
+        bool card = (i % 2) == 0;  // N / E / S / W
+        lv_obj_t *l = lv_label_create(parent);
+        lv_label_set_text(l, kCardText[i]);
+        lv_obj_set_style_text_font(l, card ? &lv_font_montserrat_20 : &lv_font_montserrat_14, 0);
+        lv_obj_set_style_text_color(l, lv_color_hex(card ? theme.fg : theme.fg_dim), 0);
+        lv_obj_set_width(l, 40);
+        lv_obj_set_style_text_align(l, LV_TEXT_ALIGN_CENTER, 0);
+        lv_obj_add_flag(l, LV_OBJ_FLAG_HIDDEN);
+        card_lbl[i] = l;
+    }
+}
+
+// Reposition the upright cardinals for the current heading (heading-up: the
+// cardinal matching the boat's track sits at the top). 0 = north-up fallback.
+static void layout_cardinals(double hdg_deg) {
+    int R = R_BEZEL - 22;
+    for (int i = 0; i < 8; ++i) {
+        if (!card_lbl[i]) continue;
+        double a = (kCardBearing[i] - hdg_deg) * M_PI / 180.0;
+        int x = CX + (int)(R * sin(a));
+        int y = CY - (int)(R * cos(a));
+        int hh = ((i % 2) == 0) ? 13 : 10;
+        lv_obj_set_pos(card_lbl[i], x - 20, y - hh);
+        lv_obj_clear_flag(card_lbl[i], LV_OBJ_FLAG_HIDDEN);
+    }
+}
+
 lv_obj_t *build(lv_obj_t *parent) {
     s_root = lv_obj_create(parent);
     lv_obj_set_size(s_root, LCD_W, LCD_H);
@@ -484,21 +503,9 @@ lv_obj_t *build(lv_obj_t *parent) {
     lv_obj_clear_flag(face, LV_OBJ_FLAG_SCROLLABLE);
     lv_obj_add_flag(face, LV_OBJ_FLAG_EVENT_BUBBLE);
 
-    // Boat-relative graphics go in a rotatable group (rotated to heading in
-    // refresh) so the fixed bezel can stay North-up.
-    boat_grp = lv_obj_create(s_root);
-    lv_obj_set_size(boat_grp, LCD_W, LCD_H);
-    lv_obj_set_pos(boat_grp, 0, 0);
-    lv_obj_set_style_bg_opa(boat_grp, LV_OPA_TRANSP, 0);
-    lv_obj_set_style_border_width(boat_grp, 0, 0);
-    lv_obj_set_style_pad_all(boat_grp, 0, 0);
-    lv_obj_clear_flag(boat_grp, LV_OBJ_FLAG_SCROLLABLE);
-    lv_obj_clear_flag(boat_grp, LV_OBJ_FLAG_CLICKABLE);
-    lv_obj_set_style_transform_pivot_x(boat_grp, CX, 0);
-    lv_obj_set_style_transform_pivot_y(boat_grp, CY, 0);
-    build_close_hauled(boat_grp);
-    build_wind_scale(boat_grp);
-    build_boat(boat_grp);
+    build_close_hauled(s_root);
+    build_wind_scale(s_root);
+    build_boat(s_root);
     build_tide(s_root);
 
     // Tide speed text at dial center (under markers, over boat)
@@ -516,6 +523,7 @@ lv_obj_t *build(lv_obj_t *parent) {
     awa_marker = make_wind_marker(s_root, "A", 0xf6a21a);
 
     build_bezel(s_root);
+    build_cardinals(s_root);  // upright cardinal overlay (laid out per heading)
     build_waypoint(s_root);
 
     // ---- readouts INSIDE the dial face (montserrat_48) ----------------
@@ -581,7 +589,7 @@ static char s_last_stw[16] = {(char)0xFF};
 static char s_last_tide[16] = {(char)0xFF};
 static int16_t s_last_awa_rot = INT16_MIN;
 static int16_t s_last_twa_rot = INT16_MIN;
-static int16_t s_last_boat_rot = INT16_MIN;
+static int16_t s_last_bezel_rot = INT16_MIN;
 static int16_t s_last_tide_rot = INT16_MIN;
 static int16_t s_last_wp_rot = INT16_MIN;
 static int8_t s_last_awa_hidden = -1;  // -1 = unset, 0 = shown, 1 = hidden
@@ -628,7 +636,7 @@ void refresh() {
         double mag = starboard ? deg : 360.0 - deg;
         snprintf(buf, sizeof(buf), "%.0f%c", mag, starboard ? 'S' : 'P');
         set_text_if_changed(lbl_awa_value, s_last_awa, sizeof(s_last_awa), buf);
-        set_rot_if_changed(awa_marker, &s_last_awa_rot, deg_to_lvgl(href + deg));
+        set_rot_if_changed(awa_marker, &s_last_awa_rot, deg_to_lvgl(deg));
         set_hidden_if_changed(awa_marker, &s_last_awa_hidden, false);
     } else {
         // No live data: hide the marker entirely. The earlier "sweep
@@ -646,16 +654,21 @@ void refresh() {
         double mag = starboard ? deg : 360.0 - deg;
         snprintf(buf, sizeof(buf), "%.0f%c", mag, starboard ? 'S' : 'P');
         set_text_if_changed(lbl_twa_value, s_last_twa, sizeof(s_last_twa), buf);
-        set_rot_if_changed(twa_marker, &s_last_twa_rot, deg_to_lvgl(href + deg));
+        set_rot_if_changed(twa_marker, &s_last_twa_rot, deg_to_lvgl(deg));
         set_hidden_if_changed(twa_marker, &s_last_twa_hidden, false);
     } else {
         set_text_if_changed(lbl_twa_value, s_last_twa, sizeof(s_last_twa), "--");
         set_hidden_if_changed(twa_marker, &s_last_twa_hidden, true);
     }
 
-    // --- heading: rotate the boat group (the bezel stays North-up) ---
+    // --- heading: rotate the dial (-heading) + lay out the upright cardinals ---
+    int16_t bez_rot = deg_to_lvgl(-href);  // href = 0 when no heading (north-up)
+    if (bez_rot != s_last_bezel_rot) {
+        s_last_bezel_rot = bez_rot;
+        lv_obj_set_style_transform_rotation(bezel, bez_rot, 0);
+        layout_cardinals(href);
+    }
     if (!isnan(hdg_deg)) {
-        set_rot_if_changed(boat_grp, &s_last_boat_rot, deg_to_lvgl(hdg_deg));
         snprintf(buf, sizeof(buf), "%03.0f\xC2\xB0", hdg_deg);
         set_text_if_changed(lbl_hdg_value, s_last_hdg, sizeof(s_last_hdg), buf);
     } else {
@@ -679,11 +692,13 @@ void refresh() {
     // --- tide / current vector ---
     // Have current data + heading? Flowing current (>0.05 m/s) shows the
     // centred arrow pointing to set; a calm/zero current shows the ring.
-    bool have_current = !isnan(d.currentSetTrue) && !isnan(d.currentDrift);
+    bool have_current = !isnan(d.currentSetTrue) && !isnan(d.currentDrift) && !isnan(hdg_deg);
     bool flowing = have_current && d.currentDrift > 0.05;
     if (flowing) {
-        double tide_abs = rad_to_deg_pos(d.currentSetTrue);  // absolute set (North-up)
-        set_rot_if_changed(tide_arrow, &s_last_tide_rot, deg_to_lvgl(tide_abs));
+        double tide_rel = rad_to_deg_pos(d.currentSetTrue) - hdg_deg;  // bow-relative
+        while (tide_rel < 0)
+            tide_rel += 360;
+        set_rot_if_changed(tide_arrow, &s_last_tide_rot, deg_to_lvgl(tide_rel));
         set_hidden_if_changed(tide_arrow, &s_last_tide_hidden, false);
         set_hidden_if_changed(tide_zero, &s_last_tide_zero_hidden, true);
         snprintf(buf, sizeof(buf), "%.1f", mps_to_kn(d.currentDrift));
@@ -697,9 +712,11 @@ void refresh() {
     }
 
     // --- waypoint pip ---
-    if (!isnan(d.btw)) {
-        double wp_abs = rad_to_deg_pos(d.btw);  // absolute bearing (North-up)
-        set_rot_if_changed(waypoint_marker, &s_last_wp_rot, deg_to_lvgl(wp_abs));
+    if (!isnan(d.btw) && !isnan(hdg_deg)) {
+        double wp_rel = rad_to_deg_pos(d.btw) - hdg_deg;  // bow-relative
+        while (wp_rel < 0)
+            wp_rel += 360;
+        set_rot_if_changed(waypoint_marker, &s_last_wp_rot, deg_to_lvgl(wp_rel));
         set_hidden_if_changed(waypoint_marker, &s_last_wp_hidden, false);
     } else {
         set_hidden_if_changed(waypoint_marker, &s_last_wp_hidden, true);
