@@ -27,6 +27,7 @@ namespace ui::wind_steer {
 
 static lv_obj_t *s_root = nullptr;
 static lv_obj_t *lbl_twa = nullptr;
+static lv_obj_t *lbl_src = nullptr;  // "polars: SignalK" vs "polars: estimated"
 static lv_obj_t *lbl_tack_val, *lbl_tack_hdg;
 static lv_obj_t *lbl_gybe_val, *lbl_gybe_hdg;
 static lv_obj_t *tile_awa, *tile_aws, *tile_tws, *tile_twd;
@@ -91,6 +92,13 @@ lv_obj_t *build(lv_obj_t *parent) {
     lv_obj_set_style_text_align(lbl_twa, LV_TEXT_ALIGN_CENTER, 0);
     lv_obj_align(lbl_twa, LV_ALIGN_TOP_MID, 0, 38);
 
+    // Polar-source indicator (top-right): SignalK polars vs empirical estimate.
+    lbl_src = lv_label_create(s_root);
+    lv_label_set_text(lbl_src, "");
+    lv_obj_set_style_text_font(lbl_src, &lv_font_montserrat_14, 0);
+    lv_obj_set_style_text_color(lbl_src, lv_color_hex(theme.fg_dim), 0);
+    lv_obj_align(lbl_src, LV_ALIGN_TOP_RIGHT, -10, 10);
+
     int hero_h = wide ? 150 : 132;
 
     // --- tack / gybe panels + wind tiles ---
@@ -146,6 +154,7 @@ static char s_last_awa[12] = {(char)0xFF};
 static char s_last_aws[12] = {(char)0xFF};
 static char s_last_tws[12] = {(char)0xFF};
 static char s_last_twd[12] = {(char)0xFF};
+static char s_last_src[20] = {(char)0xFF};
 
 static double norm360(double d) {
     while (d < 0)
@@ -160,55 +169,83 @@ void refresh() {
     sk::copyData(d);
     char buf[24];
 
-    // TWA off bow, signed -> P/S magnitude.
-    double twa_mag = NAN;
-    if (!isnan(d.twa)) {
-        double raw = rad_to_deg_pos(d.twa);  // 0..360, +stbd from bow
-        bool stbd = raw <= 180.0;
-        twa_mag = stbd ? raw : 360.0 - raw;
+    // Geometry: TWA off bow (+stbd), current tack side, TWD (wind FROM), and the
+    // optimal beat / gybe angles from SignalK polars when available.
+    double twa_raw = isnan(d.twa) ? NAN : rad_to_deg_pos(d.twa);  // 0..360
+    bool stbd = !isnan(twa_raw) && twa_raw <= 180.0;              // wind on stbd => stbd tack
+    double twa_mag = isnan(twa_raw) ? NAN : (stbd ? twa_raw : 360.0 - twa_raw);
+    bool beating = !isnan(twa_mag) && twa_mag <= 90.0;
+    double hdg = isnan(d.headingTrue) ? NAN : rad_to_deg_pos(d.headingTrue);
+    double twd = (!isnan(hdg) && !isnan(twa_raw)) ? norm360(hdg + twa_raw) : NAN;
+    double beat =
+        isnan(d.beatAngle) ? NAN : rad_to_deg_pos(d.beatAngle);  // polar optimal upwind TWA
+    double gybe =
+        isnan(d.gybeAngle) ? NAN : rad_to_deg_pos(d.gybeAngle);  // polar optimal downwind TWA
+    bool have_polar = !isnan(beat) || !isnan(gybe);
+
+    // --- TWA hero ---
+    if (!isnan(twa_mag)) {
         snprintf(buf, sizeof(buf), "%.0f\xC2\xB0%c", twa_mag, stbd ? 'S' : 'P');
         set_text_if_changed(lbl_twa, s_last_twa, sizeof(s_last_twa), buf);
-
-        // Course-change angle to switch boards. Tacking (through the wind)
-        // applies when beating; gybing (through downwind) when running. Only the
-        // applicable maneuver is shown; the other reads "--".
-        bool beating = twa_mag <= 90.0;
-        if (beating) {
-            snprintf(buf, sizeof(buf), "%.0f\xC2\xB0", 2.0 * twa_mag);
-            set_text_if_changed(lbl_tack_val, s_last_tackv, sizeof(s_last_tackv), buf);
-            set_text_if_changed(lbl_gybe_val, s_last_gybev, sizeof(s_last_gybev), "--");
-        } else {
-            set_text_if_changed(lbl_tack_val, s_last_tackv, sizeof(s_last_tackv), "--");
-            snprintf(buf, sizeof(buf), "%.0f\xC2\xB0", 2.0 * (180.0 - twa_mag));
-            set_text_if_changed(lbl_gybe_val, s_last_gybev, sizeof(s_last_gybev), buf);
-        }
     } else {
         set_text_if_changed(lbl_twa, s_last_twa, sizeof(s_last_twa), "--\xC2\xB0");
-        set_text_if_changed(lbl_tack_val, s_last_tackv, sizeof(s_last_tackv), "--\xC2\xB0");
-        set_text_if_changed(lbl_gybe_val, s_last_gybev, sizeof(s_last_gybev), "--\xC2\xB0");
     }
 
-    // TWD (true wind FROM) and opposite-tack/gybe heading need the heading.
-    double hdg = isnan(d.headingTrue) ? NAN : rad_to_deg_pos(d.headingTrue);
-    if (!isnan(hdg) && !isnan(d.twa)) {
-        double twd = norm360(hdg + rad_to_deg_pos(d.twa));
-        double mirror = norm360(2.0 * twd - hdg);  // new heading on the other board
-        bool beating = !isnan(twa_mag) && twa_mag <= 90.0;
+    // --- TACK: tacking angle + the optimal close-hauled heading on the other
+    // tack. Polar (2*beatAngle, laylines TWD +/- beat) when available, else the
+    // empirical current-TWA mirror (only meaningful while beating). ---
+    char tv[8], th[16];
+    if (!isnan(beat)) {
+        snprintf(tv, sizeof(tv), "%.0f\xC2\xB0", 2.0 * beat);
+        if (!isnan(twd))
+            snprintf(th, sizeof(th), LV_SYMBOL_RIGHT " %03.0f\xC2\xB0",
+                     norm360(twd + (stbd ? beat : -beat)));
+        else
+            snprintf(th, sizeof(th), LV_SYMBOL_RIGHT " ---\xC2\xB0");
+    } else if (beating) {
+        snprintf(tv, sizeof(tv), "%.0f\xC2\xB0", 2.0 * twa_mag);
+        if (!isnan(twd) && !isnan(hdg))
+            snprintf(th, sizeof(th), LV_SYMBOL_RIGHT " %03.0f\xC2\xB0", norm360(2.0 * twd - hdg));
+        else
+            snprintf(th, sizeof(th), LV_SYMBOL_RIGHT " ---\xC2\xB0");
+    } else {
+        snprintf(tv, sizeof(tv), "--\xC2\xB0");
+        snprintf(th, sizeof(th), LV_SYMBOL_RIGHT " ---\xC2\xB0");
+    }
+    set_text_if_changed(lbl_tack_val, s_last_tackv, sizeof(s_last_tackv), tv);
+    set_text_if_changed(lbl_tack_hdg, s_last_tackh, sizeof(s_last_tackh), th);
+
+    // --- GYBE: gybing angle + the optimal running heading on the other gybe. ---
+    char gv[8], gh[16];
+    if (!isnan(gybe)) {
+        snprintf(gv, sizeof(gv), "%.0f\xC2\xB0", 2.0 * (180.0 - gybe));
+        if (!isnan(twd))
+            snprintf(gh, sizeof(gh), LV_SYMBOL_RIGHT " %03.0f\xC2\xB0",
+                     norm360(twd + (stbd ? gybe : -gybe)));
+        else
+            snprintf(gh, sizeof(gh), LV_SYMBOL_RIGHT " ---\xC2\xB0");
+    } else if (!beating && !isnan(twa_mag)) {
+        snprintf(gv, sizeof(gv), "%.0f\xC2\xB0", 2.0 * (180.0 - twa_mag));
+        if (!isnan(twd) && !isnan(hdg))
+            snprintf(gh, sizeof(gh), LV_SYMBOL_RIGHT " %03.0f\xC2\xB0", norm360(2.0 * twd - hdg));
+        else
+            snprintf(gh, sizeof(gh), LV_SYMBOL_RIGHT " ---\xC2\xB0");
+    } else {
+        snprintf(gv, sizeof(gv), "--\xC2\xB0");
+        snprintf(gh, sizeof(gh), LV_SYMBOL_RIGHT " ---\xC2\xB0");
+    }
+    set_text_if_changed(lbl_gybe_val, s_last_gybev, sizeof(s_last_gybev), gv);
+    set_text_if_changed(lbl_gybe_hdg, s_last_gybeh, sizeof(s_last_gybeh), gh);
+
+    // --- TWD tile + polar-source indicator ---
+    if (!isnan(twd)) {
         snprintf(buf, sizeof(buf), "%03.0f\xC2\xB0", twd);
         set_text_if_changed(tile_twd, s_last_twd, sizeof(s_last_twd), buf);
-        snprintf(buf, sizeof(buf), LV_SYMBOL_RIGHT " %03.0f\xC2\xB0", mirror);
-        // Show the new heading on whichever maneuver applies; "--" on the other.
-        set_text_if_changed(lbl_tack_hdg, s_last_tackh, sizeof(s_last_tackh),
-                            beating ? buf : LV_SYMBOL_RIGHT " ---\xC2\xB0");
-        set_text_if_changed(lbl_gybe_hdg, s_last_gybeh, sizeof(s_last_gybeh),
-                            beating ? LV_SYMBOL_RIGHT " ---\xC2\xB0" : buf);
     } else {
         set_text_if_changed(tile_twd, s_last_twd, sizeof(s_last_twd), "--\xC2\xB0");
-        set_text_if_changed(lbl_tack_hdg, s_last_tackh, sizeof(s_last_tackh),
-                            LV_SYMBOL_RIGHT " ---\xC2\xB0");
-        set_text_if_changed(lbl_gybe_hdg, s_last_gybeh, sizeof(s_last_gybeh),
-                            LV_SYMBOL_RIGHT " ---\xC2\xB0");
     }
+    set_text_if_changed(lbl_src, s_last_src, sizeof(s_last_src),
+                        have_polar ? "polars: SignalK" : "polars: estimated");
 
     // AWA (off bow, P/S).
     if (!isnan(d.awa)) {

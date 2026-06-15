@@ -76,6 +76,10 @@ void applyValue(const char *path, JsonVariant val, Data &out) {
     } else if (strcmp(path, "navigation.courseRhumbline.velocityMadeGood") == 0 ||
                strcmp(path, "performance.velocityMadeGood") == 0) {
         out.vmg = asDouble(val, out.vmg);
+    } else if (strcmp(path, "performance.beatAngle") == 0) {
+        out.beatAngle = asDouble(val, out.beatAngle);
+    } else if (strcmp(path, "performance.gybeAngle") == 0) {
+        out.gybeAngle = asDouble(val, out.gybeAngle);
     } else if (strcmp(path, "steering.autopilot.target.headingTrue") == 0) {
         out.apTargetHdg = asDouble(val, out.apTargetHdg);
     } else if (strcmp(path, "environment.current.setTrue") == 0 ||

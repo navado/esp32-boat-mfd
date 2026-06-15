@@ -30,6 +30,12 @@ struct Data {
     double depthKeel = NAN;  // m below keel
     double waterTemp = NAN;  // K
 
+    // performance / polar targets (published by a SignalK polar plugin such as
+    // signalk-polar-performance). NaN when no polar source is present, in which
+    // case consumers fall back to empirical estimates.
+    double beatAngle = NAN;  // optimal upwind TWA off bow, rad (performance.beatAngle)
+    double gybeAngle = NAN;  // optimal downwind TWA off bow, rad (performance.gybeAngle)
+
     // electrical & tanks
     double battVoltage = NAN;  // V
     double battSoc = NAN;      // 0..1

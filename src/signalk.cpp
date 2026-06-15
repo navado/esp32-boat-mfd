@@ -88,6 +88,11 @@ static void subscribe() {
         "navigation.courseRhumbline.nextPoint.bearingTrue",
         "navigation.courseRhumbline.nextPoint.distance",
         "navigation.courseRhumbline.velocityMadeGood",
+        // Polar targets (optional; from a SignalK polar plugin). The wind-steer
+        // screen uses these for tack/gybe angles, falling back to empirical
+        // estimates when absent.
+        "performance.beatAngle",
+        "performance.gybeAngle",
         "steering.autopilot.target.headingTrue",
         "steering.autopilot.state",
         "environment.current.setTrue",

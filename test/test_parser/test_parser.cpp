@@ -41,6 +41,17 @@ static void test_parses_apparent_wind() {
     TEST_ASSERT_FLOAT_WITHIN(0.001, 8.2, d.aws);
 }
 
+static void test_parses_polar_angles() {
+    Data d;
+    auto j = singleValueDelta("performance.beatAngle", "0.7330");  // ~42 deg
+    sk::applyDelta(j.data(), j.size(), d);
+    TEST_ASSERT_FLOAT_WITHIN(0.001, 0.7330, d.beatAngle);
+
+    auto j2 = singleValueDelta("performance.gybeAngle", "2.7053");  // ~155 deg
+    sk::applyDelta(j2.data(), j2.size(), d);
+    TEST_ASSERT_FLOAT_WITHIN(0.001, 2.7053, d.gybeAngle);
+}
+
 static void test_parses_position_object() {
     Data d;
     auto j = singleValueDelta("navigation.position", "{\"latitude\":41.3851,\"longitude\":2.1734}");
@@ -327,6 +338,7 @@ int main(int, char **) {
     UNITY_BEGIN();
     RUN_TEST(test_parses_speed_over_ground);
     RUN_TEST(test_parses_apparent_wind);
+    RUN_TEST(test_parses_polar_angles);
     RUN_TEST(test_parses_position_object);
     RUN_TEST(test_parses_depth_variants);
     RUN_TEST(test_parses_battery_with_named_bank);

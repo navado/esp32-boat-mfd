@@ -30,6 +30,8 @@ void copyData(Data &out) {
     out.aws = 6.38;           // ~12.4 kn
     out.twa = 0.80;
     out.tws = 7.46;
+    out.beatAngle = 0.7330;  // ~42 deg optimal upwind TWA (polar)
+    out.gybeAngle = 2.7053;  // ~155 deg optimal downwind TWA (polar)
     out.depth = 8.4;
     out.depthKeel = 7.1;
     out.waterTemp = 292.0;  // ~18.9 C
