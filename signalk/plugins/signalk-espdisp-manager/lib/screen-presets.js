@@ -174,6 +174,19 @@ const WIDGET_TYPES = {
       secondary: { required: false, label: 'AP target heading' }
     }
   },
+  autopilotHud: {
+    label: 'Autopilot HUD (full-screen)',
+    description: 'Semicircular heading compass + HDG + COG/SOG + XTE strip + '
+      + "square data tiles. Matches the device's screen_autopilot.cpp render.",
+    fullscreen: true,
+    metrics: {
+      heading: { required: true, label: 'Heading (rad)' },
+      apTarget: { required: false, label: 'AP target heading (rad)' },
+      cog: { required: false, label: 'Course over ground (rad)' },
+      sog: { required: false, label: 'Speed over ground (m/s)' },
+      xte: { required: false, label: 'Cross-track error (m)' }
+    }
+  },
   windDial: {
     label: 'Wind dial (full-screen)',
     description: 'Rotating bezel with cardinals, close-hauled arcs, '
@@ -381,22 +394,24 @@ function tripScreen (displayClass) {
 }
 
 function autopilotScreen (displayClass) {
-  const tiles = [
-    { widget: 'autopilot', title: 'AP',     primary: SK.apState, secondary: SK.apTarget },
-    { widget: 'compass',   title: 'COURSE', primary: SK.heading, secondary: SK.apTarget },
-    { widget: 'numeric',   title: 'XTE',    primary: SK.xte },
-    { widget: 'button',    title: 'STBY',   payload: { command: 'autopilot.standby' } }
-  ]
-  const n = tileCount(displayClass)
-  if (n >= 6) {
-    tiles.push({ widget: 'numeric', title: 'BTW', primary: SK.btw })
-    tiles.push({ widget: 'numeric', title: 'CTS', primary: SK.cts })
+  // The device autopilot screen is a dedicated full-screen HUD (semicircular
+  // compass + HDG + COG/SOG + XTE strip + square tiles), not a tile grid, so
+  // the preset is a single fullscreen tile that previews that HUD.
+  void displayClass
+  return {
+    id: 'autopilot',
+    title: 'Autopilot',
+    type: 'fullscreen',
+    tiles: [{
+      widget: 'autopilotHud',
+      title: '',
+      heading: SK.heading,
+      apTarget: SK.apTarget,
+      cog: SK.cog,
+      sog: SK.sog,
+      xte: SK.xte
+    }]
   }
-  if (n >= 8) {
-    tiles.push({ widget: 'button',  title: 'AUTO', payload: { command: 'autopilot.auto' } })
-    tiles.push({ widget: 'numeric', title: 'VMG',  primary: SK.vmg })
-  }
-  return { id: 'autopilot', title: 'Autopilot', type: 'grid', tiles }
 }
 
 function systemScreen (displayClass) {

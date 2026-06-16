@@ -497,6 +497,74 @@ function widgetPreview (widget, tile) {
       wrap.append(el('div', { className: 'rose' }, s.value));
       return wrap;
     }
+    case 'autopilotHud': {
+      // Full-screen autopilot HUD preview matching the device's
+      // src/ui/screen_autopilot.cpp: top bar (STBY / AUTO / HOME), a
+      // semicircular heading compass (white band + green rail, upright scale,
+      // red lubber, amber target bug), big HDG + COG/SOG sub-line, an XTE
+      // strip, and a row of square data tiles. Heading-up: a degree D shows at
+      // screen angle (D - heading).
+      const svgNS = 'http://www.w3.org/2000/svg';
+      const svg = document.createElementNS(svgNS, 'svg');
+      svg.setAttribute('viewBox', '0 0 480 480');
+      svg.setAttribute('preserveAspectRatio', 'xMidYMid meet');
+      const CX = 240, CYc = 272, R = 214, RB = 200;  // compass centre / rail / band radii
+      const hdg = 56;
+      function polar (deg, r) { const a = (deg - 90) * Math.PI / 180; return [CX + r * Math.cos(a), CYc + r * Math.sin(a)]; }
+      const ticks = [];
+      for (let d = -90; d <= 90; d += 15) {
+        const major = (((Math.round(d + hdg) % 30) + 30) % 30) === 0;
+        const [x1, y1] = polar(d, RB + 12);
+        const [x2, y2] = polar(d, RB + 12 - (major ? 12 : 7));
+        ticks.push(`<line x1="${x1}" y1="${y1}" x2="${x2}" y2="${y2}" stroke="#16222f" stroke-width="${major ? 3 : 2}"/>`);
+      }
+      const nums = [];
+      for (const deg of [0, 30, 60, 90, 120, 150, 330]) {
+        const rel = ((deg - hdg + 540) % 360) - 180;
+        if (rel < -96 || rel > 96) continue;
+        const [x, y] = polar(rel, RB - 14);
+        const card = (deg % 90) === 0;
+        const txt = deg === 0 ? 'N' : deg === 90 ? 'E' : deg === 180 ? 'S' : deg === 270 ? 'W' : String(deg);
+        const f = card ? 20 : 16;
+        nums.push(`<text x="${x}" y="${y + f * 0.34}" font-family="Montserrat" font-weight="700" font-size="${f}" fill="${card ? '#ff5252' : '#16222f'}" text-anchor="middle">${txt}</text>`);
+      }
+      const railPath = `M ${polar(-90, R + 8).join(' ')} A ${R + 8} ${R + 8} 0 0 1 ${polar(90, R + 8).join(' ')}`;
+      const bandPath = `M ${polar(-90, RB).join(' ')} A ${RB} ${RB} 0 0 1 ${polar(90, RB).join(' ')}`;
+      const [bx, by] = polar(8, R + 6);
+      function tile (x, cap, unit, val, col) {
+        const y = 362, s = 110;
+        return `<rect x="${x}" y="${y}" width="${s}" height="${s}" rx="10" fill="#101b29" stroke="#1f2d3d"/>`
+          + `<text x="${x + 8}" y="${y + 22}" font-family="Montserrat" font-size="14" fill="#8fa7bd">${cap}</text>`
+          + (unit ? `<text x="${x + s - 8}" y="${y + 22}" font-family="Montserrat" font-size="14" fill="#8fa7bd" text-anchor="end">${unit}</text>` : '')
+          + `<text x="${x + s / 2}" y="${y + s - 18}" font-family="Montserrat" font-size="38" font-weight="700" fill="${col}" text-anchor="middle">${val}</text>`;
+      }
+      svg.innerHTML = `
+        <rect x="10" y="10" width="110" height="40" rx="10" fill="#101b29" stroke="#1f2d3d"/>
+        <text x="65" y="37" font-family="Montserrat" font-size="20" fill="#eef4fa" text-anchor="middle">STBY</text>
+        <text x="240" y="32" font-family="Montserrat" font-size="20" font-weight="700" fill="#36d399" text-anchor="middle">AUTO</text>
+        <rect x="360" y="10" width="110" height="40" rx="10" fill="#101b29" stroke="#1f2d3d"/>
+        <text x="415" y="37" font-family="Montserrat" font-size="20" fill="#eef4fa" text-anchor="middle">HOME</text>
+        <path d="${railPath}" fill="none" stroke="#36d399" stroke-width="10"/>
+        <path d="${bandPath}" fill="none" stroke="#f2f6fb" stroke-width="44"/>
+        ${ticks.join('')}
+        ${nums.join('')}
+        <path d="M ${CX - 9},${CYc - R - 2} L ${CX + 9},${CYc - R - 2} L ${CX},${CYc - R + 14} Z" fill="#ff5252"/>
+        <path d="M ${bx - 8},${by - 8} L ${bx + 8},${by - 8} L ${bx},${by + 8} Z" fill="#ffb84d"/>
+        <text x="${CX}" y="${CYc - R / 2 - 12}" font-family="Montserrat" font-size="20" fill="#8fa7bd" text-anchor="middle">HDG</text>
+        <text x="${CX}" y="${CYc - R / 2 + 38}" font-family="Montserrat" font-size="64" font-weight="700" fill="#eef4fa" text-anchor="middle">56.0°</text>
+        <text x="${CX}" y="${CYc - 2}" font-family="Montserrat" font-size="20" fill="#8fa7bd" text-anchor="middle">COG 053°  |  SOG 6.2 kn</text>
+        <text x="16" y="306" font-family="Montserrat" font-size="14" fill="#8fa7bd">PORT</text>
+        <text x="464" y="306" font-family="Montserrat" font-size="14" fill="#8fa7bd" text-anchor="end">STBD</text>
+        <line x1="40" y1="318" x2="440" y2="318" stroke="#2a3a4c" stroke-width="2"/>
+        <rect x="262" y="302" width="3" height="32" rx="1" fill="#ff5252"/>
+        ${tile(8, 'DEPTH', 'm', '8.4', '#eef4fa')}
+        ${tile(126, 'SPEED', 'kn', '5.7', '#eef4fa')}
+        ${tile(244, 'AWS', 'kn', '12.4', '#ffb84d')}
+        ${tile(362, 'AWA', '', '42S', '#eef4fa')}`;
+      const wrap = el('div', { className: 'wpreview wd-wrap' });
+      wrap.append(svg);
+      return wrap;
+    }
     case 'windDial': {
       // Full-screen wind dial preview that matches the device's
       // src/ui/screen_wind.cpp render: outer bezel ring, N/E/S/W
