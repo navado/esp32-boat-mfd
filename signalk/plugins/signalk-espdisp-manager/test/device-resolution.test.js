@@ -92,6 +92,23 @@ test('hostnameConflict ignores stale/offline peers, flags only live ones', () =>
   assert.strictEqual(m.deviceHealth({ networkIdentity: { conflict: false } }, true, 0), 'ok')
 })
 
+test('deviceCapabilities returns the reported manifest, else null', () => {
+  const m = mgr()
+  const manifest = { version: 1, maxViews: 8, viewTypes: { numeric: {} } }
+  m.store = {
+    registry: {
+      devices: {
+        live: { id: 'live', status: { ui: { capabilities: manifest } } },
+        bare: { id: 'bare', status: { ui: { screen: 'nav' } } },
+        cold: { id: 'cold' }
+      }
+    }
+  }
+  assert.deepStrictEqual(m.deviceCapabilities('live'), manifest)
+  assert.strictEqual(m.deviceCapabilities('bare'), null) // reported status, no manifest
+  assert.strictEqual(m.deviceCapabilities('cold'), null) // never reported
+})
+
 test('a non-primary winning candidate is promoted to lastResolvedAddress', async () => {
   const m = mgr()
   m.deviceWebAuth = () => null

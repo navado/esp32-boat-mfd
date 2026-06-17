@@ -431,6 +431,15 @@ class EspDispManager {
     return { views, current }
   }
 
+  // The device's self-reported capability manifest (heartbeat ui.capabilities):
+  // per-view-type limits/attrs the layout editor gates to. Returns null when the
+  // device hasn't reported one yet (offline, or pre-manifest firmware).
+  deviceCapabilities (id) {
+    const device = this.getDevice(id)
+    const caps = device.status && device.status.ui && device.status.ui.capabilities
+    return caps && typeof caps === 'object' ? caps : null
+  }
+
   listDiscoveredDevices () {
     const registered = this.store.registry.devices
     const addressOwners = {}

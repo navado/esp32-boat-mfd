@@ -368,6 +368,13 @@ function registerRoutes (router, getManager) {
     res.json(manager.deviceViews(req.params.id))
   }))
 
+  // Device-reported capability manifest (ui.capabilities). { capabilities } is
+  // null until the device reports one. The layout editor gates its options to
+  // this so it only offers what the connected firmware can render.
+  router.get('/devices/:id/capabilities', wrap(getManager, (manager, req, res) => {
+    res.json({ capabilities: manager.deviceCapabilities(req.params.id) })
+  }))
+
   router.get('/discovery/devices', wrap(getManager, (manager, req, res) => {
     res.json(manager.listDiscoveredDevices())
   }))

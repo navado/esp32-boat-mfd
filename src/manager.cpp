@@ -39,6 +39,7 @@
 #include "ui_config_check.h"
 #include "manager_endpoint.h"
 #include "manager_config.h"
+#include "capabilities.h"
 #include "manager_screens.h"
 #include "manager_url.h"
 #include "net.h"
@@ -635,6 +636,9 @@ void build_status_body(JsonDocument &doc) {
     ui_o["layoutVariant"] = s_render_plan_valid ? s_render_plan->layout_variant : "";
     ui_o["widgetVariant"] = s_render_plan_valid ? s_render_plan->widget_variant : "";
     ui_o["widgetConfigHash"] = s_applied_config_hash;
+    // Capability manifest: per-view-type limits/attrs the layout editor gates
+    // to. Self-describing so the manager needs no per-firmware-version table.
+    capabilities::build_manifest(ui_o["capabilities"].to<JsonObject>());
 
     JsonObject display_o = doc["display"].to<JsonObject>();
     display_o["width"] = g.width_px;
