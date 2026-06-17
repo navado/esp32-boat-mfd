@@ -40,11 +40,11 @@ lv_obj_t *draw_glyph(lv_obj_t *parent, Glyph g, bool filled, uint32_t color) {
     lv_canvas_init_layer(cv, &layer);
     lv_color_t col = lv_color_hex(color);
 
-    auto line = [&](int x0, int y0, int x1, int y1) {
+    auto line = [&](int x0, int y0, int x1, int y1, int w = 3) {
         lv_draw_line_dsc_t d;
         lv_draw_line_dsc_init(&d);
         d.color = col;
-        d.width = 3;
+        d.width = w;
         d.round_start = d.round_end = 1;
         d.p1.x = x0;
         d.p1.y = y0;
@@ -112,35 +112,47 @@ lv_obj_t *draw_glyph(lv_obj_t *parent, Glyph g, bool filled, uint32_t color) {
         lv_draw_rect_dsc_t d;
         lv_draw_rect_dsc_init(&d);
         d.bg_color = col;
-        d.bg_opa = LV_OPA_COVER;
+        d.bg_opa = filled ? LV_OPA_COVER : LV_OPA_TRANSP;
+        d.border_color = col;
+        d.border_width = filled ? 0 : 2;
         lv_area_t v = {12, 4, 16, 24};
         lv_area_t hh = {4, 12, 24, 16};
         lv_draw_rect(&layer, &d, &v);
         lv_draw_rect(&layer, &d, &hh);
         break;
     }
-    case Glyph::ChevronIn:
-        line(4, 4, 14, 16);
-        line(14, 16, 24, 4);
+    case Glyph::ChevronIn: {
+        int lw = filled ? 5 : 3;
+        line(4, 4, 14, 16, lw);
+        line(14, 16, 24, 4, lw);
         break;
-    case Glyph::ChevronOut:
-        line(4, 24, 14, 12);
-        line(14, 12, 24, 24);
+    }
+    case Glyph::ChevronOut: {
+        int lw = filled ? 5 : 3;
+        line(4, 24, 14, 12, lw);
+        line(14, 12, 24, 24, lw);
         break;
-    case Glyph::ChevronLeft:
-        line(18, 4, 8, 14);
-        line(8, 14, 18, 24);
+    }
+    case Glyph::ChevronLeft: {
+        int lw = filled ? 5 : 3;
+        line(18, 4, 8, 14, lw);
+        line(8, 14, 18, 24, lw);
         break;
-    case Glyph::ChevronRight:
-        line(10, 4, 20, 14);
-        line(20, 14, 10, 24);
+    }
+    case Glyph::ChevronRight: {
+        int lw = filled ? 5 : 3;
+        line(10, 4, 20, 14, lw);
+        line(20, 14, 10, 24, lw);
         break;
-    case Glyph::ChevronDouble:
-        line(13, 4, 3, 14);
-        line(3, 14, 13, 24);
-        line(25, 4, 15, 14);
-        line(15, 14, 25, 24);
+    }
+    case Glyph::ChevronDouble: {
+        int lw = filled ? 5 : 3;
+        line(13, 4, 3, 14, lw);
+        line(3, 14, 13, 24, lw);
+        line(25, 4, 15, 14, lw);
+        line(15, 14, 25, 24, lw);
         break;
+    }
     default:
         break;
     }
