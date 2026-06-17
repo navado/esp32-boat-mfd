@@ -151,7 +151,7 @@ editor only offers combinations the firmware can render:
   "units":     { "speed":["kn","m/s"], "angle":["deg"], "depth":["m","ft"], "temp":["C","F"], "ratio":["%"], "voltage":["V"] },
   "maxViews":   8,                      // max number of switchable screens (a "view" == a screen)
   "maxTilesPerScreen": 4,
-  "maxMarkersPerDial": 3,               // markers per compass-like dial (see marker-rings design)
+  "maxMarkersPerDial": 12,              // markers per compass-like dial; steering defaults use 3 (see marker-rings design)
   "glyphs":     ["triangle","diamond","circle","bar","cross","chevron_in","chevron_out","chevron_left","chevron_right","chevron_double"],
   "paths":      "open",                 // "open" = generic store renders any path; or a curated array
   "controls":   ["autopilot"],

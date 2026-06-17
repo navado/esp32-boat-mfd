@@ -20,9 +20,11 @@ dial — and the device-mirrored layout editor (see the umbrella spec,
 `2026-06-17-device-mirrored-layout-editor-design.md`) needs a way to *configure*
 those markers per field, not just the single `dir` the compass field model
 currently allows. The marker concept generalizes: a compass-like widget is a
-**center number plus 1–3 markers on a circle**, and a marker can be bound to any
-angle-typed path — including the bearing to an AIS or radar target, not just
-own-ship HDG/COG/CTS.
+**center number plus a list of markers on a circle**, and a marker can be bound
+to any angle-typed path — including the bearing to an AIS or radar target, a
+landmark or recorded layline, not just own-ship HDG/COG/CTS. The steering
+defaults are three (HDG/COG/CTS), but the list is bounded only by the manifest
+cap (default 12), so target- and layline-rich dials fit too.
 
 This design adds a shared marker primitive to the firmware, models the marker set
 as an abstract configurable list, and keeps the manager's preview renderers
@@ -30,9 +32,9 @@ faithful to the device.
 
 ## Goals
 
-1. **Abstract marker list** — a compass-like widget renders an ordered list of up
-   to 3 markers, each `{ id, glyph, filled, color, source/path }`, independent of
-   the center value.
+1. **Abstract marker list** — a compass-like widget renders an ordered list of
+   markers (up to the manifest cap `maxMarkersPerDial`, default 12), each
+   `{ id, glyph, filled, color, source/path }`, independent of the center value.
 2. **Reference-relative placement** — every marker sits at
    `screen_angle = marker.value − reference`, where `reference` defaults to the
    center value (so the dial is "value-up"); a marker equal to the reference lands
@@ -67,7 +69,7 @@ A compass-like widget = an optional **center value** + a **reference** + a
   "title": "HDG",
   "value":  { "path": "navigation.headingTrue" },   // center number (any scalar)
   "reference": "value",                               // "value" | "north" | <angle path>
-  "markers": [                                        // ordered, <= maxMarkersPerDial (3)
+  "markers": [                                        // ordered, <= maxMarkersPerDial (default 12)
     { "id": 1, "glyph": "triangle", "filled": true,  "color": "accent",
       "path": "navigation.headingTrue" },
     { "id": 2, "glyph": "triangle", "filled": false, "color": "good",
@@ -171,9 +173,11 @@ Single source of truth for the glyph set and placement:
   ChevronIn, ChevronOut, ChevronLeft, ChevronRight, ChevronDouble };`
 - `lv_obj_t *draw_glyph(lv_obj_t *parent, Glyph g, bool filled, uint32_t color);`
   — builds one marker visual.
-- `struct MarkerRing` — owns up to `MAX_MARKERS` (3) orbiting holders concentric
-  with a ring of given diameter + center offset, each holder pivoting at the ring
-  center so rotation sweeps its glyph around the dial pointing inward.
+- `struct MarkerRing` — owns up to `MAX_MARKERS` (= `maxMarkersPerDial`, 12)
+  orbiting holders concentric with a ring of given diameter + center offset, each
+  holder pivoting at the ring center so rotation sweeps its glyph around the dial
+  pointing inward. Holders are lazily shown/hidden so an N-marker ring costs N
+  active objects, not 12.
 - `void marker_ring_update(MarkerRing &r, const double *values, uint8_t n,
   double reference_deg, const OcclusionWindow &occ);` — performs the
   `value − reference` placement and occlusion-hide for the active markers,
@@ -220,14 +224,17 @@ compass `paths:{value, dir?}` shape there):
   one-entry marker list (back-compat).
 - **Capability manifest** (`ui.capabilities`) gains:
   - `glyphs`: the glyph token list above;
-  - `maxMarkersPerDial`: `3`;
+  - `maxMarkersPerDial`: `12` (generous fixed bound; steering defaults use 3);
   - marker `path` gating rule: **angle-typed only** (SignalK `meta.units == "rad"`
     or an angle quantity). The editor offers only angle paths for markers.
 - **Documented marker use cases** (why markers are an abstract path list, not
-  fixed roles): own-ship HDG / COG / CTS / BTW, target wind angle / laylines, and
-  **bearing to an AIS or radar target** — any angle-typed path the generic store
-  can resolve (e.g. a derived bearing-to-`vessels.<id>` path or a radar-target
-  bearing). The firmware special-cases none of these; it renders the bound angle.
+  fixed roles): own-ship HDG / COG / CTS / BTW, target wind angle, **bearing to an
+  AIS or radar target**, and **landmark / recorded laylines** — any angle-typed
+  path the generic store can resolve (e.g. a derived bearing-to-`vessels.<id>`
+  path, a radar-target bearing, or a stored layline bearing). The firmware
+  special-cases none of these; it renders the bound angle. Authoring many such
+  markers by hand is bounded by `maxMarkersPerDial`; populating them
+  automatically from a live collection is the follow-on below.
 - The device validates an incoming marker list against its manifest (glyph known,
   count ≤ cap, marker paths angle-typed) and rejects with `ParseError`, falling
   back to the last persisted config.
@@ -276,9 +283,34 @@ slice of the plan.
   project's large-struct-on-stack reboot trap).
 - **Renderer drift.** Firmware and manager must stay glyph-for-glyph identical;
   the shared contract fixture + regenerated previews catch divergence.
-- **Marker crowding.** Three converging bearings can overlap on a small dial;
-  hollow/filled + color separation mitigates, and the editor flags duplicate
-  glyphs. No auto-declutter in this pass (YAGNI).
+- **Marker crowding.** Converging bearings overlap on a small dial, more so as
+  the count climbs toward the cap; hollow/filled + color separation mitigates, and
+  the editor flags duplicate glyphs. No auto-declutter in this pass (YAGNI) —
+  collision-aware placement is folded into the dynamic-sources follow-on, where
+  high marker counts are the norm.
+
+## Future work: dynamic marker sources (out of scope this pass)
+
+Authoring AIS/radar targets and per-mark laylines as individual marker rows does
+not scale past a handful. A follow-on design adds a **dynamic marker source** — a
+ring binds a live SignalK collection and the firmware rebuilds the active marker
+set as members come and go:
+
+```jsonc
+"markerSources": [
+  { "collection": "ais", "bearing": "<derived bearing path/expr>",
+    "glyph": "triangle", "filled": false, "color": "fg_dim",
+    "filter": { "rangeNm": 6 }, "max": 12 }
+]
+```
+
+The ring then renders `markers[]` (static authored) **plus** the resolved members
+of each `markerSources[]`. New concerns deferred to that design: collection
+subscription + churn/debounce, stable marker **identity/lifecycle** (so a target
+keeps its holder across updates), per-source caps and range/sector filtering, and
+**collision-aware decluttering** for dense target fields. The static model in
+this spec is the substrate it builds on — no rework of the marker/glyph/placement
+contract, only an additional source that feeds the same ring.
 
 ## Implementation sequencing
 
