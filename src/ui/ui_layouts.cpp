@@ -4,6 +4,7 @@
 #include "ui_data.h"
 #include "ui_dirty.h"
 #include "ui_fonts.h"
+#include "ui_markers.h"
 #include "signalk.h"
 #include "ui_screens.h"
 #include "board_pins.h"
@@ -35,8 +36,9 @@ struct QuadGridTile {
     lv_obj_t *extras[4];  // multi-row tiles - small label+value lines
     // Per-kind auxiliary widgets (compass needle, gauge arc, bar, etc.).
     // Painter sets only the slots it needs; updater uses them via `kind`.
-    lv_obj_t *aux;   // primary aux widget (arc / bar / ring)
-    lv_obj_t *aux2;  // secondary aux (gauge needle / autopilot pill)
+    lv_obj_t *aux;           // primary aux widget (arc / bar / ring)
+    lv_obj_t *aux2;          // secondary aux (gauge needle / autopilot pill)
+    ui::MarkerRing markers;  // compass steering markers (HDG/COG/CTS)
     char last_value[24];
     char last_secondary[24];
     char last_extras[4][32];
@@ -533,9 +535,15 @@ static void paint_compass_body(QuadGridTile &t, const MetricBinding &m, int w, i
     lv_obj_clear_flag(ring, LV_OBJ_FLAG_CLICKABLE);
     t.aux = ring;
 
-    // Heading triangle orbiting OUTSIDE the ring (rotated live to the heading
-    // bearing). Keeps the direction indicator clear of the centre number.
-    t.aux2 = make_dir_marker(t.root, dia, 4, theme.accent);
+    // Steering marker set: HDG (solid triangle), COG (hollow triangle),
+    // CTS (solid diamond). Bearings filled live in update from metric_scalar().
+    ui::MarkerSpec steer_markers[3] = {
+        {NAN, ui::Glyph::Triangle, true, theme.accent},
+        {NAN, ui::Glyph::Triangle, false, theme.good},
+        {NAN, ui::Glyph::Diamond, true, theme.warn},
+    };
+    t.markers = ui::build_marker_ring(t.root, w / 2, h / 2 + 4, dia / 2, steer_markers, 3,
+                                      /*occlude_lower=*/false);
 
     // N/E/S/W cardinals: padded in from the ring border so they don't
     // visually merge with the heading number (which is centered).
@@ -979,8 +987,21 @@ static void update_quad_grid(lv_obj_t *root, const ScreenVariantSpec &spec, cons
                 ui::set_text_if_changed(t.secondary, t.last_secondary, sizeof(t.last_secondary),
                                         cts);
             }
-            // Spin the heading needle live to the heading bearing.
-            rotate_needle(t, metric_scalar(m, data));
+            // Markers: HDG/COG/CTS bearings; reference = HDG so the dial is heading-up.
+            {
+                MetricBinding hdg = {}, cog = {}, cts = {};
+                hdg.source = MetricSource::HDG_deg;
+                cog.source = MetricSource::COG_deg;
+                cts.source = MetricSource::CTS_deg;
+                ui::MarkerSpec live[3] = {
+                    {metric_scalar(hdg, data), ui::Glyph::Triangle, true, theme.accent},
+                    {metric_scalar(cog, data), ui::Glyph::Triangle, false, theme.good},
+                    {metric_scalar(cts, data), ui::Glyph::Diamond, true, theme.warn},
+                };
+                double ref = metric_scalar(hdg, data);
+                if (isnan(ref)) ref = 0.0;  // no heading -> north-up
+                ui::marker_ring_update(t.markers, live, 3, ref);
+            }
             break;
         default:
             // Numeric, Compass, WindRose, Text, Trend fallback - all use
