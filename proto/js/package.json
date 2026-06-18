@@ -1,6 +1,6 @@
 {
-  "name": "@espdisp/proto",
-  "version": "1.0.0",
+  "name": "@yeyboats/proto",
+  "version": "2.0.0",
   "type": "module",
   "main": "index.js",
   "scripts": {
