@@ -1,6 +1,6 @@
 # Manager device console: merged UI, system settings, USB/OTA flashing & provisioning
 
-**Status:** Design · **Date:** 2026-06-18 · **Author:** navado and contributors
+**Status:** Design · **Date:** 2026-06-18 · **Author:** Yey Boats Project
 **Scope:** Two repos — `Instruments-manager` (SignalK manager plugin) and the
 ESP32 firmware (`esp32-boat-mfd`). One spec, implemented in ordered slices.
 

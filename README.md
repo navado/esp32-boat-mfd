@@ -837,9 +837,7 @@ This firmware is **not** licensed for commercial use under the default terms.
 for profit, integrating it into a paid service, or using it as part of a
 commercial operation (e.g. charter fleets, paid installations).
 
-For commercial licensing, open a
-[GitHub Discussion](https://github.com/navado/esp32-boat-mfd/discussions) or
-file an issue marked `licensing` to start the conversation.
+For commercial licensing, contact **rights@yey.boats** (see [COMMERCIAL.md](COMMERCIAL.md)).
 
 Noncommercial uses — personal boats, research, education, charitable and
 governmental organizations — are explicitly permitted under the project
@@ -847,7 +845,9 @@ license.
 
 ## License
 
-[PolyForm Noncommercial 1.0.0](LICENSE) © 2026 navado and contributors.
+© 2026 Yey Boats Project. All rights reserved except as expressly licensed (see [NOTICE](NOTICE)).
+
+[PolyForm Noncommercial 1.0.0](LICENSE) © 2026 Yey Boats Project.
 
 This project bundles and links against the following libraries, each under
 its own license:

@@ -1,6 +1,6 @@
 # Device-mirrored, version-gated layout editor with per-screen subscriptions
 
-**Status:** Design (umbrella) · **Date:** 2026-06-17 · **Author:** navado and contributors
+**Status:** Design (umbrella) · **Date:** 2026-06-17 · **Author:** Yey Boats Project
 
 ## Problem
 

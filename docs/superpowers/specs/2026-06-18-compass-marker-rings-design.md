@@ -1,6 +1,6 @@
 # Configurable marker rings for compass-like widgets
 
-**Status:** Design · **Date:** 2026-06-18 · **Author:** navado and contributors
+**Status:** Design · **Date:** 2026-06-18 · **Author:** Yey Boats Project
 
 ## Problem
 

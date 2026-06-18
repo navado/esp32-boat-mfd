@@ -205,10 +205,11 @@ PSRAM rule) in this file win where the two overlap.
   `make format` runs clang-format in place. Run `make pre-commit` before
   committing; CI and `.githooks/pre-commit` use the same target, so do not
   skip lint locally and leave CI to fail on formatting.
-- **Licensing/identity**: project is attributed to **"navado and
-  contributors"** — do not insert real names in headers, license, or
-  README. License is **PolyForm Noncommercial 1.0.0**; do not relicense
-  or add an OSI-OSS dual-license without explicit instruction.
+- **Licensing/identity**: project is attributed to **"Yey Boats Project"** —
+  do not insert real names in headers, license, or README. License is
+  **PolyForm Noncommercial 1.0.0**; do not relicense or add an OSI-OSS
+  dual-license without explicit instruction. Commercial licensing contact:
+  **rights@yey.boats** (see COMMERCIAL.md).
 - **Releases**: `make release-tag VERSION=v0.x.y` then `git push origin
   v0.x.y`. Tags matching `*-rc*`/`*-alpha*`/`*-beta*` are auto-marked
   pre-release.
