@@ -140,9 +140,17 @@ in the firmware image.
   - **Everything else (over network, from the server):** once the device joins and
     registers, the **server** auto-assigns the next device number and pushes the
     OTA password + remaining settings via **config-push**; OTA runs server-side.
-- **Improv-Serial (firmware).** Integrate the Improv-WiFi-Serial protocol, gated so
-  it coexists with the normal serial console; it accepts the SSID/password
-  esp-web-tools sends (sourced from System Settings) and reports the resulting IP.
+- **Provisioning transport (decided): custom WebSerial over the firmware's
+  existing text commands — NOT Improv.** The firmware already has a complete
+  serial/BLE text-command provisioning protocol (`wifi-forget`, `wifi "<ssid>"
+  <pass>` → reboot+associate, SignalK host/port pin, manager endpoint, plus
+  `id <name>` and the new `ota-pass <pw>`), exercised by `tools/provision_device.py`
+  over BLE NUS; the same commands route through `dispatchCommand` over serial. So
+  after esptool flashing, the manager opens a small **custom WebSerial console**
+  and sends the server-sourced commands (the System-Settings WiFi creds first, to
+  bootstrap onto the network). This is the spec's allowed alternative to Improv —
+  it adds NO firmware library, reuses proven commands, and keeps the server as the
+  config source. (Improv is dropped.)
 
 ## §5 Per-device Update Firmware (manager, slice 6)
 
