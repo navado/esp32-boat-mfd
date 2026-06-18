@@ -140,5 +140,38 @@ class TestAisFleet(unittest.TestCase):
             self.assertLessEqual(d_near, fb.distance((41.0, 2.0), (v.lat, v.lon)) + 1.0)
 
 
+class TestPhaseScheduler(unittest.TestCase):
+    def test_route_starts_active(self):
+        ph = fb.PhaseScheduler(steady=False)
+        self.assertTrue(ph.route_active(t=0.0))
+
+    def test_route_clears_then_reactivates(self):
+        ph = fb.PhaseScheduler(steady=False)
+        # ROUTE_PERIOD splits into active / cleared windows; sample both.
+        active_seen = any(ph.route_active(t) for t in range(0, 60))
+        cleared_seen = any(not ph.route_active(t)
+                           for t in range(0, int(ph.ROUTE_PERIOD)))
+        self.assertTrue(active_seen)
+        self.assertTrue(cleared_seen)
+
+    def test_ap_cycles_through_modes(self):
+        ph = fb.PhaseScheduler(steady=False)
+        modes = {ph.ap_mode(t) for t in range(0, int(ph.AP_PERIOD))}
+        self.assertEqual(modes, {"standby", "auto", "wind"})
+
+    def test_ais_count_breathes(self):
+        ph = fb.PhaseScheduler(steady=False)
+        counts = {ph.ais_count(t, maxn=4) for t in range(0, int(ph.AIS_PERIOD))}
+        self.assertIn(0, counts)
+        self.assertIn(4, counts)
+
+    def test_steady_pins_everything_populated(self):
+        ph = fb.PhaseScheduler(steady=True)
+        for t in (0.0, 123.0, 9999.0):
+            self.assertTrue(ph.route_active(t))
+            self.assertEqual(ph.ap_mode(t), "auto")
+            self.assertEqual(ph.ais_count(t, maxn=4), 4)
+
+
 if __name__ == "__main__":
     unittest.main()

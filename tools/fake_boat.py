@@ -184,6 +184,39 @@ class AisFleet:
         return min(self.vessels, key=lambda v: distance(pos, (v.lat, v.lon)))
 
 
+# --- phase scheduling ---
+
+class PhaseScheduler:
+    """Drives usually-empty states through populated<->cleared phases on slow
+    timers. With steady=True everything is pinned fully populated."""
+
+    ROUTE_PERIOD = 180.0  # s: active for first 70%, cleared for the rest
+    AP_PERIOD = 150.0     # s: standby -> auto -> wind, equal thirds
+    AIS_PERIOD = 240.0    # s: count 0 -> max -> partial -> 0
+
+    def __init__(self, steady=False):
+        self.steady = steady
+
+    def route_active(self, t):
+        if self.steady:
+            return True
+        return (t % self.ROUTE_PERIOD) < (0.70 * self.ROUTE_PERIOD)
+
+    def ap_mode(self, t):
+        if self.steady:
+            return "auto"
+        third = self.AP_PERIOD / 3.0
+        phase = (t % self.AP_PERIOD) // third
+        return {0: "standby", 1: "auto", 2: "wind"}[phase]
+
+    def ais_count(self, t, maxn):
+        if self.steady:
+            return maxn
+        quarter = self.AIS_PERIOD / 4.0
+        phase = (t % self.AIS_PERIOD) // quarter
+        return {0: 0, 1: maxn, 2: max(0, maxn // 2), 3: 0}[phase]
+
+
 def parse_args(argv=None):
     p = argparse.ArgumentParser(description="SignalK boat-data simulator")
     p.add_argument("host", nargs="?", default="localhost")
