@@ -12,6 +12,11 @@
 
 namespace ui {
 
+// Inset (px) from the compass radius at which marker glyphs orbit on the
+// semicircular HUD dials: MARGIN(18, ui_markers) + glyph half-extent lands them
+// at ~r-26 on the white band, clear of the LABEL_INSET(44) degree labels.
+constexpr int kSemiMarkerInset = 42;
+
 // Semicircular heading compass. The white band + green rail + lubber are fixed;
 // the `scale` ring (degree numbers + ticks) is rotated by -heading so the
 // current heading rides under the top lubber (ui::set_rot_if_changed()).

@@ -154,8 +154,8 @@ lv_obj_t *build(lv_obj_t *parent) {
     ui::MarkerSpec wind_markers[1] = {
         {NAN, ui::Glyph::Diamond, true, theme.warn},  // TWD wind bug
     };
-    s_cp.markers = ui::build_marker_ring(s_root, scx, scy, s_cp.r - 42, wind_markers, 1,
-                                         /*occlude_lower=*/true);
+    s_cp.markers = ui::build_marker_ring(s_root, scx, scy, s_cp.r - ui::kSemiMarkerInset,
+                                         wind_markers, 1, /*occlude_lower=*/true);
 
     // --- centre readouts (over the dial face) --- HDG + wind sub-line ---
     lv_obj_t *cap = lv_label_create(s_root);

@@ -287,8 +287,8 @@ lv_obj_t *build(lv_obj_t *parent) {
         {NAN, ui::Glyph::Diamond, true, theme.alarm},    // CTS
         {NAN, ui::Glyph::Diamond, true, theme.warn},     // AP target (amber bug), hidden until set
     };
-    s_cp.markers = ui::build_marker_ring(s_root, scx, scy, s_cp.r - 42, ap_markers, 4,
-                                         /*occlude_lower=*/true);
+    s_cp.markers = ui::build_marker_ring(s_root, scx, scy, s_cp.r - ui::kSemiMarkerInset,
+                                         ap_markers, 4, /*occlude_lower=*/true);
 
     // --- dial tap zones (left = port/-, right = stbd/+) ---
     int dz_y = coy + 20;
@@ -398,7 +398,7 @@ void refresh() {
     // matching the rotating scale), so the HDG marker rides at offset 0 under the
     // red lubber. The target uses the local pending nudge if set, else the AP's
     // reported target; NaN hides any marker.
-    double hdg_b = isnan(d.headingTrue) ? NAN : rad_to_deg_pos(d.headingTrue);
+    double hdg_b = hdg_deg;
     double cog_b = isnan(d.cogTrue) ? NAN : rad_to_deg_pos(d.cogTrue);
     double cts_b = isnan(d.cts) ? NAN : rad_to_deg_pos(d.cts);
     double tgt_b = !isnan(s_target_local)
