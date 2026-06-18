@@ -32,6 +32,7 @@
 #include "device_identity.h"
 #include "device_discovery.h"
 #include "build_config.h"
+#include "ota_pass.h"
 
 namespace net {
 
@@ -401,7 +402,11 @@ static const char *ota_error_name(ota_error_t e) {
 
 static void otaSetup() {
     ArduinoOTA.setHostname(s_device_id.c_str());
-    if (strlen(OTA_PASSWORD) > 0) ArduinoOTA.setPassword(OTA_PASSWORD);
+    // Runtime OTA password (NVS) wins over the compile-time default.
+    storage::Namespace prefs("net", true);
+    std::string ota_nvs = prefs.get_string("ota_pass", "");
+    const char *ota_pw = ota_pass_effective(ota_nvs.c_str(), OTA_PASSWORD);
+    if (strlen(ota_pw) > 0) ArduinoOTA.setPassword(ota_pw);
     // All OTA lifecycle events log at WARN so they pass the default
     // UDP filter and land in the lab logger - critical for diagnosing
     // failed flashes (the previous build only printf'd to UART, which
@@ -1158,6 +1163,29 @@ bool handleSerialCommand(const String &line) {
         ssid.trim();
         bool ok = wifi_store::remove(ssid.c_str());
         logf("[wifi] forget '%s' -> %s", ssid.c_str(), ok ? "removed" : "not found");
+        return true;
+    }
+    if (line.startsWith("ota-pass ")) {
+        String pw = line.substring(9);
+        pw.trim();
+        storage::Namespace prefs("net", false);
+        prefs.put_string("ota_pass", pw.c_str());
+        ArduinoOTA.setPassword(pw.length() ? pw.c_str() : OTA_PASSWORD);
+        printf("[ota] password set (len %u); effective next OTA\n", (unsigned)pw.length());
+        return true;
+    }
+    if (line == "ota-pass-clear") {
+        storage::Namespace prefs("net", false);
+        prefs.put_string("ota_pass", "");
+        printf("[ota] password cleared; reverts to compile-time default\n");
+        return true;
+    }
+    if (line == "ota-pass") {
+        storage::Namespace prefs("net", true);
+        std::string cur = prefs.get_string("ota_pass", "");
+        bool set = (cur.c_str()[0] != 0) || strlen(OTA_PASSWORD) > 0;
+        printf("[ota] password %s (runtime %s)\n", set ? "set" : "unset",
+               cur.c_str()[0] ? "yes" : "no");
         return true;
     }
     if (line == "wifi-list") {
