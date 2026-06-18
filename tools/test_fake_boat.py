@@ -173,5 +173,76 @@ class TestPhaseScheduler(unittest.TestCase):
             self.assertEqual(ph.ais_count(t, maxn=4), 4)
 
 
+def _values_to_map(delta):
+    out = {}
+    for upd in delta["updates"]:
+        for v in upd["values"]:
+            out[v["path"]] = v["value"]
+    return out
+
+
+class TestDeltaBuilders(unittest.TestCase):
+    def test_self_delta_has_core_and_route_when_active(self):
+        nav = {"xte": 12.0, "cts": 1.5, "btw": 1.4, "dtw": 800.0, "vmg": 4.0}
+        d = fb.build_self_delta(
+            pos=(41.0, 2.0), sog=5.0, cog=1.4, heading=1.45,
+            awa=0.6, aws=6.0, twa=0.7, tws=7.5, depth=12.0, water_temp=290.0,
+            battv=12.7, current_set=3.6, current_drift=0.7,
+            nav=nav, ap_mode="auto", ap_target=1.45,
+            closest=None, ts="2026-06-18T10:00:00Z")
+        m = _values_to_map(d)
+        self.assertEqual(d["context"], "vessels.self")
+        self.assertIn("navigation.position", m)
+        self.assertEqual(m["navigation.courseRhumbline.crossTrackError"], 12.0)
+        self.assertEqual(m["navigation.courseRhumbline.nextPoint.bearingTrue"], 1.4)
+        self.assertEqual(m["navigation.courseRhumbline.nextPoint.distance"], 800.0)
+        self.assertEqual(m["navigation.courseRhumbline.velocityMadeGood"], 4.0)
+        self.assertEqual(m["steering.autopilot.state"], "auto")
+        self.assertEqual(m["steering.autopilot.target.headingTrue"], 1.45)
+        self.assertIn("environment.depth.belowKeel", m)
+        self.assertIn("performance.beatAngle", m)
+        self.assertIn("performance.gybeAngle", m)
+
+    def test_self_delta_standby_omits_route_and_target(self):
+        d = fb.build_self_delta(
+            pos=(41.0, 2.0), sog=5.0, cog=1.4, heading=1.45,
+            awa=0.6, aws=6.0, twa=0.7, tws=7.5, depth=12.0, water_temp=290.0,
+            battv=12.7, current_set=3.6, current_drift=0.7,
+            nav=None, ap_mode="standby", ap_target=None,
+            closest=None, ts="2026-06-18T10:00:00Z")
+        m = _values_to_map(d)
+        self.assertEqual(m["steering.autopilot.state"], "standby")
+        self.assertNotIn("steering.autopilot.target.headingTrue", m)
+        self.assertNotIn("navigation.courseRhumbline.crossTrackError", m)
+
+    def test_self_delta_closest_approach_bearing(self):
+        d = fb.build_self_delta(
+            pos=(41.0, 2.0), sog=5.0, cog=1.4, heading=1.45,
+            awa=0.6, aws=6.0, twa=0.7, tws=7.5, depth=12.0, water_temp=290.0,
+            battv=12.7, current_set=3.6, current_drift=0.7,
+            nav=None, ap_mode="standby", ap_target=None,
+            closest={"bearing": 2.1, "distance": 1500.0}, ts="t")
+        m = _values_to_map(d)
+        self.assertEqual(m["navigation.closestApproach.bearingTrue"], 2.1)
+        self.assertEqual(m["navigation.closestApproach.distance"], 1500.0)
+
+    def test_ais_delta_shape(self):
+        v = fb.AisVessel(0, center=(41.0, 2.0))
+        d = fb.build_ais_delta(v, ts="t", include_static=True)
+        m = _values_to_map(d)
+        self.assertEqual(d["context"], v.context)
+        self.assertIn("navigation.position", m)
+        self.assertIn("navigation.speedOverGround", m)
+        self.assertIn("navigation.courseOverGroundTrue", m)
+        self.assertEqual(m["name"], v.name)
+        self.assertEqual(m["mmsi"], str(v.mmsi))
+
+    def test_ais_delta_dynamic_only_omits_static(self):
+        v = fb.AisVessel(0, center=(41.0, 2.0))
+        m = _values_to_map(fb.build_ais_delta(v, ts="t", include_static=False))
+        self.assertNotIn("name", m)
+        self.assertIn("navigation.position", m)
+
+
 if __name__ == "__main__":
     unittest.main()

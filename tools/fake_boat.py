@@ -217,6 +217,83 @@ class PhaseScheduler:
         return {0: 0, 1: maxn, 2: max(0, maxn // 2), 3: 0}[phase]
 
 
+# --- delta builders ---
+
+BEAT_ANGLE = math.radians(42.0)   # optimal upwind TWA off bow
+GYBE_ANGLE = math.radians(150.0)  # optimal downwind TWA off bow
+KEEL_DRAFT_M = 1.8                 # transducer-to-keel offset
+
+
+def _val(path, value):
+    return {"path": path, "value": value}
+
+
+def build_self_delta(pos, sog, cog, heading, awa, aws, twa, tws, depth,
+                     water_temp, battv, current_set, current_drift,
+                     nav, ap_mode, ap_target, closest, ts):
+    values = [
+        _val("navigation.position", {"latitude": pos[0], "longitude": pos[1]}),
+        _val("navigation.speedOverGround", sog),
+        _val("navigation.speedThroughWater", sog * 0.92),
+        _val("navigation.courseOverGroundTrue", cog),
+        _val("navigation.headingTrue", heading),
+        _val("environment.wind.angleApparent", awa),
+        _val("environment.wind.speedApparent", aws),
+        _val("environment.wind.angleTrueWater", twa),
+        _val("environment.wind.speedTrue", tws),
+        _val("environment.depth.belowTransducer", depth),
+        _val("environment.depth.belowKeel", depth - KEEL_DRAFT_M),
+        _val("environment.water.temperature", water_temp),
+        _val("environment.current.setTrue", current_set),
+        _val("environment.current.drift", current_drift),
+        _val("electrical.batteries.house.voltage", battv),
+        _val("electrical.batteries.house.stateOfCharge", 0.82),
+        _val("tanks.fuel.0.currentLevel", 0.65),
+        _val("tanks.freshWater.0.currentLevel", 0.40),
+        _val("performance.beatAngle", BEAT_ANGLE),
+        _val("performance.gybeAngle", GYBE_ANGLE),
+        _val("steering.autopilot.state", ap_mode),
+    ]
+    if ap_target is not None:
+        values.append(_val("steering.autopilot.target.headingTrue", ap_target))
+    if nav is not None:
+        values += [
+            _val("navigation.courseRhumbline.crossTrackError", nav["xte"]),
+            _val("navigation.courseRhumbline.bearingTrackTrue", nav["cts"]),
+            _val("navigation.courseRhumbline.nextPoint.bearingTrue", nav["btw"]),
+            _val("navigation.courseRhumbline.nextPoint.distance", nav["dtw"]),
+            _val("navigation.courseRhumbline.velocityMadeGood", nav["vmg"]),
+        ]
+    if closest is not None:
+        values += [
+            _val("navigation.closestApproach.bearingTrue", closest["bearing"]),
+            _val("navigation.closestApproach.distance", closest["distance"]),
+        ]
+    return {
+        "context": "vessels.self",
+        "updates": [{"$source": "fake_boat.py", "timestamp": ts, "values": values}],
+    }
+
+
+def build_ais_delta(v, ts, include_static):
+    values = [
+        _val("navigation.position", {"latitude": v.lat, "longitude": v.lon}),
+        _val("navigation.speedOverGround", v.sog),
+        _val("navigation.courseOverGroundTrue", v.cog),
+        _val("navigation.headingTrue", v.heading),
+    ]
+    if include_static:
+        values += [
+            _val("name", v.name),
+            _val("mmsi", str(v.mmsi)),
+            _val("design.aisShipType", {"id": v.ship_type[0], "name": v.ship_type[1]}),
+        ]
+    return {
+        "context": v.context,
+        "updates": [{"$source": "fake_boat.py", "timestamp": ts, "values": values}],
+    }
+
+
 def parse_args(argv=None):
     p = argparse.ArgumentParser(description="SignalK boat-data simulator")
     p.add_argument("host", nargs="?", default="localhost")
