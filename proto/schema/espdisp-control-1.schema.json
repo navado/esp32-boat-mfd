@@ -1,8 +1,8 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://espdisp/proto/espdisp-control-1",
-  "title": "espdisp control protocol v1",
-  "x-proto-major": 1,
+  "$id": "https://yeyboats/proto/yeyboats-control-2",
+  "title": "yeyboats control protocol v2",
+  "x-proto-major": 2,
   "x-proto-minor": 0,
   "$defs": {
     "ViewRef": {

@@ -3,7 +3,7 @@
 #include <ArduinoJson.h>
 #include <string.h>
 namespace proto {
-constexpr int kProtoMajor = 1;
+constexpr int kProtoMajor = 2;
 constexpr int kProtoMinor = 0;
 
 struct ViewRef;

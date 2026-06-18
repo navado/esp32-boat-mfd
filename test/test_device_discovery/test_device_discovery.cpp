@@ -38,8 +38,8 @@ static void test_announcement_contract() {
 
 static void test_constants_match_discovery_spec() {
     TEST_ASSERT_EQUAL_UINT16(34301, device_discovery::DEVICE_ANNOUNCE_PORT);
-    TEST_ASSERT_EQUAL_STRING("espdisp", device_discovery::MDNS_SERVICE);
-    TEST_ASSERT_EQUAL_STRING("1", device_discovery::MDNS_PROTO);
+    TEST_ASSERT_EQUAL_STRING("yeyboats", device_discovery::MDNS_SERVICE);
+    TEST_ASSERT_EQUAL_STRING("2", device_discovery::MDNS_PROTO);
 }
 
 int main(int, char **) {

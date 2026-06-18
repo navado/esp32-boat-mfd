@@ -6,9 +6,9 @@
 namespace device_discovery {
 
 constexpr uint16_t DEVICE_ANNOUNCE_PORT = 34301;
-constexpr const char *DEVICE_ANNOUNCE_PROTOCOL = "espdisp.device.announce.v1";
-constexpr const char *MDNS_SERVICE = "espdisp";
-constexpr const char *MDNS_PROTO = "1";
+constexpr const char *DEVICE_ANNOUNCE_PROTOCOL = "yeyboats.device.announce.v2";
+constexpr const char *MDNS_SERVICE = "yeyboats";
+constexpr const char *MDNS_PROTO = "2";
 
 struct Info {
     const char *device_id = "";

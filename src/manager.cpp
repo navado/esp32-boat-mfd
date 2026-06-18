@@ -476,12 +476,12 @@ bool endpoint_has_path(const String &endpoint) {
     return manager_url::endpoint_has_path(endpoint.c_str());
 }
 
-// GET /.well-known/espdisp-management for a given base. Best-effort: if
+// GET /.well-known/yeyboats-management for a given base. Best-effort: if
 // the plugin advertises intervals or a basePath override, apply them.
 // Returns the HTTP code (or negative on transport error).
 int fetch_discovery(const String &base, String *out_base_path = nullptr) {
     HTTPClient http;
-    String url = build_url_from_base(base, "/.well-known/espdisp-management");
+    String url = build_url_from_base(base, "/.well-known/yeyboats-management");
     if (!http.begin(url)) return -3;
     prepare_http(http);
     int code = http.GET();
@@ -2467,7 +2467,7 @@ bool handleSerialCommand(const String &line) {
         return true;
     }
     if (line == "manager-discover") {
-        // Spec 18 §4: query the LAN for _espdisp-mgmt._tcp services.
+        // Spec 18 §4: query the LAN for _yeyboats-mgmt._tcp services.
         // The plugin advertises the same service when running on a
         // SignalK host with mDNS enabled. We log every hit; if exactly
         // one is found, auto-set the endpoint and trigger a register.
@@ -2475,8 +2475,8 @@ bool handleSerialCommand(const String &line) {
             net::logf("[mgr] discover: wifi not connected");
             return true;
         }
-        int n = MDNS.queryService("espdisp-mgmt", "tcp");
-        net::logf("[mgr] discover: %d hit(s) for _espdisp-mgmt._tcp", n);
+        int n = MDNS.queryService("yeyboats-mgmt", "tcp");
+        net::logf("[mgr] discover: %d hit(s) for _yeyboats-mgmt._tcp", n);
         for (int i = 0; i < n; ++i) {
             String host = MDNS.hostname(i);
             uint16_t port = MDNS.port(i);

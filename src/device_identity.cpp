@@ -18,7 +18,7 @@
 #endif
 
 #ifndef FW_NAME
-#define FW_NAME "espdisp"
+#define FW_NAME "yey-display"
 #endif
 #ifndef FW_VERSION
 #define FW_VERSION "0.0.0-dev"

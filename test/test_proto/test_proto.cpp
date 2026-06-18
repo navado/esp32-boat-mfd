@@ -16,9 +16,9 @@ static void test_version_parse_and_compat() {
     TEST_ASSERT_EQUAL_INT(1, M);
     TEST_ASSERT_EQUAL_INT(7, m);
     TEST_ASSERT_FALSE(parse_version("x", M, m));
-    TEST_ASSERT_TRUE(version_compatible("1.0"));
-    TEST_ASSERT_TRUE(version_compatible("1.99"));  // higher minor ok
-    TEST_ASSERT_FALSE(version_compatible("2.0"));  // major mismatch
+    TEST_ASSERT_TRUE(version_compatible("2.0"));
+    TEST_ASSERT_TRUE(version_compatible("2.99"));  // higher minor ok
+    TEST_ASSERT_FALSE(version_compatible("1.0"));  // major mismatch
 }
 
 static void test_auth() {
@@ -30,7 +30,7 @@ static void test_auth() {
 
 static void test_attach_fixture_roundtrips() {
     const char *json =
-        R"({"v":"1.0","t":"attach","controllerId":"knob-aa01","name":"Helm knob","color":"#00bcd4","key":"hunter2","ttlMs":10000})";
+        R"({"v":"2.0","t":"attach","controllerId":"knob-aa01","name":"Helm knob","color":"#00bcd4","key":"hunter2","ttlMs":10000})";
     JsonDocument d;
     deserializeJson(d, json);
     Attach a;
@@ -46,7 +46,7 @@ static void test_attach_fixture_roundtrips() {
 
 static void test_device_record_views_roundtrip() {
     const char *json =
-        R"({"v":"1.0","deviceId":"mfd-helm","role":"both","currentView":"wind","views":[{"id":"wind","title":"Wind"},{"id":"nav","title":"Nav"}],"transports":["ip","ble"]})";
+        R"({"v":"2.0","deviceId":"mfd-helm","role":"both","currentView":"wind","views":[{"id":"wind","title":"Wind"},{"id":"nav","title":"Nav"}],"transports":["ip","ble"]})";
     JsonDocument d;
     deserializeJson(d, json);
     DeviceRecord r;
@@ -59,20 +59,20 @@ static void test_device_record_views_roundtrip() {
 
 static void test_unknown_field_ignored() {
     const char *json =
-        R"({"v":"1.7","t":"attach","controllerId":"x","name":"x","color":"#010203","futureField":{"nested":true}})";
+        R"({"v":"2.7","t":"attach","controllerId":"x","name":"x","color":"#010203","futureField":{"nested":true}})";
     JsonDocument d;
     deserializeJson(d, json);
     Attach a;
     from_json(d.as<JsonObjectConst>(), a);
     TEST_ASSERT_EQUAL_STRING("x", a.controllerId);  // parsed despite extra field
-    TEST_ASSERT_TRUE(version_compatible(a.v));      // 1.7 compatible
+    TEST_ASSERT_TRUE(version_compatible(a.v));      // 2.7 compatible
 }
 
 static void test_session_table_lifecycle() {
     SessionTable t;
     t.clear();
     Attach a;
-    strcpy(a.v, "1.0");
+    strcpy(a.v, "2.0");
     strcpy(a.controllerId, "c1");
     strcpy(a.name, "C1");
     strcpy(a.color, "#00bcd4");
@@ -90,7 +90,7 @@ static void test_control_state_serialization() {
     SessionTable t;
     t.clear();
     Attach a;
-    strcpy(a.v, "1.0");
+    strcpy(a.v, "2.0");
     strcpy(a.controllerId, "c1");
     strcpy(a.name, "Knob");
     strcpy(a.color, "#00bcd4");
@@ -107,7 +107,7 @@ static void test_control_state_serialization() {
 
 static proto::Attach mk_attach(const char *id, const char *name, const char *color) {
     proto::Attach a{};
-    strncpy(a.v, "1.0", sizeof(a.v) - 1);
+    strncpy(a.v, "2.0", sizeof(a.v) - 1);
     strncpy(a.controllerId, id, sizeof(a.controllerId) - 1);
     strncpy(a.name, name, sizeof(a.name) - 1);
     strncpy(a.color, color, sizeof(a.color) - 1);
@@ -182,7 +182,7 @@ static void test_control_state_multi_session() {
     t.to_control_state(cs, "wind");
     TEST_ASSERT_EQUAL_INT(2, cs.sessions_count);
     TEST_ASSERT_EQUAL_STRING("wind", cs.currentView);
-    TEST_ASSERT_EQUAL_STRING("1.0", cs.v);
+    TEST_ASSERT_EQUAL_STRING("2.0", cs.v);
     bool found111 = false, found222 = false;
     for (int i = 0; i < cs.sessions_count; ++i) {
         if (strcmp(cs.sessions[i].color, "#111111") == 0) found111 = true;

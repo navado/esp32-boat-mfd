@@ -91,7 +91,7 @@ static const Entry CATALOG[] = {
     {"manager", "manager-sk-token <jwt|clear>",
      "Set/clear the SK-level bearer used to pass SK security", true, true},
     {"manager", "manager-forget", "Wipe endpoint+token; back to idle", true, true},
-    {"manager", "manager-discover", "mDNS _espdisp-mgmt._tcp probe (spec 18 §4)", true, true},
+    {"manager", "manager-discover", "mDNS _yeyboats-mgmt._tcp probe (spec 18 §4)", true, true},
     {"manager", "manager-errors", "Dump recent errors ring buffer (spec 17 §5)", true, true},
     {"manager", "manager-errors clear", "Reset the recent errors ring buffer", true, true},
     {"manager", "manager-layout", "Print applied render plan summary (spec 19 D7)", true, true},
