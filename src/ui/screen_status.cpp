@@ -178,7 +178,7 @@ void refresh() {
     bool sta = net::wifiUp();
     set_text_if_changed(r_wifi_mode, s_last_wifi_mode, sizeof(s_last_wifi_mode),
                         sta ? "STA" : "AP");
-    String ssid = sta ? WiFi.SSID() : "espdisp-setup";
+    String ssid = sta ? WiFi.SSID() : "yey-d-setup";
     set_text_if_changed(r_ssid, s_last_ssid, sizeof(s_last_ssid),
                         ssid.length() ? ssid.c_str() : "-");
     set_text_if_changed(r_ip, s_last_ip, sizeof(s_last_ip), net::ipString().c_str());

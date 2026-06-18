@@ -202,7 +202,7 @@ static constexpr uint32_t MDNS_REFRESH_MS = 60000;
 
 static String format_hardware_device_id(const uint8_t mac[6]) {
     char buf[32];
-    snprintf(buf, sizeof(buf), "espdisp-%02x%02x%02x%02x%02x%02x", mac[0], mac[1], mac[2], mac[3],
+    snprintf(buf, sizeof(buf), "yey-d-%02x%02x%02x%02x%02x%02x", mac[0], mac[1], mac[2], mac[3],
              mac[4], mac[5]);
     return String(buf);
 }
@@ -211,7 +211,7 @@ static String raw_efuse_device_id() {
     uint64_t mac = ESP.getEfuseMac();
     if (mac == 0) return String(OTA_HOSTNAME);
     char buf[32];
-    snprintf(buf, sizeof(buf), "espdisp-%012llx", (unsigned long long)(mac & 0xffffffffffffULL));
+    snprintf(buf, sizeof(buf), "yey-d-%012llx", (unsigned long long)(mac & 0xffffffffffffULL));
     return String(buf);
 }
 
@@ -228,8 +228,24 @@ static String hardware_default_device_id() {
     return format_hardware_device_id(mac);
 }
 
+// Old hardware-default id form ("espdisp-" + 12 lowercase-hex MAC), retired by
+// the YEY Boats rebrand. A device still carrying an auto-generated old-prefix id
+// is migrated to the new "yey-d-" prefix on boot. Operator-set names don't match
+// this exact shape (prefix + exactly 12 hex), so they are preserved.
+static bool is_legacy_prefixed_auto_id(const String &id) {
+    static constexpr size_t kPrefixLen = 8;  // strlen("espdisp-")
+    if (!id.startsWith("espdisp-")) return false;
+    if (id.length() != kPrefixLen + 12) return false;
+    for (size_t i = kPrefixLen; i < id.length(); ++i) {
+        const char c = id[i];
+        if (!((c >= '0' && c <= '9') || (c >= 'a' && c <= 'f'))) return false;
+    }
+    return true;
+}
+
 static bool is_legacy_default_device_id(const String &id, const String &raw_efuse_id) {
-    return id.length() == 0 || id == OTA_HOSTNAME || id == "espdisp-device" || id == raw_efuse_id;
+    return id.length() == 0 || id == OTA_HOSTNAME || id == "espdisp-device" ||
+           id == "yey-d-device" || id == raw_efuse_id || is_legacy_prefixed_auto_id(id);
 }
 
 bool isLegacyDefaultDeviceId(const String &id) {
@@ -238,7 +254,8 @@ bool isLegacyDefaultDeviceId(const String &id) {
     // e-fuse string is doing the wrong thing anyway, so the relaxed
     // check (no e-fuse comparison) is sufficient for the config-apply
     // safeguard.
-    return id.length() == 0 || id == OTA_HOSTNAME || id == "espdisp-device";
+    return id.length() == 0 || id == OTA_HOSTNAME || id == "espdisp-device" ||
+           id == "yey-d-device" || is_legacy_prefixed_auto_id(id);
 }
 
 WifiState wifiState() {
@@ -504,7 +521,7 @@ static void start_ap_mode() {
         puts("[wifi] softAPConfig FAILED");
     }
     // channel 1, not hidden, max 4 clients, beacon interval default.
-    bool ok = WiFi.softAP("espdisp-setup", nullptr, 1, 0, 4);
+    bool ok = WiFi.softAP("yey-d-setup", nullptr, 1, 0, 4);
     delay(500);  // allow the DHCP server task to spin up
     if (!ok) {
         puts("[wifi] softAP FAILED");
@@ -512,7 +529,7 @@ static void start_ap_mode() {
     broadcastAddr = WiFi.softAPIP();
     broadcastAddr[3] = 255;
     ap_mode = true;
-    printf("[wifi] AP ip=%s  mac=%s  ssid='espdisp-setup' (open)\n",
+    printf("[wifi] AP ip=%s  mac=%s  ssid='yey-d-setup' (open)\n",
            WiFi.softAPIP().toString().c_str(), WiFi.softAPmacAddress().c_str());
     printf("[wifi] connected stations: %d\n", WiFi.softAPgetStationNum());
 }

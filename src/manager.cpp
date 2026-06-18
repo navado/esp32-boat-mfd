@@ -258,20 +258,37 @@ void unlock_state() {
 }
 
 void load_prefs() {
-    storage::Namespace p(NS, true);
-    s_endpoint = String(p.get_string("endpoint", "").c_str());
-    s_token = String(p.get_string("token", "").c_str());
-    s_sk_token = String(p.get_string("sk_token", "").c_str());
-    s_discovery_method =
-        manager_endpoint::discovery_method_from_string(p.get_string("disc", "").c_str());
+    {
+        storage::Namespace p(NS, true);
+        s_endpoint = String(p.get_string("endpoint", "").c_str());
+        s_token = String(p.get_string("token", "").c_str());
+        s_sk_token = String(p.get_string("sk_token", "").c_str());
+        s_discovery_method =
+            manager_endpoint::discovery_method_from_string(p.get_string("disc", "").c_str());
+        s_applied_config_version = String(p.get_string("cfg_ver", "v0").c_str());
+        s_applied_config_hash = String(p.get_string("cfg_hash", "").c_str());
+        s_ota_enabled = p.get_u8("ota_en", 1) != 0;
+        s_ota_max_size = p.get_u32("ota_max", 0);
+        s_ota_require_sha = p.get_u8("ota_sha", 1) != 0;
+    }
     if (s_endpoint.length() && s_discovery_method == manager_endpoint::DiscoveryMethod::None) {
         s_discovery_method = manager_endpoint::DiscoveryMethod::Stored;
     }
-    s_applied_config_version = String(p.get_string("cfg_ver", "v0").c_str());
-    s_applied_config_hash = String(p.get_string("cfg_hash", "").c_str());
-    s_ota_enabled = p.get_u8("ota_en", 1) != 0;
-    s_ota_max_size = p.get_u32("ota_max", 0);
-    s_ota_require_sha = p.get_u8("ota_sha", 1) != 0;
+    // Rebrand migration: a device provisioned before the plugin rename stored the
+    // old plugin base path. Rewrite it to the current slug in-place so config/OTA
+    // fetches land on the renamed manager without a manual re-point, and persist
+    // the rewrite so it survives the next reboot.
+    {
+        static const char *kOldBase = "/plugins/espdisp-manager";
+        const int at = s_endpoint.indexOf(kOldBase);
+        if (at >= 0) {
+            s_endpoint = s_endpoint.substring(0, at) + "/plugins/yey-boats-display-manager" +
+                         s_endpoint.substring(at + (int)strlen(kOldBase));
+            storage::Namespace w(NS, false);
+            w.put_string("endpoint", s_endpoint.c_str());
+            net::logf("[mgr] migrated stored endpoint to renamed plugin path");
+        }
+    }
     s_auth = s_token.length() ? AuthState::Provisioned : AuthState::Unprovisioned;
 }
 
