@@ -1,7 +1,7 @@
 # NMEA2000 And Visual Design Adoption
 
-Status: proposed implementation spec after comparison with
-`navado/NMEA2000-DISPLAY-on-ESP32S3`.
+Status: proposed implementation spec after comparison with an external
+NMEA2000 ESP32-S3 display project.
 
 ## Goals
 
