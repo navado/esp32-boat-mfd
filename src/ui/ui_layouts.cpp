@@ -1005,7 +1005,7 @@ static void update_quad_grid(lv_obj_t *root, const ScreenVariantSpec &spec, cons
             }
             break;
         default:
-            // Numeric, Compass, WindRose, Text, Trend fallback - all use
+            // Numeric, WindRose, Text, Trend fallback - all use
             // the value/secondary text slots populated by format_metric.
             ui::set_text_if_changed(t.value, t.last_value, sizeof(t.last_value), pri);
             if (t.secondary) {
