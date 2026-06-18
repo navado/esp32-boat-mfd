@@ -162,7 +162,7 @@
     return svgWrap(`
       <rect x="10" y="10" width="110" height="40" rx="10" fill="#101b29" stroke="#1f2d3d"/>
       <text x="65" y="37" font-family="Montserrat" font-size="20" fill="${engaged ? '#8fa7bd' : '#eef4fa'}" text-anchor="middle">STBY</text>
-      <text x="240" y="32" font-family="Montserrat" font-size="20" font-weight="700" fill="${engaged ? '#36d399' : '#5a6b78'}" text-anchor="middle">${engaged ? String(state).toUpperCase() : 'AUTO'}</text>
+      <text x="240" y="32" font-family="Montserrat" font-size="20" font-weight="700" fill="${engaged ? '#36d399' : '#5a6b78'}" text-anchor="middle">${esc(engaged ? String(state).toUpperCase() : 'AUTO')}</text>
       <rect x="360" y="10" width="110" height="40" rx="10" fill="#101b29" stroke="#1f2d3d"/>
       <text x="415" y="37" font-family="Montserrat" font-size="20" fill="#eef4fa" text-anchor="middle">HOME</text>
       <path d="${railPath}" fill="none" stroke="#36d399" stroke-width="10"/>
