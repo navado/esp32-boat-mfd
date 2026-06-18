@@ -94,6 +94,15 @@
   function sideStr (s) { return s ? (s.mag + s.side) : '--' }
 
   // --- shared svg helpers ---------------------------------------------------
+  // Escape any value interpolated into the SVG string. The HUD numerics are
+  // computed from numbers, but the System panel embeds DEVICE-reported strings
+  // (ssid/hostname/ip/build/sk-state) — a hostile device must not be able to
+  // break out of a <text> node and inject markup into the operator's page.
+  function esc (s) {
+    return String(s == null ? '' : s)
+      .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+      .replace(/"/g, '&quot;').replace(/'/g, '&#39;')
+  }
   function svgWrap (inner) {
     return `<svg viewBox="0 0 480 480" preserveAspectRatio="xMidYMid meet" class="hud-svg">${inner}</svg>`
   }
@@ -374,10 +383,11 @@
     let body = ''
     rows.forEach(([label, val, frac, color], i) => {
       const y = 64 + i * ROW_H
-      body += `<text x="22" y="${y}" font-family="Montserrat" font-size="13" fill="#8fa7bd" letter-spacing="0.06em">${label}</text>`
-      body += `<text x="150" y="${y}" font-family="Montserrat" font-size="18" font-weight="600" fill="#eef4fa">${val}</text>`
+      body += `<text x="22" y="${y}" font-family="Montserrat" font-size="13" fill="#8fa7bd" letter-spacing="0.06em">${esc(label)}</text>`
+      body += `<text x="150" y="${y}" font-family="Montserrat" font-size="18" font-weight="600" fill="#eef4fa">${esc(val)}</text>`
       if (!isNaN(frac)) {
         const w = 180, x = 282, f = Math.max(0, Math.min(100, frac)) / 100
+        // color is a hard-coded literal from `rows` above (never device data).
         body += `<rect x="${x}" y="${y - 9}" width="${w}" height="8" rx="4" fill="#1f2d3d"/>`
         body += `<rect x="${x}" y="${y - 9}" width="${(w * f).toFixed(0)}" height="8" rx="4" fill="${color}"/>`
       }
