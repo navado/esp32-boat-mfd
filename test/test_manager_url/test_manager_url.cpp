@@ -1,7 +1,7 @@
 // Host tests for the URL helpers extracted from src/manager.cpp.
 //
 // These have caught real bugs in the past (the device kept appending
-// /plugins/espdisp-manager to a URL that already had it, then the
+// /plugins/yey-boats-display-manager to a URL that already had it, then the
 // double-prefix base hit 404 silently). Pinning the behavior here
 // stops a refactor from regressing it.
 
@@ -42,14 +42,14 @@ static void test_authority_with_userinfo_not_misread() {
 // ---- plugin_base_from_root -----------------------------------------------
 
 static void test_appends_plugin_suffix_when_missing() {
-    TEST_ASSERT_EQUAL_STRING("http://host:3000/plugins/espdisp-manager",
+    TEST_ASSERT_EQUAL_STRING("http://host:3000/plugins/yey-boats-display-manager",
                              plugin_base_from_root("http://host:3000").c_str());
 }
 
 static void test_strips_trailing_slash_before_appending() {
-    TEST_ASSERT_EQUAL_STRING("http://host:3000/plugins/espdisp-manager",
+    TEST_ASSERT_EQUAL_STRING("http://host:3000/plugins/yey-boats-display-manager",
                              plugin_base_from_root("http://host:3000/").c_str());
-    TEST_ASSERT_EQUAL_STRING("http://host:3000/plugins/espdisp-manager",
+    TEST_ASSERT_EQUAL_STRING("http://host:3000/plugins/yey-boats-display-manager",
                              plugin_base_from_root("http://host:3000///").c_str());
 }
 
@@ -57,11 +57,11 @@ static void test_does_not_double_append_when_already_present() {
     // Real bug we hit earlier - the device kept stacking the suffix on
     // every retry until the URL was unusable.
     TEST_ASSERT_EQUAL_STRING(
-        "http://host:3000/plugins/espdisp-manager",
-        plugin_base_from_root("http://host:3000/plugins/espdisp-manager").c_str());
+        "http://host:3000/plugins/yey-boats-display-manager",
+        plugin_base_from_root("http://host:3000/plugins/yey-boats-display-manager").c_str());
     TEST_ASSERT_EQUAL_STRING(
-        "http://host:3000/plugins/espdisp-manager",
-        plugin_base_from_root("http://host:3000/plugins/espdisp-manager/").c_str());
+        "http://host:3000/plugins/yey-boats-display-manager",
+        plugin_base_from_root("http://host:3000/plugins/yey-boats-display-manager/").c_str());
 }
 
 static void test_idempotent_under_repeated_application() {
@@ -69,7 +69,7 @@ static void test_idempotent_under_repeated_application() {
     for (int i = 0; i < 5; ++i) {
         s = plugin_base_from_root(s);
     }
-    TEST_ASSERT_EQUAL_STRING("http://h:3000/plugins/espdisp-manager", s.c_str());
+    TEST_ASSERT_EQUAL_STRING("http://h:3000/plugins/yey-boats-display-manager", s.c_str());
 }
 
 // ---- join_url ------------------------------------------------------------

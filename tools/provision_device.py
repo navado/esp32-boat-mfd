@@ -175,7 +175,7 @@ def main() -> int:
     p.add_argument("--manager-url",
                    default=(f"http://{env.get('SK_HOST', '192.168.2.11')}:"
                             f"{env.get('SK_PORT', '3000')}"
-                            f"/plugins/espdisp-manager"),
+                            f"/plugins/yey-boats-display-manager"),
                    help="Manager plugin URL")
     p.add_argument("--forget", action="append", default=[],
                    help="SSID(s) to forget first (repeatable). "

@@ -393,7 +393,7 @@ void record_error(const char *fmt, ...) {
 // Compose Authorization (SK security) + X-EspDisp-Authorization (plugin auth)
 // for any plugin HTTP request. SK security needs a server-issued token in the
 // standard Authorization header; the plugin itself reads X-EspDisp-Authorization
-// first (see signalk-espdisp-manager index.js authFrom). When the device only
+// first (see yey-boats-display-manager index.js authFrom). When the device only
 // has one token (e.g. talking to the standalone mock), both headers carry it.
 //
 // Bootstrap: when s_token is empty (fresh device, no NVS entry) we

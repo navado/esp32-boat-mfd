@@ -4,7 +4,7 @@ namespace manager_url {
 
 namespace {
 
-constexpr const char *PLUGIN_SUFFIX = "/plugins/espdisp-manager";
+constexpr const char *PLUGIN_SUFFIX = "/plugins/yey-boats-display-manager";
 
 std::string strip_trailing_slash(std::string s) {
     while (!s.empty() && s.back() == '/')

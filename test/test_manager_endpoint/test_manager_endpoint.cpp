@@ -20,13 +20,13 @@ void tearDown(void) {
 
 static void test_parse_http_url_with_plugin_path() {
     Endpoint ep;
-    TEST_ASSERT_TRUE(parse_url("http://signalk.local:3000/plugins/espdisp-manager", ep));
+    TEST_ASSERT_TRUE(parse_url("http://signalk.local:3000/plugins/yey-boats-display-manager", ep));
     TEST_ASSERT_EQUAL_STRING("http", ep.scheme.c_str());
     TEST_ASSERT_FALSE(ep.tls);
     TEST_ASSERT_EQUAL_STRING("signalk.local", ep.host.c_str());
     TEST_ASSERT_EQUAL_UINT16(3000, ep.port);
-    TEST_ASSERT_EQUAL_STRING("/plugins/espdisp-manager", ep.base_path.c_str());
-    TEST_ASSERT_EQUAL_STRING("http://signalk.local:3000/plugins/espdisp-manager",
+    TEST_ASSERT_EQUAL_STRING("/plugins/yey-boats-display-manager", ep.base_path.c_str());
+    TEST_ASSERT_EQUAL_STRING("http://signalk.local:3000/plugins/yey-boats-display-manager",
                              base_url(ep).c_str());
 }
 
@@ -43,12 +43,12 @@ static void test_parse_defaults_to_http_without_scheme() {
 
 static void test_parse_https_defaults_port_and_tls() {
     Endpoint ep;
-    TEST_ASSERT_TRUE(parse_url("https://boat.example/signalk-espdisp-manager/", ep));
+    TEST_ASSERT_TRUE(parse_url("https://boat.example/yey-boats-display-manager/", ep));
     TEST_ASSERT_EQUAL_STRING("https", ep.scheme.c_str());
     TEST_ASSERT_TRUE(ep.tls);
     TEST_ASSERT_EQUAL_STRING("boat.example", ep.host.c_str());
     TEST_ASSERT_EQUAL_UINT16(443, ep.port);
-    TEST_ASSERT_EQUAL_STRING("/signalk-espdisp-manager", ep.base_path.c_str());
+    TEST_ASSERT_EQUAL_STRING("/yey-boats-display-manager", ep.base_path.c_str());
 }
 
 static void test_rejects_bad_urls() {

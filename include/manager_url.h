@@ -12,7 +12,7 @@ namespace manager_url {
 
 // True iff the endpoint URL already has a path component after the
 // authority (host:port). Used to decide whether to auto-append
-// /plugins/espdisp-manager when the operator supplies a bare
+// /plugins/yey-boats-display-manager when the operator supplies a bare
 // SignalK root URL.
 //
 // Examples:
@@ -22,9 +22,9 @@ namespace manager_url {
 //   endpoint_has_path("host:3000")                   -> false
 bool endpoint_has_path(const std::string &endpoint);
 
-// If the endpoint already targets the espdisp-manager plugin, return
+// If the endpoint already targets the yey-boats-display-manager plugin, return
 // it unchanged (with any trailing slash stripped). Otherwise append
-// "/plugins/espdisp-manager" so the caller can probe both shapes.
+// "/plugins/yey-boats-display-manager" so the caller can probe both shapes.
 std::string plugin_base_from_root(const std::string &endpoint);
 
 // Join `base` and `path` with exactly one slash between them. Any
