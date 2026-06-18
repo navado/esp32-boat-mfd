@@ -146,16 +146,19 @@ lv_obj_t *build(lv_obj_t *parent) {
         if (s_cp.nums[i]) lv_obj_move_foreground(s_cp.nums[i]);
     lv_obj_move_foreground(s_cp.lubber);
 
-    // Amber wind bug -> a single-marker ring pointing at TWD (heading-up). Built
-    // on s_root (not the dial-sized compass root, which would clip it) at the
-    // compass's screen-space centre; r - 42 lands the glyph on the white band
-    // just inside the rail (same as the AP HUD). occlude_lower hides it in the
+    // Steering marker ring -> HDG/COG/CTS + amber TWD bug, heading-up. Built on
+    // s_root (not the dial-sized compass root, which would clip it) at the
+    // compass's screen-space centre; r - 42 lands the glyphs on the white band
+    // just inside the rail (same as the AP HUD). occlude_lower hides them in the
     // bottom half. Driven by marker_ring_update in refresh().
-    ui::MarkerSpec wind_markers[1] = {
-        {NAN, ui::Glyph::Diamond, true, theme.warn},  // TWD wind bug
+    ui::MarkerSpec ws_markers[4] = {
+        {NAN, ui::Glyph::Triangle, true, theme.accent},  // HDG (under lubber at offset 0)
+        {NAN, ui::Glyph::Triangle, false, theme.good},   // COG
+        {NAN, ui::Glyph::Diamond, true, theme.alarm},    // CTS
+        {NAN, ui::Glyph::Diamond, true, theme.warn},     // TWD wind bug (amber)
     };
     s_cp.markers = ui::build_marker_ring(s_root, scx, scy, s_cp.r - ui::kSemiMarkerInset,
-                                         wind_markers, 1, /*occlude_lower=*/true);
+                                         ws_markers, 4, /*occlude_lower=*/true);
 
     // --- centre readouts (over the dial face) --- HDG + wind sub-line ---
     lv_obj_t *cap = lv_label_create(s_root);
@@ -339,13 +342,19 @@ void refresh() {
         lv_obj_add_flag(target_b, LV_OBJ_FLAG_HIDDEN);
     }
 
-    // Amber wind bug -> single-marker ring pointing at TWD (heading-up). The
-    // ring update hides the marker when twd or hdg is NaN.
-    ui::MarkerSpec wind_live[1] = {
+    // Steering marker ring -> HDG/COG/CTS + amber TWD bug (heading-up). Bearings
+    // match the AP HUD exactly; marker_ring_update hides any NaN marker.
+    double hdg_b = hdg;
+    double cog_b = isnan(d.cogTrue) ? NAN : rad_to_deg_pos(d.cogTrue);
+    double cts_b = isnan(d.cts) ? NAN : rad_to_deg_pos(d.cts);
+    ui::MarkerSpec wind_live[4] = {
+        {hdg_b, ui::Glyph::Triangle, true, theme.accent},
+        {cog_b, ui::Glyph::Triangle, false, theme.good},
+        {cts_b, ui::Glyph::Diamond, true, theme.alarm},
         {twd, ui::Glyph::Diamond, true, theme.warn},
     };
-    double wind_ref = isnan(hdg) ? NAN : hdg;
-    ui::marker_ring_update(s_cp.markers, wind_live, 1, wind_ref);
+    double wind_ref = isnan(hdg) ? 0.0 : hdg;
+    ui::marker_ring_update(s_cp.markers, wind_live, 4, wind_ref);
 
     // XTE needle (same as AP).
     if (!isnan(d.xte)) {

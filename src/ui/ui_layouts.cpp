@@ -692,9 +692,16 @@ static void paint_wind_rose_body(QuadGridTile &t, const MetricBinding & /*m*/, i
     lv_obj_clear_flag(ring, LV_OBJ_FLAG_CLICKABLE);
     t.aux = ring;
 
-    // Apparent-wind triangle orbiting OUTSIDE the ring (rotated live to AWA),
-    // so it never overlaps the centre AWS number.
-    t.aux2 = make_dir_marker(t.root, dia, 4, theme.warn);
+    // Apparent + true wind heads orbiting OUTSIDE the ring (bow-up, bow-relative),
+    // so they never overlap the centre AWS number. Apparent = filled amber chevron
+    // pointing in; true = hollow green chevron pointing out. Bearings filled live
+    // in update from metric_scalar(); reference is the bow (0).
+    ui::MarkerSpec wind_markers[2] = {
+        {NAN, ui::Glyph::ChevronIn, true, theme.warn},    // apparent wind
+        {NAN, ui::Glyph::ChevronOut, false, theme.good},  // true wind
+    };
+    t.markers = ui::build_marker_ring(t.root, w / 2, h / 2 + 4, dia / 2, wind_markers, 2,
+                                      /*occlude_lower=*/false);
 
     // Wind speed (AWS) is the hero number, sized to dominate the ring (the
     // marker is now outside, so the number can fill the dial).
@@ -1012,11 +1019,17 @@ static void update_quad_grid(lv_obj_t *root, const ScreenVariantSpec &spec, cons
                 ui::set_text_if_changed(t.secondary, t.last_secondary, sizeof(t.last_secondary),
                                         sec);
             }
-            // WindRose: spin the apparent-wind needle to AWA.
+            // WindRose: apparent + true wind heads, bow-up and bow-relative
+            // (AWA/TWA are angles relative to the bow, 0 = wind from ahead).
             if (t.kind == WidgetKind::WindRose) {
-                MetricBinding awa = {};
+                MetricBinding awa = {}, twa = {};
                 awa.source = MetricSource::AWA_deg;
-                rotate_needle(t, metric_scalar(awa, data));
+                twa.source = MetricSource::TWA_deg;
+                ui::MarkerSpec wind[2] = {
+                    {metric_scalar(awa, data), ui::Glyph::ChevronIn, true, theme.warn},
+                    {metric_scalar(twa, data), ui::Glyph::ChevronOut, false, theme.good},
+                };
+                ui::marker_ring_update(t.markers, wind, 2, /*reference=*/0.0);  // bow-up rose
             }
             break;
         }
