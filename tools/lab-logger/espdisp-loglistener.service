@@ -1,6 +1,6 @@
 [Unit]
 Description=espdisp UDP log listener (port 9999)
-Documentation=https://github.com/navado/esp32-boat-mfd/blob/main/tools/lab-logger/README.md
+Documentation=https://github.com/yey-boats/instruments/blob/main/tools/lab-logger/README.md
 After=network-online.target
 Wants=network-online.target
 

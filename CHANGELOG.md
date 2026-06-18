@@ -35,7 +35,7 @@ uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 ### Changed
 - Default SignalK target is now empty — configure with `sk <host>` rather than a baked-in hotspot IP
 
-[0.2.0]: https://github.com/navado/esp32-boat-mfd/releases/tag/v0.2.0
+[0.2.0]: https://github.com/yey-boats/instruments/releases/tag/v0.2.0
 
 ## [0.1.0] - 2026-05-24
 
@@ -57,5 +57,5 @@ uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 ### License
 - PolyForm Noncommercial 1.0.0 — free for personal, research, and noncommercial use; commercial use requires a separate license
 
-[Unreleased]: https://github.com/navado/esp32-boat-mfd/compare/v0.1.0...HEAD
-[0.1.0]: https://github.com/navado/esp32-boat-mfd/releases/tag/v0.1.0
+[Unreleased]: https://github.com/yey-boats/instruments/compare/v0.1.0...HEAD
+[0.1.0]: https://github.com/yey-boats/instruments/releases/tag/v0.1.0

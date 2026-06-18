@@ -2,7 +2,7 @@
 // See include/config_persist.h. Pure C++; host-tested in
 // test/test_config_persist. No Arduino / NVS / flash here.
 //
-// Project: esp32-boat-mfd. (c) 2026 Yey Boats Project.
+// Project: Yey Boats Instruments. (c) 2026 Yey Boats Project.
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 
 #include "config_persist.h"

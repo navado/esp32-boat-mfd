@@ -594,7 +594,7 @@ static void handle_commands_html() {
     String html;
     html.reserve(8 * 1024);
     html += F("<!doctype html>\n<meta charset=\"utf-8\">\n"
-              "<title>esp32-boat-mfd - commands</title>\n"
+              "<title>Yey Boats Instruments - commands</title>\n"
               "<style>"
               "body{font:14px/1.5 system-ui,sans-serif;background:#05101c;"
               "color:#eaf2ff;margin:0;padding:16px;max-width:1080px}"
@@ -615,7 +615,7 @@ static void handle_commands_html() {
               ".no-http{color:#ff9b8a}"
               "a{color:#9ec5fe}"
               "</style>\n"
-              "<h1>esp32-boat-mfd commands</h1>\n"
+              "<h1>Yey Boats Instruments commands</h1>\n"
               "<p class=\"note\">Reachable from BLE Nordic UART, USB serial, "
               "and (where marked) HTTP <code>POST /api/cmd</code>. "
               "Machine-readable: <a href=\"/api/commands\">/api/commands</a></p>\n");
@@ -1176,7 +1176,7 @@ static void handle_logs() {
 
 const char INDEX_HTML[] PROGMEM = R"HTML(<!doctype html>
 <meta charset="utf-8">
-<title>esp32-boat-mfd</title>
+<title>Yey Boats Instruments</title>
 <style>
   body{font:14px system-ui,sans-serif;background:#05101c;color:#eaf2ff;margin:0;padding:16px}
   h1{margin:0 0 4px 0;font-size:18px;color:#9ec5fe}
@@ -1194,7 +1194,7 @@ const char INDEX_HTML[] PROGMEM = R"HTML(<!doctype html>
   .status.stalled{color:#ffb84d}
   .status.disconnected{color:#ff4d6d}
 </style>
-<h1>esp32-boat-mfd</h1>
+<h1>Yey Boats Instruments</h1>
 <div class=row>
   <div class=card>
     <div class=k>DEVICE</div><div class=v id=dev>-</div>

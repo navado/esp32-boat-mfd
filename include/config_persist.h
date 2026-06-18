@@ -10,7 +10,7 @@
 // itself lives in manager.cpp (device-only); this module decides *whether*
 // to touch flash, never *how*.
 //
-// Project: esp32-boat-mfd. (c) 2026 Yey Boats Project.
+// Project: Yey Boats Instruments. (c) 2026 Yey Boats Project.
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 
 #include <cstdint>

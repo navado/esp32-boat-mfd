@@ -1,7 +1,7 @@
-# esp32-boat-mfd
+# Yey Boats Instruments
 
-[![CI](https://github.com/navado/esp32-boat-mfd/actions/workflows/ci.yml/badge.svg)](https://github.com/navado/esp32-boat-mfd/actions/workflows/ci.yml)
-[![Release](https://github.com/navado/esp32-boat-mfd/actions/workflows/release.yml/badge.svg)](https://github.com/navado/esp32-boat-mfd/actions/workflows/release.yml)
+[![CI](https://github.com/yey-boats/instruments/actions/workflows/ci.yml/badge.svg)](https://github.com/yey-boats/instruments/actions/workflows/ci.yml)
+[![Release](https://github.com/yey-boats/instruments/actions/workflows/release.yml/badge.svg)](https://github.com/yey-boats/instruments/actions/workflows/release.yml)
 [![License: PolyForm-NC-1.0.0](https://img.shields.io/badge/license-PolyForm--NC--1.0.0-yellow.svg)](LICENSE)
 [![PlatformIO](https://img.shields.io/badge/PlatformIO-6.x-orange.svg)](https://platformio.org)
 [![Board: ESP32-4848S040](https://img.shields.io/badge/board-ESP32--4848S040-blue.svg)](#hardware)
@@ -358,7 +358,7 @@ repository's GitHub Actions workflows, not ad-hoc local builds.
 Stable release path:
 
 1. Open the
-   [latest GitHub release](https://github.com/navado/esp32-boat-mfd/releases).
+   [latest GitHub release](https://github.com/yey-boats/instruments/releases).
 2. Download the merged firmware image for the physical board, for example
    `esp32-4848s040-merged_firmware.bin` or
    `waveshare-touch-lcd-7b_1024x600-merged_firmware.bin`.

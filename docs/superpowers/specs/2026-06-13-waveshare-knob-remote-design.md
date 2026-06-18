@@ -7,7 +7,7 @@
 ## 1. Goal
 
 Add a new board variant — the Waveshare 1.8″ round knob display — to the
-`esp32-boat-mfd` firmware. The knob is primarily a **remote controller** with a
+Yey Boats Instruments firmware. The knob is primarily a **remote controller** with a
 small set of **dedicated round views**. A rotary-encoder-driven multilevel menu
 lets the operator:
 

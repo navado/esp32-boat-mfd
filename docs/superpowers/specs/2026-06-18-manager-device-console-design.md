@@ -2,7 +2,7 @@
 
 **Status:** Design · **Date:** 2026-06-18 · **Author:** Yey Boats Project
 **Scope:** Two repos — `Instruments-manager` (SignalK manager plugin) and the
-ESP32 firmware (`esp32-boat-mfd`). One spec, implemented in ordered slices.
+ESP32 firmware (Yey Boats Instruments). One spec, implemented in ordered slices.
 
 ## Problem
 

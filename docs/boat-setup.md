@@ -69,7 +69,7 @@ installs.  Local PlatformIO builds are for development and board bring-up.
 Preferred stable path:
 
 - Download firmware and plugin assets from the latest GitHub release:
-  https://github.com/navado/esp32-boat-mfd/releases
+  https://github.com/yey-boats/instruments/releases
 - Release firmware is built from `release-*` PlatformIO environments. Those
   builds keep the board identity but disable debug/test controls such as touch
   injection, bench/fps/demo commands, and stall forensic logging.

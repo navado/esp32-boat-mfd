@@ -1,6 +1,6 @@
 # System tests
 
-End-to-end tests against a flashed `esp32-boat-mfd` device on the same
+End-to-end tests against a flashed Yey Boats Instruments device on the same
 network. Split between **unattended** (pytest, no human) and
 **attended** (markdown checklists, requires touching the device).
 
@@ -37,7 +37,7 @@ make demo-up
 pytest tests/system/unattended
 
 # Or pin a specific device by IP / .local hostname for deterministic runs.
-ESPDISP_HOST=esp32-boat-mfd.local pytest tests/system/unattended
+ESPDISP_HOST=yey-boats-instruments.local pytest tests/system/unattended
 
 # 4. Step through attended checklists
 open tests/system/attended/README.md
@@ -62,7 +62,7 @@ The generic discovery tool is also available:
 ```sh
 python3 -m tests.system.discovery --json
 python3 -m tests.system.discovery --json --listen-udp
-python3 -m tests.system.discovery --device esp32-boat-mfd.local --no-mdns
+python3 -m tests.system.discovery --device yey-boats-instruments.local --no-mdns
 python3 -m tests.system.discovery --scan-cidr 192.168.1.0/24
 ```
 

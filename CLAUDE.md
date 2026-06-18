@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project
 
-`esp32-boat-mfd` — PlatformIO/Arduino firmware turning a **Sunton ESP32-4848S040**
+**Yey Boats Instruments** — PlatformIO/Arduino firmware turning a **Sunton ESP32-4848S040**
 (ESP32-S3-N16R8, 4.0″ 480×480 ST7701 RGB panel, GT911 touch) into a SignalK
 marine multi-function display. LVGL 9 UI, WiFi+BLE provisioning, ArduinoOTA.
 Source-available under PolyForm Noncommercial 1.0.0.

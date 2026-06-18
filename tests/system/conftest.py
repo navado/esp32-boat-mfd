@@ -1,4 +1,4 @@
-"""Shared pytest fixtures for esp32-boat-mfd system tests.
+"""Shared pytest fixtures for Yey Boats Instruments system tests.
 
 The whole suite runs against a real device on the same network. We
 deliberately avoid mocking the firmware - these tests exist to catch

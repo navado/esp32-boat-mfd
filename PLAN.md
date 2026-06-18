@@ -1,4 +1,4 @@
-# esp32-boat-mfd — work in progress
+# Yey Boats Instruments — work in progress
 
 Snapshot of in-flight design / engineering threads so they can be picked
 up without re-deriving context. Not a roadmap; not advice to future

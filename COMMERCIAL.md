@@ -4,7 +4,7 @@
 source code, documentation, designs, and related materials are owned or
 controlled by the project owner or its licensors.
 
-`esp32-boat-mfd` is free to use, modify, and share for **noncommercial
+Yey Boats Instruments is free to use, modify, and share for **noncommercial
 purposes** under the [PolyForm Noncommercial License 1.0.0](LICENSE).
 
 A **commercial license is required** for any use for commercial advantage,

@@ -1,6 +1,6 @@
 # Contributing
 
-Thanks for your interest in `esp32-boat-mfd`. This is a small project
+Thanks for your interest in Yey Boats Instruments. This is a small project
 maintained in spare hours, so a few simple norms keep it healthy.
 
 ## Reporting bugs

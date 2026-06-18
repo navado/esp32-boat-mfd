@@ -1,4 +1,4 @@
-# esp32-boat-mfd development pipeline.
+# Yey Boats Instruments development pipeline.
 # Run `make help` for the list of targets.
 #
 # Override defaults at invocation:
@@ -79,7 +79,7 @@ sim:  ## Render dashboard at all resolutions via headless LVGL harness -> docs/s
 
 sys-test:  ## Run unattended system tests against ESPDISP_HOST (set env var)
 	@if [ -z "$$ESPDISP_HOST" ]; then \
-		echo "ESPDISP_HOST not set. Example: ESPDISP_HOST=esp32-boat-mfd.local make sys-test"; \
+		echo "ESPDISP_HOST not set. Example: ESPDISP_HOST=yey-boats-instruments.local make sys-test"; \
 		exit 1; \
 	fi
 	pytest tests/system/unattended

@@ -3,7 +3,7 @@
 // of manager.cpp can't quietly re-burn flash on every apply, mis-apply a
 // stale-schema blob on boot, or re-fetch an unchanged config after reboot.
 //
-// Project: esp32-boat-mfd. (c) 2026 Yey Boats Project.
+// Project: Yey Boats Instruments. (c) 2026 Yey Boats Project.
 
 #include <unity.h>
 

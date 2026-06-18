@@ -10,7 +10,7 @@ release at the maintainer's discretion.
 
 **Please do not file a public GitHub issue for security problems.**
 
-Use the repository's [private security advisory](https://github.com/navado/esp32-boat-mfd/security/advisories/new)
+Use the repository's [private security advisory](https://github.com/yey-boats/instruments/security/advisories/new)
 to report the vulnerability. Include:
 
 - A description of the issue and the impact
