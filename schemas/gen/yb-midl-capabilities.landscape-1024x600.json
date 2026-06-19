@@ -1,0 +1,33 @@
+{
+  "midl": "1.0.0",
+  "board": "waveshare-touch-lcd-5_1024x600",
+  "maxMarkersPerDial": 12,
+  "classes": [
+    {
+      "id": "landscape-1024x600",
+      "width": 1024,
+      "height": 600,
+      "maxTiles": 6,
+      "maxDepth": 4,
+      "presets": ["full", "hero-split"],
+      "elements": ["single-value", "text", "gauge", "bar", "compass", "windrose", "trend", "autopilot", "button"]
+    }
+  ],
+  "elements": [
+    { "type": "single-value", "bindings": ["value"], "attrs": ["title", "format", "size", "unit", "color"] },
+    { "type": "text", "bindings": ["value"], "attrs": ["title", "size", "color"] },
+    { "type": "gauge", "bindings": ["value"], "attrs": ["title", "size", "unit", "color", "range", "zones"] },
+    { "type": "bar", "bindings": ["value"], "attrs": ["title", "size", "unit", "color", "range", "zones"] },
+    { "type": "compass", "bindings": ["value", "dir"], "attrs": ["title", "size", "color"], "glyphs": ["triangle", "diamond", "circle", "bar", "cross", "chevron_in", "chevron_out", "chevron_left", "chevron_right", "chevron_double"] },
+    { "type": "windrose", "bindings": ["value", "dir"], "attrs": ["title", "format", "size", "unit", "color"], "glyphs": ["triangle", "diamond", "circle", "bar", "cross", "chevron_in", "chevron_out", "chevron_left", "chevron_right", "chevron_double"] },
+    { "type": "trend", "bindings": ["value"], "attrs": ["title", "size", "unit", "color"] },
+    { "type": "autopilot", "bindings": ["value"], "attrs": ["title", "size", "color"] },
+    { "type": "button", "bindings": [], "attrs": ["title", "size", "color"] }
+  ],
+  "sources": ["signalk"],
+  "actionKinds": ["nav", "command"],
+  "presets": ["full", "hero-split"],
+  "glyphs": ["triangle", "diamond", "circle", "bar", "cross", "chevron_in", "chevron_out", "chevron_left", "chevron_right", "chevron_double"],
+  "themes": ["day", "night", "high-contrast"],
+  "fonts": [14, 20, 28, 48]
+}
