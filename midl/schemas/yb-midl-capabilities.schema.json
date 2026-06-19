@@ -1,0 +1,47 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://yey.boats/schemas/yb-midl-capabilities.schema.json",
+  "title": "YB-MIDL Capabilities Manifest",
+  "type": "object",
+  "required": ["midl", "board", "classes", "elements"],
+  "properties": {
+    "midl": { "type": "string", "pattern": "^\\d+\\.\\d+\\.\\d+$" },
+    "firmwareVersion": { "type": "string" },
+    "board": { "type": "string" },
+    "classes": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["id", "maxTiles", "maxDepth"],
+        "properties": {
+          "id": { "type": "string" },
+          "width": { "type": "integer" },
+          "height": { "type": "integer" },
+          "maxTiles": { "type": "integer" },
+          "maxDepth": { "type": "integer" },
+          "presets": { "type": "array", "items": { "type": "string" } },
+          "elements": { "type": "array", "items": { "type": "string" } }
+        }
+      }
+    },
+    "elements": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["type"],
+        "properties": {
+          "type": { "type": "string" },
+          "bindings": { "type": "array", "items": { "type": "string" } },
+          "attrs": { "type": "array", "items": { "type": "string" } },
+          "units": { "type": "array", "items": { "type": "string" } },
+          "glyphs": { "type": "array", "items": { "type": "string" } }
+        }
+      }
+    },
+    "sources": { "type": "array", "items": { "type": "string" } },
+    "actionKinds": { "type": "array", "items": { "type": "string" } },
+    "presets": { "type": "array", "items": { "type": "string" } },
+    "fonts": { "type": "array", "items": { "type": "integer" } },
+    "themes": { "type": "array", "items": { "type": "string" } }
+  }
+}

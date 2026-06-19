@@ -1,0 +1,97 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://yey.boats/schemas/yb-midl-config.schema.json",
+  "title": "YB-MIDL Config Document",
+  "type": "object",
+  "required": ["midl", "screens"],
+  "properties": {
+    "midl": { "type": "string", "pattern": "^\\d+\\.\\d+\\.\\d+$" },
+    "settings": { "type": "object" },
+    "defaults": { "type": "object" },
+    "screens": { "type": "array", "items": { "$ref": "#/$defs/screen" } },
+    "alarms": { "type": "array", "items": { "$ref": "#/$defs/alarm" } },
+    "presets": { "type": "object" }
+  },
+  "$defs": {
+    "screen": {
+      "type": "object",
+      "required": ["id", "elements", "layout"],
+      "properties": {
+        "id": { "type": "string" },
+        "title": { "type": "string" },
+        "elements": { "type": "object", "additionalProperties": { "$ref": "#/$defs/element" } },
+        "layout": { "$ref": "#/$defs/node" },
+        "variants": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["class", "layout"],
+            "properties": { "class": { "type": "string" }, "layout": { "$ref": "#/$defs/node" } }
+          }
+        }
+      }
+    },
+    "element": {
+      "type": "object",
+      "required": ["type"],
+      "properties": {
+        "type": { "type": "string" },
+        "name": { "type": "string" },
+        "bindings": { "type": "object", "additionalProperties": { "$ref": "#/$defs/source" } },
+        "style": { "type": "object" },
+        "format": { "type": "object" },
+        "markers": { "type": "array" },
+        "action": { "$ref": "#/$defs/action" },
+        "zoom": { "type": "string" }
+      }
+    },
+    "source": {
+      "type": "object",
+      "required": ["kind"],
+      "properties": {
+        "kind": { "type": "string", "enum": ["signalk", "local", "const", "computed"] },
+        "path": { "type": "string" },
+        "id": { "type": "string" },
+        "expr": { "type": "string" },
+        "value": {}
+      }
+    },
+    "action": {
+      "type": "object",
+      "required": ["kind"],
+      "properties": {
+        "kind": { "type": "string", "enum": ["put", "nav", "command"] },
+        "target": { "type": "string" },
+        "value": {}
+      }
+    },
+    "node": {
+      "oneOf": [
+        { "type": "object", "required": ["element"], "additionalProperties": false,
+          "properties": { "element": { "type": "string" } } },
+        { "type": "object", "required": ["dir", "children"], "additionalProperties": false,
+          "properties": { "dir": { "enum": ["row", "col"] },
+            "children": { "type": "array", "items": { "$ref": "#/$defs/node" } },
+            "weights": { "type": "array", "items": { "type": "number" } } } },
+        { "type": "object", "required": ["rows", "cols", "cells"], "additionalProperties": false,
+          "properties": { "rows": { "type": "integer" }, "cols": { "type": "integer" },
+            "cells": { "type": "array", "items": { "$ref": "#/$defs/node" } } } },
+        { "type": "object", "required": ["preset"], "additionalProperties": false,
+          "properties": { "preset": { "type": "string" },
+            "slots": { "type": "array", "items": { "type": "string" } } } }
+      ]
+    },
+    "alarm": {
+      "type": "object",
+      "required": ["id", "source"],
+      "properties": {
+        "id": { "type": "string" },
+        "source": { "$ref": "#/$defs/source" },
+        "level": { "enum": ["info", "warn", "alarm", "emergency"] },
+        "lt": { "type": "number" },
+        "gt": { "type": "number" },
+        "message": { "type": "string" }
+      }
+    }
+  }
+}
