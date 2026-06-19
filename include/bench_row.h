@@ -16,7 +16,9 @@ struct BenchSample {
     double flush_avg_us = 0;
     double flush_peak_us = 0;  // peak
     double refresh_us = 0;
-    double lvgl_peak_us = 0;  // peak
+    double first_frame_us = 0;  // screen show -> first flush (load+first paint latency)
+    double build_us = 0;        // cold build_fn() duration for this screen (one-time)
+    double lvgl_peak_us = 0;    // peak
     // cpu
     double core0_idle_pct = 0;
     double core1_idle_pct = 0;

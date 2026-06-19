@@ -53,6 +53,21 @@ static void test_peak_fields_take_max() {
     TEST_ASSERT_EQUAL_DOUBLE(1500.0, m.loop_peak_us);
 }
 
+static void test_first_frame_and_build_are_meaned() {
+    BenchRow r;
+    BenchSample a{};
+    a.first_frame_us = 1000;
+    a.build_us = 8000;
+    BenchSample b{};
+    b.first_frame_us = 2000;
+    b.build_us = 8000;
+    r.add(a);
+    r.add(b);
+    BenchSample m = r.result();
+    TEST_ASSERT_EQUAL_DOUBLE(1500.0, m.first_frame_us);
+    TEST_ASSERT_EQUAL_DOUBLE(8000.0, m.build_us);
+}
+
 static void test_min_stack_takes_minimum() {
     BenchRow r;
     BenchSample a{};
@@ -79,6 +94,8 @@ static void test_format_row_and_header() {
     int hn = BenchRow::header(buf, sizeof(buf));
     TEST_ASSERT_TRUE(hn > 0);
     TEST_ASSERT_NOT_NULL(strstr(buf, "screen,mode,fps"));
+    TEST_ASSERT_NOT_NULL(strstr(buf, "first_frame_us"));
+    TEST_ASSERT_NOT_NULL(strstr(buf, "build_us"));
     TEST_ASSERT_NOT_NULL(strstr(buf, "ws_bytes_s"));
 
     BenchRow r;
@@ -96,6 +113,7 @@ int main(int, char **) {
     RUN_TEST(test_empty_result_is_zero);
     RUN_TEST(test_mean_of_level_fields);
     RUN_TEST(test_peak_fields_take_max);
+    RUN_TEST(test_first_frame_and_build_are_meaned);
     RUN_TEST(test_min_stack_takes_minimum);
     RUN_TEST(test_reset_clears);
     RUN_TEST(test_format_row_and_header);

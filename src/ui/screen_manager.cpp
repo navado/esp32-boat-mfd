@@ -85,8 +85,11 @@ static void ensure_built(size_t i) {
     if (i >= s_count) return;
     if (s_screens[i].root) return;
     if (!s_screens[i].build_fn) return;
+    uint32_t t0 = micros();
     s_screens[i].root = s_screens[i].build_fn(nullptr);
-    net::logf("[ui] lazy-built screen %s root=%p", s_screens[i].id, s_screens[i].root);
+    s_screens[i].build_us = micros() - t0;
+    net::logf("[ui] lazy-built screen %s root=%p in %lu us", s_screens[i].id, s_screens[i].root,
+              (unsigned long)s_screens[i].build_us);
     if (s_screens[i].root && s_post_build_cb) s_post_build_cb(s_screens[i].root, s_screens[i].id);
 }
 
@@ -198,6 +201,11 @@ bool screen_info(int index, const char **out_id, const char **out_title, bool *o
 lv_obj_t *screen_root(int index) {
     if (index < 0 || index >= (int)s_count) return nullptr;
     return s_screens[index].root;
+}
+
+uint32_t build_us(int index) {
+    if (index < 0 || index >= (int)s_count) return 0;
+    return s_screens[index].build_us;
 }
 
 void refresh_current() {

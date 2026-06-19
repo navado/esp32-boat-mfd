@@ -165,8 +165,20 @@ static volatile uint32_t g_flush_px_peak = 0;  // largest single rect (W*H)
 static volatile uint32_t g_last_invalidate_us = 0;
 static volatile uint32_t g_last_flush_us = 0;
 
+// bench-sweep "first load" latency: the sweep arms this right before ui::show()
+// and stamps g_ff_show_us; the next disp_flush_cb records show->first-flush us
+// into g_ff_us and disarms. Always compiled (disp_flush_cb references it); only
+// armed while a sweep is running.
+static volatile bool g_ff_arm = false;
+static volatile uint32_t g_ff_show_us = 0;
+static volatile uint32_t g_ff_us = 0;
+
 static void disp_flush_cb(lv_display_t *d, const lv_area_t *area, uint8_t *px_map) {
     uint32_t t0 = micros();
+    if (g_ff_arm) {  // first flush after a bench-sweep screen-show: record load latency
+        g_ff_us = t0 - g_ff_show_us;
+        g_ff_arm = false;
+    }
     uint32_t w = area->x2 - area->x1 + 1;
     uint32_t h = area->y2 - area->y1 + 1;
     uint32_t px = w * h;
@@ -1322,6 +1334,8 @@ static bench::BenchSample sweep_sample() {
     s.flush_avg_us = g_fps_avg_us;
     s.flush_peak_us = (double)g_fps_peak_us;
     s.refresh_us = (double)g_refresh_us;
+    s.first_frame_us = (double)g_ff_us;  // show -> first flush (load latency), per cell
+    s.build_us = (double)ui::build_us(g_sweep_list[g_sweep_pos]);  // cold build cost
     s.lvgl_peak_us = (double)g_lvgl_max_us;
     s.loop_peak_us = (double)g_loop_max_us;
     s.core0_idle_pct = -1;  // n/a without FreeRTOS runtime stats (see plan)
@@ -1346,7 +1360,12 @@ static bench::BenchSample sweep_sample() {
 }
 
 static void sweep_show_current() {
-    if (g_sweep_pos < g_sweep_n) ui::show(g_sweep_list[g_sweep_pos]);
+    if (g_sweep_pos < g_sweep_n) {
+        g_ff_us = 0;
+        g_ff_show_us = micros();
+        g_ff_arm = true;  // disp_flush_cb records the first frame after this show
+        ui::show(g_sweep_list[g_sweep_pos]);
+    }
 }
 
 static void bench_sweep_start() {
@@ -1424,6 +1443,8 @@ static void bench_dump() {
     size_t psram_total = heap_caps_get_total_size(MALLOC_CAP_SPIRAM);
     net::logf("[bench] fps=%.1f Hz", g_fps);
     net::logf("[bench] flush avg=%.0f us  peak=%lu us", g_fps_avg_us, (unsigned long)g_fps_peak_us);
+    net::logf("[bench] screen=%s cold-build=%lu us", ui::current_id(),
+              (unsigned long)ui::build_us(ui::current_index()));
     net::logf("[bench] loop peak=%lu us  slow section=%s %lu us  lvgl peak=%lu us",
               (unsigned long)g_loop_max_us, g_section_peak_name, (unsigned long)g_section_max_us,
               (unsigned long)g_lvgl_max_us);

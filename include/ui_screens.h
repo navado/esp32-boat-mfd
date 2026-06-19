@@ -35,6 +35,7 @@ struct Screen {
     bool hidden;                        // if true, skip in swipe cycle
     lv_obj_t *(*build_fn)(lv_obj_t *);  // lazy builder; NULL = eager (root pre-supplied)
     CollectPathsFn collect_paths;       // NULL = HUD fallback (full baseline)
+    uint32_t build_us;                  // cold build_fn() duration (us); 0 until first build
 };
 
 // Register a fullscreen panel. Must be called after the root LVGL object
@@ -92,6 +93,11 @@ bool is_hidden(int index);
 // Read-only metadata access (does NOT switch screens). Returns false if
 // index is out of range; otherwise *out_* are set (nullable).
 bool screen_info(int index, const char **out_id, const char **out_title, bool *out_hidden);
+
+// Cold-build duration for screen `index` in microseconds: the time its
+// build_fn() took the first (and only) time it was constructed. 0 if the
+// screen was never built or index is out of range. Used by the bench sweep.
+uint32_t build_us(int index);
 
 // Direct access to the screen's LVGL root - needed when main wires up
 // per-screen gesture / event handlers.
