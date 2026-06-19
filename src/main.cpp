@@ -235,6 +235,8 @@ static TouchSnapshot g_touch = {-1, -1, false, 0, -1, -1};
 static SemaphoreHandle_t g_touch_mtx = nullptr;
 static SemaphoreHandle_t g_touch_i2c_mtx = nullptr;
 static TaskHandle_t g_touch_task = nullptr;
+static TaskHandle_t g_lvgl_task = nullptr;  // dedicated LVGL pump (core 1)
+static void lvgl_task(void *);              // defined near loop()
 
 static uint8_t g_gt911_addr = 0x5D;
 static volatile uint32_t g_i2c_err_count = 0;
@@ -2157,16 +2159,23 @@ void setup() {
     lv_display_t *disp = lv_display_create(LCD_W, LCD_H);
     lv_display_set_flush_cb(disp, disp_flush_cb);
 
-    // Render path: prefer DIRECT mode into the RGB panel's PSRAM framebuffer
-    // (gfx->getFramebuffer() = the buffer the LCD DMA continuously scans out).
-    // LVGL renders changed areas straight into it, so disp_flush_cb only writes
-    // back the dirty rows (cache mgmt) instead of CPU-copying every tile via
-    // draw16bitRGBBitmap. Removes the whole blit + one of the three PSRAM
-    // round-trips per pixel -> shorter first-paint stalls and flush cost.
-    // Trade-off: single scanout buffer can tear on large repaints (acceptable
-    // for a 5 Hz instrument UI). Falls back to the PARTIAL two-buffer + blit
-    // path if the framebuffer pointer is unavailable.
+    // Render path. DIRECT mode renders straight into the RGB panel's scanout
+    // framebuffer (gfx->getFramebuffer()), so disp_flush_cb only writes back the
+    // dirty rows instead of CPU-copying every tile - fastest, but a SINGLE
+    // scanout buffer renders progressively, so large dynamic repaints (steering,
+    // full-screen) visibly FLICKER/tear. Measured huge first-paint wins
+    // (wind_classic 2.45->0.88s) but the flicker is unacceptable on a marine
+    // instrument, so DIRECT is opt-in (-DRENDER_DIRECT_FB) pending a
+    // double-buffered/page-flipped panel setup. Default = buffered PARTIAL mode:
+    // LVGL renders tiles to an off-screen PSRAM buffer and disp_flush_cb blits
+    // each COMPLETE tile in one fast memcpy -> atomic, no flicker. (Internal-SRAM
+    // draw buffers would render faster but internal low-water is already ~12 KB
+    // with the dedicated LVGL task - the documented WiFi/BLE starvation trap.)
+#ifdef RENDER_DIRECT_FB
     uint16_t *fb = gfx->getFramebuffer();
+#else
+    uint16_t *fb = nullptr;
+#endif
     if (fb) {
         g_direct_fb = fb;
         lv_display_set_buffers(disp, fb, NULL, (uint32_t)LCD_W * LCD_H * sizeof(uint16_t),
@@ -2370,6 +2379,14 @@ void setup() {
 
     net::setExtraCommandHandler(handleMainCommand);
     ui::log_state();
+
+    // Start the dedicated LVGL pump LAST: all display/screen/timer init above
+    // ran single-threaded on loopTask; from here lv_* lives only on g_lvgl_task.
+    // Core 1 (same as loopTask/Arduino) so heavy renders never land on core 0's
+    // WiFi/BLE stack; priority 1 to time-share cooperatively with loop(). 10 KB
+    // stack: measured peak use is ~5.7 KB (uxTaskGetStackHighWaterMark), and a
+    // smaller stack keeps internal-SRAM low-water out of the WiFi-starvation zone.
+    xTaskCreatePinnedToCore(lvgl_task, "lvgl", 10240, nullptr, 1, &g_lvgl_task, 1);
 }
 
 static String serial_line;
@@ -2394,16 +2411,29 @@ static void pollSerialCommands() {
     }
 }
 
+// Dedicated LVGL pump. Runs lv_timer_handler (render + ui_refresh + app::pump +
+// touch indev + screenshot) on its own core-1 task so a slow first-paint stall
+// no longer blocks net/web/serial in loop() and vice versa. LVGL is single-
+// threaded: ALL lv_* calls must stay on this task; the rest of the system
+// enqueues work via app::Command. Generous 16 KB stack - the SW rasterizer and
+// app::pump can go deep (see "never build a large struct on a task stack").
+static void lvgl_task(void *) {
+    for (;;) {
+        uint32_t t = micros();
+        lv_timer_handler();
+        uint32_t dt = micros() - t;
+        if (dt > g_lvgl_max_us) g_lvgl_max_us = dt;
+        note_slow_section("lvgl", dt);
+        vTaskDelay(pdMS_TO_TICKS(5));
+    }
+}
+
 void loop() {
     uint32_t t_loop = micros();
 
+    // lv_timer_handler now runs on g_lvgl_task (started at end of setup), not
+    // here - loop() owns connectivity/serial only.
     uint32_t t_section = micros();
-    lv_timer_handler();
-    uint32_t dt_lvgl = micros() - t_section;
-    if (dt_lvgl > g_lvgl_max_us) g_lvgl_max_us = dt_lvgl;
-    note_slow_section("lvgl", dt_lvgl);
-
-    t_section = micros();
     net::loop();
     note_slow_section("net", micros() - t_section);
 
