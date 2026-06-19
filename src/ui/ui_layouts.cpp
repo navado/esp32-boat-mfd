@@ -539,6 +539,20 @@ static void paint_numeric_body(QuadGridTile &t, const MetricBinding &m, int w, i
     }
 }
 
+// Center, in t.root *content* coordinates, of a dial placed with
+// LV_ALIGN_CENTER, 0, +4 on a style_panel()'d tile. style_panel adds a
+// border + padding inset, so LV_ALIGN_CENTER centers the dial inside the
+// content box (w - 2*inset wide), while lv_obj_set_pos() in make_holder is
+// ALSO content-relative. Passing the raw tile center (w/2, h/2) to
+// build_marker_ring therefore lands the marker pivot `inset` px down-and-right
+// of the dial center, decentering the orbiting glyphs. Compute the matching
+// content-area center so the marker ring is concentric with the dial.
+static inline void dial_center(int w, int h, int &cx, int &cy) {
+    const int inset = chrome::panel_border + chrome::panel_pad;
+    cx = (w - 2 * inset) / 2;
+    cy = (h - 2 * inset) / 2 + 4;  // matches the dial's LV_ALIGN_CENTER, 0, +4
+}
+
 // Compass widget: round bezel with accent border, heading number in the
 // center, small "▲" marker at top, CTS label at bottom. Mirrors editor
 // .wpreview .compass.
@@ -570,7 +584,9 @@ static void paint_compass_body(QuadGridTile &t, const MetricBinding &m, int w, i
         {NAN, ui::Glyph::Triangle, false, theme.good},
         {NAN, ui::Glyph::Diamond, true, theme.alarm},
     };
-    t.markers = ui::build_marker_ring(t.root, w / 2, h / 2 + 4, dia / 2, steer_markers, 3,
+    int mcx, mcy;
+    dial_center(w, h, mcx, mcy);
+    t.markers = ui::build_marker_ring(t.root, mcx, mcy, dia / 2, steer_markers, 3,
                                       /*occlude_lower=*/false);
 
     // N/E/S/W cardinals: padded in from the ring border so they don't
@@ -728,7 +744,9 @@ static void paint_wind_rose_body(QuadGridTile &t, const MetricBinding & /*m*/, i
         {NAN, ui::Glyph::ChevronIn, true, theme.warn},    // apparent wind
         {NAN, ui::Glyph::ChevronOut, false, theme.good},  // true wind
     };
-    t.markers = ui::build_marker_ring(t.root, w / 2, h / 2 + 4, dia / 2, wind_markers, 2,
+    int mcx, mcy;
+    dial_center(w, h, mcx, mcy);
+    t.markers = ui::build_marker_ring(t.root, mcx, mcy, dia / 2, wind_markers, 2,
                                       /*occlude_lower=*/false);
 
     // Wind speed (AWS) is the hero number, sized to dominate the ring (the
