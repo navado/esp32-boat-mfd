@@ -357,14 +357,10 @@ clean:  ## Remove build artifacts (keeps include/secrets.h)
         proto lint pre-commit hooks-install format backup release-tag clean \
         gen-manifest check-catalog
 
+# MIDL catalog/generator now live in the midl/ submodule (yey-boats/midl);
+# these delegate so `make gen-manifest` / `make check-catalog` still work here.
 gen-manifest:
-	@mkdir -p schemas/gen
-	@c++ -std=c++17 -Iinclude tools/yb_midl_gen/gen.cpp -o /tmp/yb_midl_gen
-	/tmp/yb_midl_gen square-480 esp32-4848s040 > schemas/gen/yb-midl-capabilities.square-480.json
-	/tmp/yb_midl_gen landscape-800x480 waveshare-touch-lcd-4_3 > schemas/gen/yb-midl-capabilities.landscape-800x480.json
-	/tmp/yb_midl_gen landscape-1024x600 waveshare-touch-lcd-5_1024x600 > schemas/gen/yb-midl-capabilities.landscape-1024x600.json
-	@echo "generated schemas/gen/*.json"
+	$(MAKE) -C midl gen-manifest
 
 check-catalog:
-	@c++ -std=c++17 -Iinclude tools/yb_midl_gen/check_catalog.cpp -o /tmp/yb_midl_check
-	/tmp/yb_midl_check
+	$(MAKE) -C midl check-catalog
