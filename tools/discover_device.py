@@ -1,13 +1,13 @@
 #!/usr/bin/env python3
-"""Discover an espdisp MFD on the local network or over BLE.
+"""Discover a yey-display MFD on the local network or over BLE.
 
 Resolution order (each step capped by --timeout, default 5 s):
 
-  1. mDNS `_espdisp._tcp` - the firmware's own service advertisement.
+  1. mDNS `_yeyboats._tcp` - the firmware's own service advertisement.
      Carries IP + TXT records (device_id, board, firmware, version).
   2. mDNS `_arduino._tcp` - ArduinoOTA's service. Carries IP + the
      OTA port (3232 by default).
-  3. BLE NUS - scan for advertisers whose name starts with `espdisp`,
+  3. BLE NUS - scan for advertisers whose name starts with `yey-d`,
      connect, send `ip`, parse the `ip=<x.x.x.x>` line from the log
      stream (the device echoes log lines over NUS notifications).
 
@@ -19,7 +19,7 @@ Output:
 Filtering & ambiguity:
   - `--name <id>` exact-matches (case-insensitive) the mDNS instance
     name, the mDNS `device_id` TXT field, or the BLE advertised name.
-    This is the safe default - it prevents a spoofed `espdisp-evil`
+    This is the safe default - it prevents a spoofed `yey-d-evil`
     responder from being picked when you only meant your own device.
   - `--name-contains <substr>` re-enables loose substring matching for
     interactive use; never use it in flash automation.
@@ -31,7 +31,7 @@ Filtering & ambiguity:
 Security note:
   mDNS and the BLE NUS `ip` reply are both unauthenticated, so any
   host on the same L2 segment (or within BLE range) can advertise an
-  `espdisp` service or BLE name and steer this script at an attacker
+  `yeyboats` service or `yey-d` BLE name and steer this script at an attacker
   IP. If `make ota` is then run, `firmware.bin` - including any WiFi
   PSK baked into secrets.h - is uploaded to that IP. `OTA_PASSWORD`
   in secrets.h is the only authentication on the OTA channel; leaving
@@ -138,7 +138,7 @@ def discover_mdns(service: str, timeout: float) -> list[Device]:
 
 
 async def discover_ble(timeout: float) -> list[Device]:
-    """Scan for `espdisp*` BLE advertisers for `timeout`, then query
+    """Scan for `yey-d*` BLE advertisers for `timeout`, then query
     each over NUS for its IP. Returns every device that reported a
     valid IPv4. No filtering - caller decides which to use."""
     try:
@@ -154,7 +154,7 @@ async def discover_ble(timeout: float) -> list[Device]:
 
     devices = await BleakScanner.discover(timeout=timeout)
     candidates = [d for d in devices
-                  if (d.name or "").lower().startswith("espdisp")]
+                  if (d.name or "").lower().startswith("yey-d")]
     out: list[Device] = []
     for d in candidates:
         ip_holder: dict[str, str] = {}
@@ -222,7 +222,7 @@ def main() -> int:
 
     found: list[Device] = []
     if args.method in ("auto", "mdns"):
-        for svc in ("espdisp", "arduino"):
+        for svc in ("yeyboats", "arduino"):
             for d in discover_mdns(svc, args.timeout):
                 # Dedupe across both services by (ip, name).
                 if not any(x.ip == d.ip and x.name == d.name for x in found):
@@ -239,7 +239,7 @@ def main() -> int:
                   file=sys.stderr)
             print(_format_candidates(found), file=sys.stderr)
         else:
-            print("no espdisp device found", file=sys.stderr)
+            print("no yey-display device found", file=sys.stderr)
         return 1
     if len(matches) > 1:
         print(f"ambiguous: {len(matches)} devices match; pass --name to pin one:",

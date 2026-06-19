@@ -59,7 +59,7 @@ def main() -> int:
                 "",
                 f"#define WIFI_SSID  {c_string(env('ESPDISP_WIFI_SSID'))}",
                 f"#define WIFI_PASS  {c_string(env('ESPDISP_WIFI_PASS'))}",
-                f"#define OTA_HOSTNAME  {c_string(env('ESPDISP_OTA_HOSTNAME', 'espdisp'))}",
+                f"#define OTA_HOSTNAME  {c_string(env('ESPDISP_OTA_HOSTNAME', 'yey-d'))}",
                 f"#define OTA_PASSWORD  {c_string(ota_password)}",
                 f"#define UDP_LOG_PORT {integer_macro('ESPDISP_UDP_LOG_PORT', '9999')}",
                 "",

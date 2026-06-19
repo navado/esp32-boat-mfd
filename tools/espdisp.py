@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Unified CLI for poking an espdisp MFD over BLE NUS, HTTP, and UDP.
+"""Unified CLI for poking a yey-display MFD over BLE NUS, HTTP, and UDP.
 
 Replaces the inline `python3 - <<PY` heredocs that have been sprinkled
 through OTA wrappers, lab notes, and debugging sessions. Every operation
@@ -29,7 +29,7 @@ Common options:
   --device-ip IP          Pin HTTP target. Otherwise resolved via discover.
   --remote user@host      Proxy HTTP/ping through SSH (when this host
                           can't reach the device subnet directly).
-  --name SUBSTRING        BLE device-name filter (default: any "espdisp*").
+  --name SUBSTRING        BLE device-name filter (default: any "yey-d*").
   --timeout SECONDS       Per-op timeout (default per-subcommand).
 
 Configuration precedence (highest first):
@@ -184,7 +184,7 @@ async def _ble_scan(name_filter: Optional[str], timeout: float):
         from bleak import BleakScanner
     except ImportError:
         die("bleak not installed; pip install bleak")
-    needle = (name_filter or "espdisp").lower()
+    needle = (name_filter or "yey-d").lower()
     return await BleakScanner.find_device_by_filter(
         lambda d, _adv: (d.name or "").lower().startswith(needle), timeout=timeout
     )
@@ -200,7 +200,7 @@ async def ble_cmd(commands: list[str], name_filter: Optional[str],
         die("bleak not installed; pip install bleak")
     d = await _ble_scan(name_filter, timeout)
     if not d:
-        print("no espdisp BLE device found", file=sys.stderr)
+        print("no yey-d BLE device found", file=sys.stderr)
         return 1
     print(f"# ble: {d.name} {d.address}", file=sys.stderr)
     async with BleakClient(d) as c:
@@ -228,7 +228,7 @@ async def ble_query_ip(name_filter: Optional[str], timeout: float) -> int:
         die("bleak not installed; pip install bleak")
     d = await _ble_scan(name_filter, timeout)
     if not d:
-        print("no espdisp BLE device found", file=sys.stderr)
+        print("no yey-d BLE device found", file=sys.stderr)
         return 1
     pat = re.compile(r"ip=(\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3})")
     async with BleakClient(d) as c:
@@ -262,7 +262,7 @@ async def ble_fire_and_forget(cmd: str, name_filter: Optional[str],
         die("bleak not installed; pip install bleak")
     d = await _ble_scan(name_filter, timeout)
     if not d:
-        print("no espdisp BLE device found", file=sys.stderr)
+        print("no yey-d BLE device found", file=sys.stderr)
         return 1
     async with BleakClient(d) as c:
         await c.write_gatt_char(NUS_RX, cmd.encode(), response=False)

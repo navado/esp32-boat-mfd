@@ -145,7 +145,7 @@ import asyncio
 from bleak import BleakClient, BleakScanner
 async def main():
     d = await BleakScanner.find_device_by_filter(
-        lambda dev, adv: (dev.name or "").lower().startswith("espdisp"), timeout=15)
+        lambda dev, adv: (dev.name or "").lower().startswith("yey-d"), timeout=15)
     if not d:
         print("no ble device found")
         return
