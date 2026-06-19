@@ -73,3 +73,38 @@ mode has no separate draw buffer (LVGL renders into the PSRAM framebuffer
 directly). A partial-mode internal-SRAM buffer would also be *slower* than
 DIRECT here (it reintroduces the blit: render→SRAM, then SRAM-read→PSRAM-write),
 so it is not pursued as a cumulative step.
+
+## Flicker + the double-buffering investigation
+
+DIRECT mode (opt2) was confirmed on hardware to **flicker heavily** on
+steering / full-screen repaints: a single scanout framebuffer is rendered
+*progressively* (background, then glyphs/arcs), and the LCD DMA scans those
+intermediate states. The shipped default reverts to buffered **PARTIAL** mode
+(complete tiles blitted atomically → no flicker), keeping the quantize + task
+wins. DIRECT remains opt-in behind `-DRENDER_DIRECT_FB`.
+
+The "fast **and** smooth" path is panel **double-buffering** (two framebuffers,
+vsync page-flip): LVGL renders the back buffer, the panel swaps to it on vsync,
+so the scanout always shows a complete frame — no flicker **and** no blit.
+
+**Blocked on this platform.** It needs `esp_lcd_rgb_panel_config_t.num_fbs = 2`
++ `esp_lcd_rgb_panel_get_frame_buffer()`, which **only exist in esp-idf ≥ 5.0**.
+This firmware is on **arduino-esp32 2.x / esp-idf 4.4.7** (the active RGB header
+has no `num_fbs`/`double_fb`/`get_frame_buffer`), and the IDF 5.x bump is the
+explicitly-parked **spec 21 A** migration (~5-7 days; NimBLE-Arduino 1.4
+`esp_bt.h` incompatibility + 36 stricter format-string sites — see
+`platformio.ini` header). A working `num_fbs=2` + vsync-flip implementation was
+drafted and validated against the idf-5.1 API, then reverted because it cannot
+compile on 4.4; fold it into spec 21 A.
+
+LVGL is already a retained-mode compositor doing partial/delta redraws, so a
+custom "composer" is **not** the answer — the lever is frame *presentation*
+(single vs double buffer), which is the idf-5.x dependency above.
+
+### Achievable now (idf 4.4), no flicker
+
+The remaining first-paint cost is render-bound. The lever that works today is
+reducing draw work — e.g. collapsing the static compass rose (36 ticks +
+cardinals) into one pre-rendered image so first-paint blits one bitmap instead
+of rasterizing 44 vector objects. Cuts first-paint on autopilot/wind_steer/
+wind_classic without touching the render-mode/flicker tradeoff.
