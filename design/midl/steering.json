@@ -9,42 +9,100 @@
         "compass": {
           "type": "compass",
           "name": "HDG",
-          "bindings": { "value": { "kind": "signalk", "path": "navigation.headingTrue" } },
-          "style": { "title": "HDG", "size": 48 },
+          "bindings": {
+            "value": {
+              "kind": "signalk",
+              "path": "navigation.headingTrue"
+            }
+          },
+          "style": {
+            "title": "HDG",
+            "size": 48
+          },
           "markers": [
-            { "id": "CTS", "glyph": "diamond", "color": "good", "dir": { "kind": "signalk", "path": "navigation.courseRhumbline.bearingTrackTrue" } }
+            {
+              "id": "CTS",
+              "glyph": "diamond",
+              "color": "good",
+              "dir": {
+                "kind": "signalk",
+                "path": "navigation.courseRhumbline.bearingTrackTrue"
+              }
+            }
           ]
         },
         "xte": {
           "type": "single-value",
           "name": "XTE",
-          "bindings": { "value": { "kind": "signalk", "path": "navigation.courseRhumbline.crossTrackError" } },
-          "format": { "unit": "m", "decimals": 0 },
-          "style": { "title": "XTE", "size": 28 }
+          "bindings": {
+            "value": {
+              "kind": "signalk",
+              "path": "navigation.courseRhumbline.crossTrackError"
+            }
+          },
+          "format": {
+            "unit": "nm",
+            "decimals": 2,
+            "side": "port-stbd"
+          },
+          "style": {
+            "title": "XTE",
+            "size": 28
+          }
         },
         "vmg": {
           "type": "single-value",
           "name": "VMG",
-          "bindings": { "value": { "kind": "signalk", "path": "navigation.courseRhumbline.velocityMadeGood" } },
-          "format": { "unit": "kn", "decimals": 1 },
-          "style": { "title": "VMG", "size": 28 }
+          "bindings": {
+            "value": {
+              "kind": "signalk",
+              "path": "navigation.courseRhumbline.velocityMadeGood"
+            }
+          },
+          "format": {
+            "unit": "kn",
+            "decimals": 1
+          },
+          "style": {
+            "title": "VMG",
+            "size": 28
+          }
         },
         "rudder": {
           "type": "single-value",
           "name": "RUDDER",
-          "bindings": { "value": { "kind": "signalk", "path": "steering.rudderAngle" } },
-          "format": { "unit": "deg", "decimals": 0 },
-          "style": { "title": "RUDDER", "size": 28 }
+          "bindings": {
+            "value": {
+              "kind": "signalk",
+              "path": "steering.rudderAngle"
+            }
+          },
+          "format": {
+            "unit": "deg",
+            "decimals": 0
+          },
+          "style": {
+            "title": "RUDDER",
+            "size": 28
+          }
         }
       },
       "layout": {
         "rows": 2,
         "cols": 2,
         "cells": [
-          { "element": "compass" },
-          { "element": "xte" },
-          { "element": "vmg" },
-          { "element": "rudder" }
+          {
+            "element": "compass"
+          },
+          {
+            "element": "xte"
+          },
+          {
+            "element": "vmg"
+          },
+          {
+            "element": "rudder"
+          }
         ]
       }
     }
