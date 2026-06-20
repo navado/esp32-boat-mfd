@@ -93,6 +93,8 @@ void applyValue(const char *path, JsonVariant val, Data &out) {
         out.gybeAngle = asDouble(val, out.gybeAngle);
     } else if (strcmp(path, "steering.autopilot.target.headingTrue") == 0) {
         out.apTargetHdg = asDouble(val, out.apTargetHdg);
+    } else if (strcmp(path, "steering.rudderAngle") == 0) {
+        out.rudder = asDouble(val, out.rudder);
     } else if (strcmp(path, "environment.current.setTrue") == 0 ||
                strcmp(path, "environment.current.drift.setTrue") == 0) {
         out.currentSetTrue = asDouble(val, out.currentSetTrue);

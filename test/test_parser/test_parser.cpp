@@ -183,6 +183,28 @@ static void test_parses_autopilot_state_and_target() {
     TEST_ASSERT_EQUAL_STRING("auto", d.apState);
 }
 
+static void test_parses_rudder_angle() {
+    Data d;
+    const char *j = "{\"updates\":[{\"values\":["
+                    "{\"path\":\"steering.rudderAngle\",\"value\":-0.2618}"  // -15 deg
+                    "]}]}";
+    int n = sk::applyDelta(j, strlen(j), d);
+    TEST_ASSERT_EQUAL(1, n);
+    TEST_ASSERT_FLOAT_WITHIN(0.001, -0.2618, d.rudder);
+}
+
+static void test_parses_vmg_performance_path() {
+    // The live SignalK/sim publishes performance.velocityMadeGood (not the
+    // courseRhumbline alias); both must populate vmg.
+    Data d;
+    const char *j = "{\"updates\":[{\"values\":["
+                    "{\"path\":\"performance.velocityMadeGood\",\"value\":-1.83}"
+                    "]}]}";
+    int n = sk::applyDelta(j, strlen(j), d);
+    TEST_ASSERT_EQUAL(1, n);
+    TEST_ASSERT_FLOAT_WITHIN(0.001, -1.83, d.vmg);
+}
+
 static void test_parses_current() {
     Data d;
     const char *j = "{\"updates\":[{\"values\":["
@@ -350,6 +372,8 @@ int main(int, char **) {
     RUN_TEST(test_null_value_does_not_overwrite);
     RUN_TEST(test_parses_route_fields);
     RUN_TEST(test_parses_autopilot_state_and_target);
+    RUN_TEST(test_parses_rudder_angle);
+    RUN_TEST(test_parses_vmg_performance_path);
     RUN_TEST(test_parses_current);
     RUN_TEST(test_great_circle_aliases_route);
     RUN_TEST(test_apstate_truncates_safely);

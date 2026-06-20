@@ -65,6 +65,9 @@ struct Snapshot {
     Field dtw_m;
     Field vmg_mps;
 
+    // steering
+    Field rudder_angle_rad;
+
     // autopilot
     Field autopilot_target_rad;
     char autopilot_state[16] = {0};

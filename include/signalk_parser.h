@@ -51,6 +51,7 @@ struct Data {
     double dtw = NAN;          // distance to waypoint, m
     double vmg = NAN;          // velocity made good, m/s
     double apTargetHdg = NAN;  // autopilot target heading, rad
+    double rudder = NAN;       // rudder angle, rad (+ = starboard helm, steering.rudderAngle)
     char apState[16] = {0};    // autopilot state string ("auto", "wind", "standby", ...)
 
     // current / tide

@@ -43,6 +43,7 @@ void compose_from_boat(sk::Data &out, uint32_t now_ms) {
     out.btw = v(s.btw_rad);
     out.dtw = v(s.dtw_m);
     out.vmg = v(s.vmg_mps);
+    out.rudder = v(s.rudder_angle_rad);
     out.apTargetHdg = v(s.autopilot_target_rad);
     out.currentSetTrue = v(s.current_set_rad);
     out.currentDrift = v(s.current_drift_mps);
@@ -84,6 +85,7 @@ int bridge_signalk_into_boat(const sk::Data &sk, uint32_t now_ms) {
     n += pub(&Snapshot::btw_rad, now_ms, sk.btw);
     n += pub(&Snapshot::dtw_m, now_ms, sk.dtw);
     n += pub(&Snapshot::vmg_mps, now_ms, sk.vmg);
+    n += pub(&Snapshot::rudder_angle_rad, now_ms, sk.rudder);
     n += pub(&Snapshot::autopilot_target_rad, now_ms, sk.apTargetHdg);
     n += pub(&Snapshot::current_set_rad, now_ms, sk.currentSetTrue);
     n += pub(&Snapshot::current_drift_mps, now_ms, sk.currentDrift);

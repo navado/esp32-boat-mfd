@@ -141,6 +141,12 @@ static const char *const FULL_PATHS[] = {
     "navigation.courseRhumbline.nextPoint.bearingTrue",
     "navigation.courseRhumbline.nextPoint.distance",
     "navigation.courseRhumbline.velocityMadeGood",
+    // VMG is commonly published under performance.* (the sim/most plugins do
+    // not emit the courseRhumbline alias above). Subscribe both; the parser
+    // maps either onto sk::data.vmg.
+    "performance.velocityMadeGood",
+    // Rudder angle for the steering/wind-steer rudder gauge.
+    "steering.rudderAngle",
     // Polar targets (optional; from a SignalK polar plugin). The wind-steer
     // screen uses these for tack/gybe angles, falling back to empirical
     // estimates when absent.
