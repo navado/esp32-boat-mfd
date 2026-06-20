@@ -163,7 +163,9 @@ lv_obj_t *build(lv_obj_t *parent) {
     lv_label_set_text(unit, "m");
     lv_obj_set_style_text_font(unit, &lv_font_montserrat_28, 0);
     lv_obj_set_style_text_color(unit, lv_color_hex(theme.fg_dim), 0);
-    lv_obj_align(unit, LV_ALIGN_CENTER, 60, 30);
+    // Bottom-right of the hero, clear of the fit-scaled value (which is centred
+    // with a left bias and never grows past the reserved unit gutter).
+    lv_obj_align(unit, LV_ALIGN_BOTTOM_RIGHT, -16, -16);
 
     // Three stats side by side. Shorter (88 px) and higher than Trip's row to
     // leave a ~170 px history strip at the bottom.
@@ -227,9 +229,23 @@ void refresh() {
     sk::copyData(d);
     char buf[32];
 
-    // Hero: depth below keel, k/M-scaled per the depth unit format.
+    // Hero: depth below keel (fixed decimals, no k/M scaling per design S1).
     vfmt::format_scaled(d.depthKeel, config::format().depth, buf, sizeof(buf));
-    set_text_if_changed(lbl_depth, s_last_depth, sizeof(s_last_depth), buf);
+    if (set_text_if_changed(lbl_depth, s_last_depth, sizeof(s_last_depth), buf)) {
+        // Double the 64 px font (512 = 2.0x), but shrink to fit so a long
+        // reading (deep water / out-of-range) can't overflow the hero card or
+        // collide with the "m" unit. avail = hero width minus a unit gutter.
+        lv_point_t sz;
+        lv_text_get_size(&sz, buf, &font_xl_64, 0, 0, LV_COORD_MAX, LV_TEXT_FLAG_NONE);
+        int scale = 512;
+        const int avail = LCD_W - 16 - 96;  // hero w (464) - unit/margin
+        if (sz.x > 0) {
+            int fit = avail * 256 / sz.x;
+            if (fit < scale) scale = fit;
+        }
+        if (scale < 160) scale = 160;  // floor ~0.6x so it stays a hero
+        lv_obj_set_style_transform_scale(lbl_depth, scale, 0);
+    }
 
     // History sparkline: push depth-below-keel (in cm to keep integer
     // resolution) once per second, then autoscale Y from the ring buffer.
