@@ -457,6 +457,24 @@ static double scalar_unit_fraction(MetricSource src, double v) {
 // number's pixel width changes ("9.7" vs "12.74"). Value size scales
 // with tile area so the number takes ~60% of the vertical content
 // region (the "75% of dedicated space" rule in the goal).
+// Shrink the hero value font to the largest ladder step whose rendered width
+// fits `max_w`. Always starts from the biggest font so the value grows back
+// when it shortens. Fixes wide scaled strings (e.g. "68.07kS", "453.95")
+// overflowing/clipping QuadGrid tiles. Called only on text change.
+static void fit_value_font(lv_obj_t *label, const char *txt, int max_w) {
+    static const lv_font_t *const ladder[] = {&font_xl_64, &lv_font_montserrat_48,
+                                              &lv_font_montserrat_38, &lv_font_montserrat_28};
+    for (int i = 0; i < 4; ++i) {
+        lv_point_t sz;
+        lv_text_get_size(&sz, txt, ladder[i], 0, 0, LV_COORD_MAX, LV_TEXT_FLAG_NONE);
+        if (sz.x <= max_w) {
+            lv_obj_set_style_text_font(label, ladder[i], 0);
+            return;
+        }
+    }
+    lv_obj_set_style_text_font(label, ladder[3], 0);
+}
+
 static void paint_numeric_body(QuadGridTile &t, const MetricBinding &m, int w, int h) {
     bool has_extras = (m.extras_count > 0);
 
@@ -1055,7 +1073,12 @@ static void update_quad_grid(lv_obj_t *root, const ScreenVariantSpec &spec, cons
         default:
             // Numeric, WindRose, Text, Trend fallback - all use
             // the value/secondary text slots populated by format_metric.
-            ui::set_text_if_changed(t.value, t.last_value, sizeof(t.last_value), pri);
+            if (ui::set_text_if_changed(t.value, t.last_value, sizeof(t.last_value), pri) &&
+                t.kind == WidgetKind::Numeric && m.extras_count == 0) {
+                // Shrink the hero value to fit the tile (scaled k/M strings + a
+                // P/S suffix can be wider than the big font allows).
+                fit_value_font(t.value, pri, QG_TILE_W - 56);
+            }
             if (t.secondary) {
                 ui::set_text_if_changed(t.secondary, t.last_secondary, sizeof(t.last_secondary),
                                         sec);
@@ -1151,6 +1174,17 @@ static lv_obj_t *create_hero_plus(lv_obj_t *parent, const ScreenVariantSpec &spe
     lv_obj_set_style_radius(hero, 10, 0);
     lv_obj_set_style_pad_all(hero, 0, 0);
     lv_obj_clear_flag(hero, LV_OBJ_FLAG_SCROLLABLE);
+
+    // Hero caption: the binding label (e.g. "BELOW KEEL") so the hero datum is
+    // unambiguous even when the screen title is generic ("Depth"). Distinct
+    // from below-transducer, which is otherwise indistinguishable.
+    if (st->metric.label && st->metric.label[0]) {
+        lv_obj_t *hcap = lv_label_create(hero);
+        lv_label_set_text(hcap, st->metric.label);
+        lv_obj_set_style_text_font(hcap, &lv_font_montserrat_14, 0);
+        lv_obj_set_style_text_color(hcap, lv_color_hex(theme.fg_dim), 0);
+        lv_obj_align(hcap, LV_ALIGN_TOP_LEFT, 12, 10);
+    }
 
     st->primary_value = lv_label_create(hero);
     lv_label_set_text(st->primary_value, "--");

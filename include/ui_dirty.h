@@ -21,13 +21,16 @@
 
 namespace ui {
 
-inline void set_text_if_changed(lv_obj_t *obj, char *cache, size_t cap, const char *value) {
-    if (!obj || !cache || cap == 0 || !value) return;
+// Returns true if the value changed (and was written), false if it was a no-op.
+inline bool set_text_if_changed(lv_obj_t *obj, char *cache, size_t cap, const char *value) {
+    if (!obj || !cache || cap == 0 || !value) return false;
     if (strncmp(cache, value, cap) != 0) {
         strncpy(cache, value, cap - 1);
         cache[cap - 1] = 0;
         lv_label_set_text(obj, value);
+        return true;
     }
+    return false;
 }
 
 inline void set_rot_if_changed(lv_obj_t *obj, int16_t *cache, int16_t value) {

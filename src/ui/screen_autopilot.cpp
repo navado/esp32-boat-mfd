@@ -9,6 +9,8 @@
 #include "net.h"
 #include "board_pins.h"
 #include "app_events.h"
+#include "config_runtime.h"
+#include "value_format.h"
 
 #include <ctype.h>
 #include <math.h>
@@ -440,11 +442,11 @@ void refresh() {
     }
 
     // Tiles.
-    if (!isnan(d.depth)) {
-        snprintf(buf, sizeof(buf), "%.1f", d.depth);
+    {
+        // Same k/M scaling + configured decimals as the templated screens, so a
+        // deep sounding reads "2.7k" instead of an over-precise "2667.7".
+        vfmt::format_scaled(d.depth, config::format().depth, buf, sizeof(buf));
         set_text_if_changed(tile_depth, s_last_depth, sizeof(s_last_depth), buf);
-    } else {
-        set_text_if_changed(tile_depth, s_last_depth, sizeof(s_last_depth), "--");
     }
     if (!isnan(d.stw)) {
         snprintf(buf, sizeof(buf), "%.1f", mps_to_kn(d.stw));

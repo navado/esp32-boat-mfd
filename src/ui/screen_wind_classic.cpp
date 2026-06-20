@@ -542,11 +542,12 @@ lv_obj_t *build(lv_obj_t *parent) {
     inner_readout(s_root, "HDG", 0, -96, &lv_font_montserrat_48, theme.accent, &lbl_hdg_value,
                   nullptr);
 
-    // SOG / SOW in the bottom screen corners (outside the ring).
+    // SOG / STW in the bottom screen corners (outside the ring). STW = speed
+    // through water (the standard NMEA abbreviation; was mislabelled "SOW").
     make_corner_box(s_root, "SOG", "kn", 8, LCD_H - 76, 104, 68, &lbl_sog_value, theme.good);
-    make_corner_box(s_root, "SOW", "kn", LCD_W - 112, LCD_H - 76, 104, 68, &lbl_stw_value,
+    make_corner_box(s_root, "STW", "kn", LCD_W - 112, LCD_H - 76, 104, 68, &lbl_stw_value,
                     theme.accent);
-    lbl_cog_value = nullptr;  // COG replaced by SOW per layout
+    lbl_cog_value = nullptr;  // COG replaced by STW per layout
 
     return s_root;
 }
