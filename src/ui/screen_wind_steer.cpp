@@ -7,11 +7,13 @@
 #include "ui_fonts.h"
 #include "signalk.h"
 #include "net.h"
+#include "autopilot.h"
 #include "app_events.h"
 #include "board_pins.h"
 
 #include <ctype.h>
 #include <math.h>
+#include <stdint.h>
 #include <stdio.h>
 #include <string.h>
 
@@ -52,6 +54,99 @@ static void on_onstby_short(lv_event_t *) {
 
 static void on_home(lv_event_t *) {
     ui::show_by_id("dashboard");
+}
+
+// ---- course-adjust + tack/gybe ---------------------------------------------
+// autopilot::adjust_heading_deg() rejects |delta| > 90 (InvalidPayload), so the
+// tack/gybe turns (which can exceed a quadrant) are clamped to one PUT's worth;
+// a second tap completes a large mirror. All run on the LVGL task with no large
+// stack scratch.
+static int clamp_delta(int d) {
+    if (d > 90) return 90;
+    if (d < -90) return -90;
+    return d;
+}
+
+static void on_nudge(lv_event_t *e) {
+    int delta = (int)(intptr_t)lv_event_get_user_data(e);
+    ::autopilot::adjust_heading_deg(delta);
+}
+
+// TACK: mirror the boat across the wind onto the opposite tack. Reflecting the
+// true wind angle through 0 means turning by -2*TWA (TWA in [-180,180]).
+static void on_tack(lv_event_t *) {
+    sk::Data d;
+    sk::copyData(d);
+    if (isnan(d.twa)) return;
+    double twa_deg = d.twa * 180.0 / M_PI;
+    while (twa_deg > 180.0)
+        twa_deg -= 360.0;
+    while (twa_deg < -180.0)
+        twa_deg += 360.0;
+    ::autopilot::adjust_heading_deg(clamp_delta((int)lround(-2.0 * twa_deg)));
+}
+
+// GYBE: mirror the boat across the stern (downwind), reflecting |TWA| through
+// 180. Turn the short way through dead-downwind onto the opposite tack.
+static void on_gybe(lv_event_t *) {
+    sk::Data d;
+    sk::copyData(d);
+    if (isnan(d.twa)) return;
+    double twa_deg = d.twa * 180.0 / M_PI;
+    while (twa_deg > 180.0)
+        twa_deg -= 360.0;
+    while (twa_deg < -180.0)
+        twa_deg += 360.0;
+    int delta =
+        twa_deg >= 0 ? (int)lround(2.0 * (180.0 - twa_deg)) : (int)lround(-2.0 * (180.0 + twa_deg));
+    ::autopilot::adjust_heading_deg(clamp_delta(delta));
+}
+
+// Small course-adjust / maneuver button overlaid along the bottom strip.
+static lv_obj_t *course_btn(lv_obj_t *parent, const char *txt, int w, lv_event_cb_t cb,
+                            void *user_data) {
+    lv_obj_t *b = lv_button_create(parent);
+    lv_obj_set_size(b, w, 36);
+    lv_obj_set_style_bg_color(b, lv_color_hex(theme.panel), 0);
+    lv_obj_set_style_bg_grad_color(b, lv_color_hex(theme.panel_bot), 0);
+    lv_obj_set_style_bg_grad_dir(b, LV_GRAD_DIR_VER, 0);
+    lv_obj_set_style_border_color(b, lv_color_hex(theme.panel_edge), 0);
+    lv_obj_set_style_border_width(b, ui::chrome::panel_border, 0);
+    lv_obj_set_style_radius(b, ui::chrome::panel_radius, 0);
+    lv_obj_set_style_pad_all(b, 0, 0);
+    lv_obj_t *l = lv_label_create(b);
+    lv_label_set_text(l, txt);
+    lv_obj_set_style_text_font(l, &lv_font_montserrat_20, 0);
+    lv_obj_set_style_text_color(l, lv_color_hex(theme.fg), 0);
+    lv_obj_center(l);
+    lv_obj_add_event_cb(b, cb, LV_EVENT_SHORT_CLICKED, user_data);
+    return b;
+}
+
+// Build the course-adjust + maneuver row: [-10][-1][+1][+10] [TACK] [GYBE].
+// Sits in the reserved bottom strip (the numeric tiles are raised to make room),
+// centered across the full panel width.
+static void build_course_row(lv_obj_t *parent, int y) {
+    int gap = 6;
+    int nudge_w = 50;
+    int man_w = 66;
+    int total = 4 * nudge_w + 2 * man_w + 5 * gap;
+    int x = (LCD_W - total) / 2;
+    static const struct {
+        const char *txt;
+        int delta;
+    } nudges[4] = {{"-10", -10}, {"-1", -1}, {"+1", +1}, {"+10", +10}};
+    for (int i = 0; i < 4; ++i) {
+        lv_obj_t *b =
+            course_btn(parent, nudges[i].txt, nudge_w, on_nudge, (void *)(intptr_t)nudges[i].delta);
+        lv_obj_set_pos(b, x, y);
+        x += nudge_w + gap;
+    }
+    lv_obj_t *bt = course_btn(parent, "TACK", man_w, on_tack, nullptr);
+    lv_obj_set_pos(bt, x, y);
+    x += man_w + gap;
+    lv_obj_t *bg = course_btn(parent, "GYBE", man_w, on_gybe, nullptr);
+    lv_obj_set_pos(bg, x, y);
 }
 
 // Top-bar chip identical to the autopilot screen.
@@ -193,12 +288,17 @@ lv_obj_t *build(lv_obj_t *parent) {
     s_xte = ui::build_xte_strip(s_root, xte_x, xte_y, xte_w, xte_h);
 
     // --- numeric tiles (square, same as AP) --- wind data fields ---
+    // Reserve a bottom strip for the course-adjust / tack-gybe row so it never
+    // covers the tiles. On the square panel the four tiles shrink to clear it; on
+    // the wide panel the side columns already leave the bottom-center free.
+    const int course_h = 36;
+    const int course_pad = 6;
     const lv_font_t *tv = &lv_font_montserrat_38;
     int gap = 8;
     if (!wide) {
         int n = 4;
         int sq = (LCD_W - gap * (n + 1)) / n;
-        int ty = LCD_H - sq - gap;
+        int ty = LCD_H - sq - gap - course_h - course_pad;  // raised to clear the row
         tile_aws = ui::numeric_tile(s_root, gap, ty, sq, sq, "AWS", "kn", tv, theme.warn);
         tile_awa = ui::numeric_tile(s_root, gap * 2 + sq, ty, sq, sq, "AWA", "", tv, theme.fg);
         tile_tws =
@@ -213,6 +313,9 @@ lv_obj_t *build(lv_obj_t *parent) {
         tile_tws = ui::numeric_tile(s_root, rx, ty, sq, sq, "TWS", "kn", tv, theme.fg);
         tile_twa = ui::numeric_tile(s_root, rx, ty + sq + gap, sq, sq, "TWA", "", tv, theme.fg);
     }
+
+    // Course-adjust + tack/gybe row along the bottom strip.
+    build_course_row(s_root, LCD_H - course_h - course_pad);
 
     return s_root;
 }

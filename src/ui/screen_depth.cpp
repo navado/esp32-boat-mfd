@@ -6,58 +6,46 @@
 #include "signalk.h"
 #include "board_pins.h"
 
-// Depth screen delegated to the QuadGrid template. Matches the editor's
-// `depthTempScreen()` preset: numeric DEPTH / numeric BELOW K / numeric
-// H2O TEMP / trend DEPTH 5m. Trend falls back to numeric in the device
-// painter today (sparkline TODO).
+// Depth screen delegated to the HeroPlus template: one large HERO value with a
+// sub-group of secondary stats beneath it.
+//
+//   HERO   = Depth below keel (DepthKeel_m, "m")
+//   sub 1  = Water temperature (WaterTemp_C, "C")
+//   sub 2  = Speed over ground (SOG_kn, "kn")
+//   sub 3  = True wind angle (TWA, deg, port/stbd suffix)
+//
+// NOTE on the "true-wind compass" sub-tile: HeroPlus renders its sub-group from
+// metrics[0].extras[] as plain "<label> <value>" text rows (Numeric only) — the
+// template has no per-extra WidgetKind, so a WidgetKind::Compass sub-tile is NOT
+// supported here. The 3rd sub therefore degrades to a numeric TWA tile (true
+// wind angle, the same datum a wind compass would show). Promoting it to a real
+// compass would require a hand-built screen (ui::build_compass) or extending the
+// HeroPlus template with a compass sub-slot.
 
 namespace ui::depth {
 
 static lv_obj_t *s_root = nullptr;
 
 static const ui::layouts::MetricBinding s_tiles[] = {
-    {"depth",
-     "DEPTH",
-     "m",
-     ui::layouts::MetricSource::Depth_m,
-     0x39d98a /*good*/,
-     nullptr,
-     0,
-     {},
-     ui::layouts::WidgetKind::Numeric},
     {"depthKeel",
-     "BELOW K",
+     "BELOW KEEL",
      "m",
      ui::layouts::MetricSource::DepthKeel_m,
      0x57c7d8 /*accent*/,
      nullptr,
-     0,
-     {},
+     3,
+     {
+         {"TEMP", ui::layouts::MetricSource::WaterTemp_C},
+         {"SOG", ui::layouts::MetricSource::SOG_kn},
+         {"TWA", ui::layouts::MetricSource::TWA_deg},
+     },
      ui::layouts::WidgetKind::Numeric},
-    {"waterTemp",
-     "H2O TEMP",
-     "C",
-     ui::layouts::MetricSource::WaterTemp_C,
-     0x288cff /*tide*/,
-     nullptr,
-     0,
-     {},
-     ui::layouts::WidgetKind::Numeric},
-    {"depthTrend",
-     "DEPTH 5m",
-     "m",
-     ui::layouts::MetricSource::Depth_m,
-     0x52736f /*grid*/,
-     nullptr,
-     0,
-     {},
-     ui::layouts::WidgetKind::Trend},
 };
 
 static const ui::layouts::ScreenVariantSpec s_spec = {
     "depth",
     "Depth",
-    ui::layouts::TemplateId::QuadGrid,
+    ui::layouts::TemplateId::HeroPlus,
     s_tiles,
     sizeof(s_tiles) / sizeof(s_tiles[0]),
     0,
