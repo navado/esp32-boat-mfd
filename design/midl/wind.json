@@ -1,0 +1,71 @@
+{
+  "midl": "1.0.0",
+  "screens": [
+    {
+      "id": "wind",
+      "title": "Wind",
+      "elements": {
+        "rose": {
+          "type": "windrose",
+          "name": "AWS",
+          "bindings": {
+            "value": { "kind": "signalk", "path": "environment.wind.speedApparent" },
+            "dir": { "kind": "signalk", "path": "environment.wind.angleApparent" }
+          },
+          "format": { "unit": "kn", "decimals": 1 },
+          "style": { "title": "AWS", "size": 48 },
+          "markers": [
+            {
+              "id": "TWA",
+              "glyph": "triangle",
+              "color": "accent",
+              "dir": { "kind": "signalk", "path": "environment.wind.angleTrueWater" }
+            }
+          ]
+        },
+        "awa": {
+          "type": "single-value",
+          "name": "AWA",
+          "bindings": {
+            "value": { "kind": "signalk", "path": "environment.wind.angleApparent" }
+          },
+          "format": { "unit": "deg", "decimals": 0 },
+          "style": { "title": "AWA", "size": 28 }
+        },
+        "tws": {
+          "type": "single-value",
+          "name": "TWS",
+          "bindings": {
+            "value": { "kind": "signalk", "path": "environment.wind.speedTrue" }
+          },
+          "format": { "unit": "kn", "decimals": 1 },
+          "style": { "title": "TWS", "size": 28 }
+        },
+        "twa": {
+          "type": "single-value",
+          "name": "TWA",
+          "bindings": {
+            "value": { "kind": "signalk", "path": "environment.wind.angleTrueWater" }
+          },
+          "format": { "unit": "deg", "decimals": 0 },
+          "style": { "title": "TWA", "size": 28 }
+        }
+      },
+      "layout": {
+        "dir": "col",
+        "weights": [3, 1],
+        "children": [
+          { "element": "rose" },
+          {
+            "dir": "row",
+            "children": [
+              { "element": "awa" },
+              { "element": "tws" },
+              { "element": "twa" }
+            ]
+          }
+        ]
+      }
+    }
+  ]
+}

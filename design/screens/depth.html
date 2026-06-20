@@ -15,4 +15,77 @@ ul{margin:0;padding-left:18px} li{margin:2px 0} .note{color:#ffb84d}
 <div class="meta"><h1>Depth</h1><p class="purpose">Depth hero (Trip-style) + stats.</p>
 <h2>Elements</h2><ul><li>Hero: BELOW KEEL (m, k/M scaled, font_xl_64)</li><li>WATER TEMP</li><li>SOG</li><li>TWA</li></ul>
 <h2>Design notes</h2><ul><li class="note">Restyled to Trip layout with a bigger hero font.</li></ul>
-<h2>Resolution</h2><p>480 × 480 · ST7701 RGB · LVGL 9</p></div></div></body></html>
+<h2>Resolution</h2><p>480 × 480 · ST7701 RGB · LVGL 9</p></div></div><div style="padding:0 20px 24px"><h2 style="font-size:12px;letter-spacing:.08em;text-transform:uppercase;color:#52736f;margin:8px 0 6px">MIDL definition</h2><pre style="margin:0;background:#06101a;border:1px solid #1d2b3a;border-radius:8px;padding:14px;overflow:auto;max-height:360px;color:#9fb4c8;font:12px/1.45 'Montserrat',ui-monospace,monospace">{
+  &quot;midl&quot;: &quot;1.0.0&quot;,
+  &quot;screens&quot;: [
+    {
+      &quot;id&quot;: &quot;depth&quot;,
+      &quot;title&quot;: &quot;Depth&quot;,
+      &quot;_note&quot;: &quot;screen_depth = big DEPTH (below keel) + WATER TEMP + SOG + a depth-history sparkline (trend). The hero-split preset has exactly 3 slots (hero + a column of two). Modeled as hero=DEPTH, column=[WATER TEMP, depth trend]. SOG is dropped from the tiling to keep the signature depth-history trend.&quot;,
+      &quot;elements&quot;: {
+        &quot;depth&quot;: {
+          &quot;type&quot;: &quot;single-value&quot;,
+          &quot;name&quot;: &quot;DEPTH&quot;,
+          &quot;bindings&quot;: {
+            &quot;value&quot;: {
+              &quot;kind&quot;: &quot;signalk&quot;,
+              &quot;path&quot;: &quot;environment.depth.belowKeel&quot;
+            }
+          },
+          &quot;format&quot;: {
+            &quot;unit&quot;: &quot;m&quot;,
+            &quot;decimals&quot;: 1
+          },
+          &quot;style&quot;: {
+            &quot;title&quot;: &quot;DEPTH&quot;,
+            &quot;size&quot;: 48
+          }
+        },
+        &quot;watertemp&quot;: {
+          &quot;type&quot;: &quot;single-value&quot;,
+          &quot;name&quot;: &quot;WATER&quot;,
+          &quot;bindings&quot;: {
+            &quot;value&quot;: {
+              &quot;kind&quot;: &quot;signalk&quot;,
+              &quot;path&quot;: &quot;environment.water.temperature&quot;
+            }
+          },
+          &quot;format&quot;: {
+            &quot;unit&quot;: &quot;degC&quot;,
+            &quot;decimals&quot;: 1
+          },
+          &quot;style&quot;: {
+            &quot;title&quot;: &quot;WATER&quot;,
+            &quot;size&quot;: 20
+          }
+        },
+        &quot;depthtrend&quot;: {
+          &quot;type&quot;: &quot;trend&quot;,
+          &quot;name&quot;: &quot;DEPTH HISTORY&quot;,
+          &quot;bindings&quot;: {
+            &quot;value&quot;: {
+              &quot;kind&quot;: &quot;signalk&quot;,
+              &quot;path&quot;: &quot;environment.depth.belowKeel&quot;
+            }
+          },
+          &quot;format&quot;: {
+            &quot;unit&quot;: &quot;m&quot;,
+            &quot;decimals&quot;: 1
+          },
+          &quot;style&quot;: {
+            &quot;title&quot;: &quot;DEPTH HISTORY&quot;,
+            &quot;size&quot;: 14
+          }
+        }
+      },
+      &quot;layout&quot;: {
+        &quot;preset&quot;: &quot;hero-split&quot;,
+        &quot;slots&quot;: [
+          &quot;depth&quot;,
+          &quot;watertemp&quot;,
+          &quot;depthtrend&quot;
+        ]
+      }
+    }
+  ]
+}</pre></div></body></html>

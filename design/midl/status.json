@@ -1,0 +1,46 @@
+{
+  "midl": "1.0.0",
+  "screens": [
+    {
+      "id": "status",
+      "title": "Status",
+      "_note": "screen_status shows WIFI/SSID/IP/RSSI/BLE-id/SIGNALK/HEAP/PSRAM/UPTIME/BUILD - all device-local or const values with no SignalK path. square-480 maxTiles=4: modeled as 2x2 IP/SIGNALK/HEAP/UPTIME text tiles. All bindings are kind:local/const (valid per config schema). The square-480 capability manifest advertises sources:[signalk] only, so every tile here fails the capability (caps) layer by design - this screen is intrinsically local-only diagnostics. See validation report.",
+      "elements": {
+        "ip": {
+          "type": "text",
+          "name": "IP",
+          "bindings": { "value": { "kind": "local", "id": "net.ip" } },
+          "style": { "title": "IP", "size": 20 }
+        },
+        "sk": {
+          "type": "text",
+          "name": "SIGNALK",
+          "bindings": { "value": { "kind": "local", "id": "sk.state" } },
+          "style": { "title": "SIGNALK", "size": 20 }
+        },
+        "heap": {
+          "type": "text",
+          "name": "HEAP",
+          "bindings": { "value": { "kind": "local", "id": "sys.heap" } },
+          "style": { "title": "HEAP", "size": 20 }
+        },
+        "uptime": {
+          "type": "text",
+          "name": "UPTIME",
+          "bindings": { "value": { "kind": "local", "id": "sys.uptime" } },
+          "style": { "title": "UPTIME", "size": 20 }
+        }
+      },
+      "layout": {
+        "rows": 2,
+        "cols": 2,
+        "cells": [
+          { "element": "ip" },
+          { "element": "sk" },
+          { "element": "heap" },
+          { "element": "uptime" }
+        ]
+      }
+    }
+  ]
+}

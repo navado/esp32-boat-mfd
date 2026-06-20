@@ -15,4 +15,135 @@ ul{margin:0;padding-left:18px} li{margin:2px 0} .note{color:#ffb84d}
 <div class="meta"><h1>Wind Steer</h1><p class="purpose">Sailing steering HUD with tack/gybe.</p>
 <h2>Elements</h2><ul><li>Compass + no-go/target sectors</li><li>Marker ring</li><li>Center HDG + TWA</li><li>XTE strip (now numeric)</li><li>Wind tiles</li><li>ON/STBY + HOME</li><li>Course row [-10..+10][TACK][GYBE]</li></ul>
 <h2>Design notes</h2><ul><li class="note">Course controls added.</li><li class="note">XTE strip gained a number.</li></ul>
-<h2>Resolution</h2><p>480 × 480 · ST7701 RGB · LVGL 9</p></div></div></body></html>
+<h2>Resolution</h2><p>480 × 480 · ST7701 RGB · LVGL 9</p></div></div><div style="padding:0 20px 24px"><h2 style="font-size:12px;letter-spacing:.08em;text-transform:uppercase;color:#52736f;margin:8px 0 6px">MIDL definition</h2><pre style="margin:0;background:#06101a;border:1px solid #1d2b3a;border-radius:8px;padding:14px;overflow:auto;max-height:360px;color:#9fb4c8;font:12px/1.45 'Montserrat',ui-monospace,monospace">{
+  &quot;midl&quot;: &quot;1.0.0&quot;,
+  &quot;screens&quot;: [
+    {
+      &quot;id&quot;: &quot;wind_steer&quot;,
+      &quot;title&quot;: &quot;Wind Steer&quot;,
+      &quot;_note&quot;: &quot;screen_wind_steer overlays a heading compass with HDG/COG/CTS/TWD markers, four wind readouts (AWS/AWA/TWS/TWA) and a tack/gybe + course-adjust button row. square-480 maxTiles=4: modeled as compass + a wind readout + tack + gybe buttons. AWA/TWS/TWA and the +/-course-trim buttons are dropped from the tiling. Firmware autopilot writes go to steering/autopilot/target/headingTrue; tack/gybe are exposed as command actions (manifest actionKinds=[nav,command]; put is not a device action kind).&quot;,
+      &quot;elements&quot;: {
+        &quot;compass&quot;: {
+          &quot;type&quot;: &quot;compass&quot;,
+          &quot;name&quot;: &quot;HDG&quot;,
+          &quot;bindings&quot;: {
+            &quot;value&quot;: {
+              &quot;kind&quot;: &quot;signalk&quot;,
+              &quot;path&quot;: &quot;navigation.headingTrue&quot;
+            }
+          },
+          &quot;style&quot;: {
+            &quot;title&quot;: &quot;HDG&quot;,
+            &quot;size&quot;: 48
+          },
+          &quot;markers&quot;: [
+            {
+              &quot;id&quot;: &quot;HDG&quot;,
+              &quot;glyph&quot;: &quot;triangle&quot;,
+              &quot;color&quot;: &quot;fg&quot;,
+              &quot;dir&quot;: {
+                &quot;kind&quot;: &quot;signalk&quot;,
+                &quot;path&quot;: &quot;navigation.headingTrue&quot;
+              }
+            },
+            {
+              &quot;id&quot;: &quot;COG&quot;,
+              &quot;glyph&quot;: &quot;chevron_out&quot;,
+              &quot;color&quot;: &quot;accent&quot;,
+              &quot;dir&quot;: {
+                &quot;kind&quot;: &quot;signalk&quot;,
+                &quot;path&quot;: &quot;navigation.courseOverGroundTrue&quot;
+              }
+            },
+            {
+              &quot;id&quot;: &quot;CTS&quot;,
+              &quot;glyph&quot;: &quot;diamond&quot;,
+              &quot;color&quot;: &quot;good&quot;,
+              &quot;dir&quot;: {
+                &quot;kind&quot;: &quot;signalk&quot;,
+                &quot;path&quot;: &quot;navigation.courseRhumbline.bearingTrackTrue&quot;
+              }
+            },
+            {
+              &quot;id&quot;: &quot;TWD&quot;,
+              &quot;glyph&quot;: &quot;bar&quot;,
+              &quot;color&quot;: &quot;warn&quot;,
+              &quot;dir&quot;: {
+                &quot;kind&quot;: &quot;signalk&quot;,
+                &quot;path&quot;: &quot;environment.wind.directionTrue&quot;
+              }
+            }
+          ]
+        },
+        &quot;aws&quot;: {
+          &quot;type&quot;: &quot;single-value&quot;,
+          &quot;name&quot;: &quot;AWS&quot;,
+          &quot;bindings&quot;: {
+            &quot;value&quot;: {
+              &quot;kind&quot;: &quot;signalk&quot;,
+              &quot;path&quot;: &quot;environment.wind.speedApparent&quot;
+            }
+          },
+          &quot;format&quot;: {
+            &quot;unit&quot;: &quot;kn&quot;,
+            &quot;decimals&quot;: 1
+          },
+          &quot;style&quot;: {
+            &quot;title&quot;: &quot;AWS&quot;,
+            &quot;size&quot;: 28
+          }
+        },
+        &quot;tack&quot;: {
+          &quot;type&quot;: &quot;button&quot;,
+          &quot;name&quot;: &quot;TACK&quot;,
+          &quot;style&quot;: {
+            &quot;title&quot;: &quot;TACK&quot;,
+            &quot;size&quot;: 20
+          },
+          &quot;action&quot;: {
+            &quot;kind&quot;: &quot;command&quot;,
+            &quot;target&quot;: &quot;ap-tack&quot;
+          }
+        },
+        &quot;gybe&quot;: {
+          &quot;type&quot;: &quot;button&quot;,
+          &quot;name&quot;: &quot;GYBE&quot;,
+          &quot;style&quot;: {
+            &quot;title&quot;: &quot;GYBE&quot;,
+            &quot;size&quot;: 20
+          },
+          &quot;action&quot;: {
+            &quot;kind&quot;: &quot;command&quot;,
+            &quot;target&quot;: &quot;ap-gybe&quot;
+          }
+        }
+      },
+      &quot;layout&quot;: {
+        &quot;dir&quot;: &quot;col&quot;,
+        &quot;weights&quot;: [
+          3,
+          1
+        ],
+        &quot;children&quot;: [
+          {
+            &quot;element&quot;: &quot;compass&quot;
+          },
+          {
+            &quot;dir&quot;: &quot;row&quot;,
+            &quot;children&quot;: [
+              {
+                &quot;element&quot;: &quot;aws&quot;
+              },
+              {
+                &quot;element&quot;: &quot;tack&quot;
+              },
+              {
+                &quot;element&quot;: &quot;gybe&quot;
+              }
+            ]
+          }
+        ]
+      }
+    }
+  ]
+}</pre></div></body></html>

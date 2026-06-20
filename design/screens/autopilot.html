@@ -15,4 +15,143 @@ ul{margin:0;padding-left:18px} li{margin:2px 0} .note{color:#ffb84d}
 <div class="meta"><h1>Autopilot</h1><p class="purpose">Glass-cockpit AP HUD.</p>
 <h2>Elements</h2><ul><li>Semicircle compass + marker ring (HDG/COG/CTS/AP-target)</li><li>HDG + COG/SOG</li><li>XTE strip (numeric)</li><li>DEPTH/SPEED/AWS/AWA tiles</li><li>ON/STBY + HOME + MODE</li></ul>
 <h2>Design notes</h2><ul><li class="note">DEPTH now k/M scaled.</li><li class="note">Dial-tap nudge + mode modal.</li></ul>
-<h2>Resolution</h2><p>480 × 480 · ST7701 RGB · LVGL 9</p></div></div></body></html>
+<h2>Resolution</h2><p>480 × 480 · ST7701 RGB · LVGL 9</p></div></div><div style="padding:0 20px 24px"><h2 style="font-size:12px;letter-spacing:.08em;text-transform:uppercase;color:#52736f;margin:8px 0 6px">MIDL definition</h2><pre style="margin:0;background:#06101a;border:1px solid #1d2b3a;border-radius:8px;padding:14px;overflow:auto;max-height:360px;color:#9fb4c8;font:12px/1.45 'Montserrat',ui-monospace,monospace">{
+  &quot;midl&quot;: &quot;1.0.0&quot;,
+  &quot;screens&quot;: [
+    {
+      &quot;id&quot;: &quot;autopilot&quot;,
+      &quot;title&quot;: &quot;Autopilot&quot;,
+      &quot;_note&quot;: &quot;screen_autopilot = AP state widget + heading compass (HDG/COG/CTS/AP-target markers) + DEPTH/SPEED/AWS/AWA readouts and mode/engage buttons. square-480 maxTiles=4: modeled as compass + autopilot-state + DEPTH + SOG. AWS/AWA and the mode/engage buttons are dropped from the tiling. AP-target marker binds steering.autopilot.target.headingTrue (the path the firmware PUTs).&quot;,
+      &quot;elements&quot;: {
+        &quot;compass&quot;: {
+          &quot;type&quot;: &quot;compass&quot;,
+          &quot;name&quot;: &quot;HDG&quot;,
+          &quot;bindings&quot;: {
+            &quot;value&quot;: {
+              &quot;kind&quot;: &quot;signalk&quot;,
+              &quot;path&quot;: &quot;navigation.headingTrue&quot;
+            }
+          },
+          &quot;style&quot;: {
+            &quot;title&quot;: &quot;HDG&quot;,
+            &quot;size&quot;: 48
+          },
+          &quot;markers&quot;: [
+            {
+              &quot;id&quot;: &quot;HDG&quot;,
+              &quot;glyph&quot;: &quot;triangle&quot;,
+              &quot;color&quot;: &quot;fg&quot;,
+              &quot;dir&quot;: {
+                &quot;kind&quot;: &quot;signalk&quot;,
+                &quot;path&quot;: &quot;navigation.headingTrue&quot;
+              }
+            },
+            {
+              &quot;id&quot;: &quot;COG&quot;,
+              &quot;glyph&quot;: &quot;chevron_out&quot;,
+              &quot;color&quot;: &quot;accent&quot;,
+              &quot;dir&quot;: {
+                &quot;kind&quot;: &quot;signalk&quot;,
+                &quot;path&quot;: &quot;navigation.courseOverGroundTrue&quot;
+              }
+            },
+            {
+              &quot;id&quot;: &quot;CTS&quot;,
+              &quot;glyph&quot;: &quot;diamond&quot;,
+              &quot;color&quot;: &quot;good&quot;,
+              &quot;dir&quot;: {
+                &quot;kind&quot;: &quot;signalk&quot;,
+                &quot;path&quot;: &quot;navigation.courseRhumbline.bearingTrackTrue&quot;
+              }
+            },
+            {
+              &quot;id&quot;: &quot;APTGT&quot;,
+              &quot;glyph&quot;: &quot;chevron_double&quot;,
+              &quot;color&quot;: &quot;warn&quot;,
+              &quot;dir&quot;: {
+                &quot;kind&quot;: &quot;signalk&quot;,
+                &quot;path&quot;: &quot;steering.autopilot.target.headingTrue&quot;
+              }
+            }
+          ]
+        },
+        &quot;apstate&quot;: {
+          &quot;type&quot;: &quot;autopilot&quot;,
+          &quot;name&quot;: &quot;AP&quot;,
+          &quot;bindings&quot;: {
+            &quot;value&quot;: {
+              &quot;kind&quot;: &quot;signalk&quot;,
+              &quot;path&quot;: &quot;steering.autopilot.state&quot;
+            }
+          },
+          &quot;style&quot;: {
+            &quot;title&quot;: &quot;AUTOPILOT&quot;,
+            &quot;size&quot;: 20
+          }
+        },
+        &quot;depth&quot;: {
+          &quot;type&quot;: &quot;single-value&quot;,
+          &quot;name&quot;: &quot;DEPTH&quot;,
+          &quot;bindings&quot;: {
+            &quot;value&quot;: {
+              &quot;kind&quot;: &quot;signalk&quot;,
+              &quot;path&quot;: &quot;environment.depth.belowKeel&quot;
+            }
+          },
+          &quot;format&quot;: {
+            &quot;unit&quot;: &quot;m&quot;,
+            &quot;decimals&quot;: 1
+          },
+          &quot;style&quot;: {
+            &quot;title&quot;: &quot;DEPTH&quot;,
+            &quot;size&quot;: 28
+          }
+        },
+        &quot;sog&quot;: {
+          &quot;type&quot;: &quot;single-value&quot;,
+          &quot;name&quot;: &quot;SPEED&quot;,
+          &quot;bindings&quot;: {
+            &quot;value&quot;: {
+              &quot;kind&quot;: &quot;signalk&quot;,
+              &quot;path&quot;: &quot;navigation.speedOverGround&quot;
+            }
+          },
+          &quot;format&quot;: {
+            &quot;unit&quot;: &quot;kn&quot;,
+            &quot;decimals&quot;: 1
+          },
+          &quot;style&quot;: {
+            &quot;title&quot;: &quot;SPEED&quot;,
+            &quot;size&quot;: 28
+          }
+        }
+      },
+      &quot;layout&quot;: {
+        &quot;dir&quot;: &quot;col&quot;,
+        &quot;weights&quot;: [
+          3,
+          1
+        ],
+        &quot;children&quot;: [
+          {
+            &quot;element&quot;: &quot;compass&quot;
+          },
+          {
+            &quot;dir&quot;: &quot;row&quot;,
+            &quot;children&quot;: [
+              {
+                &quot;element&quot;: &quot;apstate&quot;
+              },
+              {
+                &quot;element&quot;: &quot;depth&quot;
+              },
+              {
+                &quot;element&quot;: &quot;sog&quot;
+              }
+            ]
+          }
+        ]
+      }
+    }
+  ]
+}</pre></div></body></html>

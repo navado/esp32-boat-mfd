@@ -1,0 +1,59 @@
+{
+  "midl": "1.0.0",
+  "screens": [
+    {
+      "id": "autopilot",
+      "title": "Autopilot",
+      "_note": "screen_autopilot = AP state widget + heading compass (HDG/COG/CTS/AP-target markers) + DEPTH/SPEED/AWS/AWA readouts and mode/engage buttons. square-480 maxTiles=4: modeled as compass + autopilot-state + DEPTH + SOG. AWS/AWA and the mode/engage buttons are dropped from the tiling. AP-target marker binds steering.autopilot.target.headingTrue (the path the firmware PUTs).",
+      "elements": {
+        "compass": {
+          "type": "compass",
+          "name": "HDG",
+          "bindings": { "value": { "kind": "signalk", "path": "navigation.headingTrue" } },
+          "style": { "title": "HDG", "size": 48 },
+          "markers": [
+            { "id": "HDG", "glyph": "triangle", "color": "fg", "dir": { "kind": "signalk", "path": "navigation.headingTrue" } },
+            { "id": "COG", "glyph": "chevron_out", "color": "accent", "dir": { "kind": "signalk", "path": "navigation.courseOverGroundTrue" } },
+            { "id": "CTS", "glyph": "diamond", "color": "good", "dir": { "kind": "signalk", "path": "navigation.courseRhumbline.bearingTrackTrue" } },
+            { "id": "APTGT", "glyph": "chevron_double", "color": "warn", "dir": { "kind": "signalk", "path": "steering.autopilot.target.headingTrue" } }
+          ]
+        },
+        "apstate": {
+          "type": "autopilot",
+          "name": "AP",
+          "bindings": { "value": { "kind": "signalk", "path": "steering.autopilot.state" } },
+          "style": { "title": "AUTOPILOT", "size": 20 }
+        },
+        "depth": {
+          "type": "single-value",
+          "name": "DEPTH",
+          "bindings": { "value": { "kind": "signalk", "path": "environment.depth.belowKeel" } },
+          "format": { "unit": "m", "decimals": 1 },
+          "style": { "title": "DEPTH", "size": 28 }
+        },
+        "sog": {
+          "type": "single-value",
+          "name": "SPEED",
+          "bindings": { "value": { "kind": "signalk", "path": "navigation.speedOverGround" } },
+          "format": { "unit": "kn", "decimals": 1 },
+          "style": { "title": "SPEED", "size": 28 }
+        }
+      },
+      "layout": {
+        "dir": "col",
+        "weights": [3, 1],
+        "children": [
+          { "element": "compass" },
+          {
+            "dir": "row",
+            "children": [
+              { "element": "apstate" },
+              { "element": "depth" },
+              { "element": "sog" }
+            ]
+          }
+        ]
+      }
+    }
+  ]
+}

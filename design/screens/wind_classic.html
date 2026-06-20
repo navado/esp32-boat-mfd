@@ -15,4 +15,128 @@ ul{margin:0;padding-left:18px} li{margin:2px 0} .note{color:#ffb84d}
 <div class="meta"><h1>Wind Classic</h1><p class="purpose">Wind rose with in-dial hero readouts.</p>
 <h2>Elements</h2><ul><li>Rotating bezel</li><li>Upright cardinals</li><li>In-dial AWS/TWS/AWA/TWA/HDG/COG/SOG/STW</li><li>Wind markers</li></ul>
 <h2>Design notes</h2><ul><li class="note">SOW-&gt;STW label fixed.</li><li class="note">Hero readouts could carry units.</li></ul>
-<h2>Resolution</h2><p>480 × 480 · ST7701 RGB · LVGL 9</p></div></div></body></html>
+<h2>Resolution</h2><p>480 × 480 · ST7701 RGB · LVGL 9</p></div></div><div style="padding:0 20px 24px"><h2 style="font-size:12px;letter-spacing:.08em;text-transform:uppercase;color:#52736f;margin:8px 0 6px">MIDL definition</h2><pre style="margin:0;background:#06101a;border:1px solid #1d2b3a;border-radius:8px;padding:14px;overflow:auto;max-height:360px;color:#9fb4c8;font:12px/1.45 'Montserrat',ui-monospace,monospace">{
+  &quot;midl&quot;: &quot;1.0.0&quot;,
+  &quot;screens&quot;: [
+    {
+      &quot;id&quot;: &quot;wind_classic&quot;,
+      &quot;title&quot;: &quot;Wind Classic&quot;,
+      &quot;_note&quot;: &quot;Firmware screen_wind_classic shows 8 in-dial readouts (AWS/TWS/AWA/TWA/HDG/COG/SOG/STW) around the windrose. square-480 caps maxTiles=4, so this models the windrose hero (AWS=value) plus the 3 primary corner readouts TWS/HDG/SOG. Dropped from the MIDL tiling: AWA, TWA, COG, STW. STW (navigation.speedThroughWater) also has no source_to_path entry in firmware ui_layouts.cpp.&quot;,
+      &quot;elements&quot;: {
+        &quot;rose&quot;: {
+          &quot;type&quot;: &quot;windrose&quot;,
+          &quot;name&quot;: &quot;AWS&quot;,
+          &quot;bindings&quot;: {
+            &quot;value&quot;: {
+              &quot;kind&quot;: &quot;signalk&quot;,
+              &quot;path&quot;: &quot;environment.wind.speedApparent&quot;
+            },
+            &quot;dir&quot;: {
+              &quot;kind&quot;: &quot;signalk&quot;,
+              &quot;path&quot;: &quot;environment.wind.angleApparent&quot;
+            }
+          },
+          &quot;format&quot;: {
+            &quot;unit&quot;: &quot;kn&quot;,
+            &quot;decimals&quot;: 1
+          },
+          &quot;style&quot;: {
+            &quot;title&quot;: &quot;AWS&quot;,
+            &quot;size&quot;: 48
+          },
+          &quot;markers&quot;: [
+            {
+              &quot;id&quot;: &quot;TWA&quot;,
+              &quot;glyph&quot;: &quot;diamond&quot;,
+              &quot;color&quot;: &quot;accent&quot;,
+              &quot;dir&quot;: {
+                &quot;kind&quot;: &quot;signalk&quot;,
+                &quot;path&quot;: &quot;environment.wind.angleTrueWater&quot;
+              }
+            }
+          ]
+        },
+        &quot;tws&quot;: {
+          &quot;type&quot;: &quot;single-value&quot;,
+          &quot;name&quot;: &quot;TWS&quot;,
+          &quot;bindings&quot;: {
+            &quot;value&quot;: {
+              &quot;kind&quot;: &quot;signalk&quot;,
+              &quot;path&quot;: &quot;environment.wind.speedTrue&quot;
+            }
+          },
+          &quot;format&quot;: {
+            &quot;unit&quot;: &quot;kn&quot;,
+            &quot;decimals&quot;: 1
+          },
+          &quot;style&quot;: {
+            &quot;title&quot;: &quot;TWS&quot;,
+            &quot;size&quot;: 28
+          }
+        },
+        &quot;hdg&quot;: {
+          &quot;type&quot;: &quot;single-value&quot;,
+          &quot;name&quot;: &quot;HDG&quot;,
+          &quot;bindings&quot;: {
+            &quot;value&quot;: {
+              &quot;kind&quot;: &quot;signalk&quot;,
+              &quot;path&quot;: &quot;navigation.headingTrue&quot;
+            }
+          },
+          &quot;format&quot;: {
+            &quot;unit&quot;: &quot;deg&quot;,
+            &quot;decimals&quot;: 0
+          },
+          &quot;style&quot;: {
+            &quot;title&quot;: &quot;HDG&quot;,
+            &quot;size&quot;: 28
+          }
+        },
+        &quot;sog&quot;: {
+          &quot;type&quot;: &quot;single-value&quot;,
+          &quot;name&quot;: &quot;SOG&quot;,
+          &quot;bindings&quot;: {
+            &quot;value&quot;: {
+              &quot;kind&quot;: &quot;signalk&quot;,
+              &quot;path&quot;: &quot;navigation.speedOverGround&quot;
+            }
+          },
+          &quot;format&quot;: {
+            &quot;unit&quot;: &quot;kn&quot;,
+            &quot;decimals&quot;: 1
+          },
+          &quot;style&quot;: {
+            &quot;title&quot;: &quot;SOG&quot;,
+            &quot;size&quot;: 28
+          }
+        }
+      },
+      &quot;layout&quot;: {
+        &quot;dir&quot;: &quot;col&quot;,
+        &quot;weights&quot;: [
+          3,
+          1
+        ],
+        &quot;children&quot;: [
+          {
+            &quot;element&quot;: &quot;rose&quot;
+          },
+          {
+            &quot;dir&quot;: &quot;row&quot;,
+            &quot;children&quot;: [
+              {
+                &quot;element&quot;: &quot;tws&quot;
+              },
+              {
+                &quot;element&quot;: &quot;hdg&quot;
+              },
+              {
+                &quot;element&quot;: &quot;sog&quot;
+              }
+            ]
+          }
+        ]
+      }
+    }
+  ]
+}</pre></div></body></html>

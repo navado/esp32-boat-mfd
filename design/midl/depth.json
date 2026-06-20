@@ -1,0 +1,37 @@
+{
+  "midl": "1.0.0",
+  "screens": [
+    {
+      "id": "depth",
+      "title": "Depth",
+      "_note": "screen_depth = big DEPTH (below keel) + WATER TEMP + SOG + a depth-history sparkline (trend). The hero-split preset has exactly 3 slots (hero + a column of two). Modeled as hero=DEPTH, column=[WATER TEMP, depth trend]. SOG is dropped from the tiling to keep the signature depth-history trend.",
+      "elements": {
+        "depth": {
+          "type": "single-value",
+          "name": "DEPTH",
+          "bindings": { "value": { "kind": "signalk", "path": "environment.depth.belowKeel" } },
+          "format": { "unit": "m", "decimals": 1 },
+          "style": { "title": "DEPTH", "size": 48 }
+        },
+        "watertemp": {
+          "type": "single-value",
+          "name": "WATER",
+          "bindings": { "value": { "kind": "signalk", "path": "environment.water.temperature" } },
+          "format": { "unit": "degC", "decimals": 1 },
+          "style": { "title": "WATER", "size": 20 }
+        },
+        "depthtrend": {
+          "type": "trend",
+          "name": "DEPTH HISTORY",
+          "bindings": { "value": { "kind": "signalk", "path": "environment.depth.belowKeel" } },
+          "format": { "unit": "m", "decimals": 1 },
+          "style": { "title": "DEPTH HISTORY", "size": 14 }
+        }
+      },
+      "layout": {
+        "preset": "hero-split",
+        "slots": ["depth", "watertemp", "depthtrend"]
+      }
+    }
+  ]
+}

@@ -1,0 +1,72 @@
+{
+  "midl": "1.0.0",
+  "screens": [
+    {
+      "id": "wind_classic",
+      "title": "Wind Classic",
+      "_note": "Firmware screen_wind_classic shows 8 in-dial readouts (AWS/TWS/AWA/TWA/HDG/COG/SOG/STW) around the windrose. square-480 caps maxTiles=4, so this models the windrose hero (AWS=value) plus the 3 primary corner readouts TWS/HDG/SOG. Dropped from the MIDL tiling: AWA, TWA, COG, STW. STW (navigation.speedThroughWater) also has no source_to_path entry in firmware ui_layouts.cpp.",
+      "elements": {
+        "rose": {
+          "type": "windrose",
+          "name": "AWS",
+          "bindings": {
+            "value": { "kind": "signalk", "path": "environment.wind.speedApparent" },
+            "dir": { "kind": "signalk", "path": "environment.wind.angleApparent" }
+          },
+          "format": { "unit": "kn", "decimals": 1 },
+          "style": { "title": "AWS", "size": 48 },
+          "markers": [
+            {
+              "id": "TWA",
+              "glyph": "diamond",
+              "color": "accent",
+              "dir": { "kind": "signalk", "path": "environment.wind.angleTrueWater" }
+            }
+          ]
+        },
+        "tws": {
+          "type": "single-value",
+          "name": "TWS",
+          "bindings": {
+            "value": { "kind": "signalk", "path": "environment.wind.speedTrue" }
+          },
+          "format": { "unit": "kn", "decimals": 1 },
+          "style": { "title": "TWS", "size": 28 }
+        },
+        "hdg": {
+          "type": "single-value",
+          "name": "HDG",
+          "bindings": {
+            "value": { "kind": "signalk", "path": "navigation.headingTrue" }
+          },
+          "format": { "unit": "deg", "decimals": 0 },
+          "style": { "title": "HDG", "size": 28 }
+        },
+        "sog": {
+          "type": "single-value",
+          "name": "SOG",
+          "bindings": {
+            "value": { "kind": "signalk", "path": "navigation.speedOverGround" }
+          },
+          "format": { "unit": "kn", "decimals": 1 },
+          "style": { "title": "SOG", "size": 28 }
+        }
+      },
+      "layout": {
+        "dir": "col",
+        "weights": [3, 1],
+        "children": [
+          { "element": "rose" },
+          {
+            "dir": "row",
+            "children": [
+              { "element": "tws" },
+              { "element": "hdg" },
+              { "element": "sog" }
+            ]
+          }
+        ]
+      }
+    }
+  ]
+}

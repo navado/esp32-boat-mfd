@@ -15,4 +15,118 @@ ul{margin:0;padding-left:18px} li{margin:2px 0} .note{color:#ffb84d}
 <div class="meta"><h1>Dashboard</h1><p class="purpose">At-a-glance 2x2 overview.</p>
 <h2>Elements</h2><ul><li>WIND dial (AWS, kn)</li><li>SOG (kn)</li><li>DEPTH (m, k/M scaled)</li><li>BATT (% + bar)</li></ul>
 <h2>Design notes</h2><ul><li class="note">Unit now shown on WIND dial.</li><li class="note">Numeric tiles under-use vertical space.</li></ul>
-<h2>Resolution</h2><p>480 × 480 · ST7701 RGB · LVGL 9</p></div></div></body></html>
+<h2>Resolution</h2><p>480 × 480 · ST7701 RGB · LVGL 9</p></div></div><div style="padding:0 20px 24px"><h2 style="font-size:12px;letter-spacing:.08em;text-transform:uppercase;color:#52736f;margin:8px 0 6px">MIDL definition</h2><pre style="margin:0;background:#06101a;border:1px solid #1d2b3a;border-radius:8px;padding:14px;overflow:auto;max-height:360px;color:#9fb4c8;font:12px/1.45 'Montserrat',ui-monospace,monospace">{
+  &quot;midl&quot;: &quot;1.0.0&quot;,
+  &quot;screens&quot;: [
+    {
+      &quot;id&quot;: &quot;dashboard&quot;,
+      &quot;title&quot;: &quot;Dashboard&quot;,
+      &quot;elements&quot;: {
+        &quot;wind&quot;: {
+          &quot;type&quot;: &quot;windrose&quot;,
+          &quot;name&quot;: &quot;AWS&quot;,
+          &quot;bindings&quot;: {
+            &quot;value&quot;: {
+              &quot;kind&quot;: &quot;signalk&quot;,
+              &quot;path&quot;: &quot;environment.wind.speedApparent&quot;
+            },
+            &quot;dir&quot;: {
+              &quot;kind&quot;: &quot;signalk&quot;,
+              &quot;path&quot;: &quot;environment.wind.angleApparent&quot;
+            }
+          },
+          &quot;format&quot;: {
+            &quot;unit&quot;: &quot;kn&quot;,
+            &quot;decimals&quot;: 1
+          },
+          &quot;style&quot;: {
+            &quot;title&quot;: &quot;AWS&quot;,
+            &quot;size&quot;: 28
+          }
+        },
+        &quot;sog&quot;: {
+          &quot;type&quot;: &quot;single-value&quot;,
+          &quot;name&quot;: &quot;SOG&quot;,
+          &quot;bindings&quot;: {
+            &quot;value&quot;: {
+              &quot;kind&quot;: &quot;signalk&quot;,
+              &quot;path&quot;: &quot;navigation.speedOverGround&quot;
+            }
+          },
+          &quot;format&quot;: {
+            &quot;unit&quot;: &quot;kn&quot;,
+            &quot;decimals&quot;: 1
+          },
+          &quot;style&quot;: {
+            &quot;title&quot;: &quot;SOG&quot;,
+            &quot;size&quot;: 48
+          }
+        },
+        &quot;depth&quot;: {
+          &quot;type&quot;: &quot;single-value&quot;,
+          &quot;name&quot;: &quot;DEPTH&quot;,
+          &quot;bindings&quot;: {
+            &quot;value&quot;: {
+              &quot;kind&quot;: &quot;signalk&quot;,
+              &quot;path&quot;: &quot;environment.depth.belowKeel&quot;
+            }
+          },
+          &quot;format&quot;: {
+            &quot;unit&quot;: &quot;m&quot;,
+            &quot;decimals&quot;: 1
+          },
+          &quot;style&quot;: {
+            &quot;title&quot;: &quot;DEPTH&quot;,
+            &quot;size&quot;: 48
+          }
+        },
+        &quot;batt&quot;: {
+          &quot;type&quot;: &quot;bar&quot;,
+          &quot;name&quot;: &quot;BATT&quot;,
+          &quot;bindings&quot;: {
+            &quot;value&quot;: {
+              &quot;kind&quot;: &quot;signalk&quot;,
+              &quot;path&quot;: &quot;electrical.batteries.house.stateOfCharge&quot;
+            }
+          },
+          &quot;format&quot;: {
+            &quot;unit&quot;: &quot;%&quot;,
+            &quot;decimals&quot;: 0
+          },
+          &quot;style&quot;: {
+            &quot;title&quot;: &quot;BATT&quot;,
+            &quot;size&quot;: 20
+          },
+          &quot;zones&quot;: [
+            {
+              &quot;lt&quot;: 0.2,
+              &quot;color&quot;: &quot;warn&quot;
+            },
+            {
+              &quot;lt&quot;: 0.5,
+              &quot;color&quot;: &quot;accent&quot;
+            }
+          ]
+        }
+      },
+      &quot;layout&quot;: {
+        &quot;rows&quot;: 2,
+        &quot;cols&quot;: 2,
+        &quot;cells&quot;: [
+          {
+            &quot;element&quot;: &quot;wind&quot;
+          },
+          {
+            &quot;element&quot;: &quot;sog&quot;
+          },
+          {
+            &quot;element&quot;: &quot;depth&quot;
+          },
+          {
+            &quot;element&quot;: &quot;batt&quot;
+          }
+        ]
+      }
+    }
+  ]
+}</pre></div></body></html>

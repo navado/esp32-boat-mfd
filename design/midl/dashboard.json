@@ -1,0 +1,62 @@
+{
+  "midl": "1.0.0",
+  "screens": [
+    {
+      "id": "dashboard",
+      "title": "Dashboard",
+      "elements": {
+        "wind": {
+          "type": "windrose",
+          "name": "AWS",
+          "bindings": {
+            "value": { "kind": "signalk", "path": "environment.wind.speedApparent" },
+            "dir": { "kind": "signalk", "path": "environment.wind.angleApparent" }
+          },
+          "format": { "unit": "kn", "decimals": 1 },
+          "style": { "title": "AWS", "size": 28 }
+        },
+        "sog": {
+          "type": "single-value",
+          "name": "SOG",
+          "bindings": {
+            "value": { "kind": "signalk", "path": "navigation.speedOverGround" }
+          },
+          "format": { "unit": "kn", "decimals": 1 },
+          "style": { "title": "SOG", "size": 48 }
+        },
+        "depth": {
+          "type": "single-value",
+          "name": "DEPTH",
+          "bindings": {
+            "value": { "kind": "signalk", "path": "environment.depth.belowKeel" }
+          },
+          "format": { "unit": "m", "decimals": 1 },
+          "style": { "title": "DEPTH", "size": 48 }
+        },
+        "batt": {
+          "type": "bar",
+          "name": "BATT",
+          "bindings": {
+            "value": { "kind": "signalk", "path": "electrical.batteries.house.stateOfCharge" }
+          },
+          "format": { "unit": "%", "decimals": 0 },
+          "style": { "title": "BATT", "size": 20 },
+          "zones": [
+            { "lt": 0.2, "color": "warn" },
+            { "lt": 0.5, "color": "accent" }
+          ]
+        }
+      },
+      "layout": {
+        "rows": 2,
+        "cols": 2,
+        "cells": [
+          { "element": "wind" },
+          { "element": "sog" },
+          { "element": "depth" },
+          { "element": "batt" }
+        ]
+      }
+    }
+  ]
+}

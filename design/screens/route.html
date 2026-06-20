@@ -15,4 +15,105 @@ ul{margin:0;padding-left:18px} li{margin:2px 0} .note{color:#ffb84d}
 <div class="meta"><h1>Route</h1><p class="purpose">Active-route progress.</p>
 <h2>Elements</h2><ul><li>XTE</li><li>BTW + CTS</li><li>DTW (nm scaled)</li><li>VMG</li></ul>
 <h2>Design notes</h2><ul><li class="note">CTS field added under BTW.</li></ul>
-<h2>Resolution</h2><p>480 × 480 · ST7701 RGB · LVGL 9</p></div></div></body></html>
+<h2>Resolution</h2><p>480 × 480 · ST7701 RGB · LVGL 9</p></div></div><div style="padding:0 20px 24px"><h2 style="font-size:12px;letter-spacing:.08em;text-transform:uppercase;color:#52736f;margin:8px 0 6px">MIDL definition</h2><pre style="margin:0;background:#06101a;border:1px solid #1d2b3a;border-radius:8px;padding:14px;overflow:auto;max-height:360px;color:#9fb4c8;font:12px/1.45 'Montserrat',ui-monospace,monospace">{
+  &quot;midl&quot;: &quot;1.0.0&quot;,
+  &quot;screens&quot;: [
+    {
+      &quot;id&quot;: &quot;route&quot;,
+      &quot;title&quot;: &quot;Route&quot;,
+      &quot;_note&quot;: &quot;screen_route shows XTE + BTW + DTW + CTS + VMG (5 readouts). square-480 maxTiles=4: modeled as XTE/DTW/BTW/CTS. VMG (navigation.courseRhumbline.velocityMadeGood) is dropped from the tiling.&quot;,
+      &quot;elements&quot;: {
+        &quot;xte&quot;: {
+          &quot;type&quot;: &quot;single-value&quot;,
+          &quot;name&quot;: &quot;XTE&quot;,
+          &quot;bindings&quot;: {
+            &quot;value&quot;: {
+              &quot;kind&quot;: &quot;signalk&quot;,
+              &quot;path&quot;: &quot;navigation.courseRhumbline.crossTrackError&quot;
+            }
+          },
+          &quot;format&quot;: {
+            &quot;unit&quot;: &quot;m&quot;,
+            &quot;decimals&quot;: 0
+          },
+          &quot;style&quot;: {
+            &quot;title&quot;: &quot;XTE&quot;,
+            &quot;size&quot;: 28
+          }
+        },
+        &quot;dtw&quot;: {
+          &quot;type&quot;: &quot;single-value&quot;,
+          &quot;name&quot;: &quot;DTW&quot;,
+          &quot;bindings&quot;: {
+            &quot;value&quot;: {
+              &quot;kind&quot;: &quot;signalk&quot;,
+              &quot;path&quot;: &quot;navigation.courseRhumbline.nextPoint.distance&quot;
+            }
+          },
+          &quot;format&quot;: {
+            &quot;unit&quot;: &quot;nm&quot;,
+            &quot;decimals&quot;: 2
+          },
+          &quot;style&quot;: {
+            &quot;title&quot;: &quot;DTW&quot;,
+            &quot;size&quot;: 28
+          }
+        },
+        &quot;btw&quot;: {
+          &quot;type&quot;: &quot;single-value&quot;,
+          &quot;name&quot;: &quot;BTW&quot;,
+          &quot;bindings&quot;: {
+            &quot;value&quot;: {
+              &quot;kind&quot;: &quot;signalk&quot;,
+              &quot;path&quot;: &quot;navigation.courseRhumbline.nextPoint.bearingTrue&quot;
+            }
+          },
+          &quot;format&quot;: {
+            &quot;unit&quot;: &quot;deg&quot;,
+            &quot;decimals&quot;: 0
+          },
+          &quot;style&quot;: {
+            &quot;title&quot;: &quot;BTW&quot;,
+            &quot;size&quot;: 28
+          }
+        },
+        &quot;cts&quot;: {
+          &quot;type&quot;: &quot;single-value&quot;,
+          &quot;name&quot;: &quot;CTS&quot;,
+          &quot;bindings&quot;: {
+            &quot;value&quot;: {
+              &quot;kind&quot;: &quot;signalk&quot;,
+              &quot;path&quot;: &quot;navigation.courseRhumbline.bearingTrackTrue&quot;
+            }
+          },
+          &quot;format&quot;: {
+            &quot;unit&quot;: &quot;deg&quot;,
+            &quot;decimals&quot;: 0
+          },
+          &quot;style&quot;: {
+            &quot;title&quot;: &quot;CTS&quot;,
+            &quot;size&quot;: 28
+          }
+        }
+      },
+      &quot;layout&quot;: {
+        &quot;rows&quot;: 2,
+        &quot;cols&quot;: 2,
+        &quot;cells&quot;: [
+          {
+            &quot;element&quot;: &quot;xte&quot;
+          },
+          {
+            &quot;element&quot;: &quot;dtw&quot;
+          },
+          {
+            &quot;element&quot;: &quot;btw&quot;
+          },
+          {
+            &quot;element&quot;: &quot;cts&quot;
+          }
+        ]
+      }
+    }
+  ]
+}</pre></div></body></html>

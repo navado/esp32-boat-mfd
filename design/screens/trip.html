@@ -15,4 +15,77 @@ ul{margin:0;padding-left:18px} li{margin:2px 0} .note{color:#ffb84d}
 <div class="meta"><h1>Trip</h1><p class="purpose">Trip odometer + stats.</p>
 <h2>Elements</h2><ul><li>Hero DISTANCE (nm)</li><li>TIME UNDERWAY</li><li>AVG SPEED</li><li>MAX SPEED</li><li>NOW strip</li></ul>
 <h2>Design notes</h2><ul><li class="note">Reference style for the depth restyle.</li></ul>
-<h2>Resolution</h2><p>480 × 480 · ST7701 RGB · LVGL 9</p></div></div></body></html>
+<h2>Resolution</h2><p>480 × 480 · ST7701 RGB · LVGL 9</p></div></div><div style="padding:0 20px 24px"><h2 style="font-size:12px;letter-spacing:.08em;text-transform:uppercase;color:#52736f;margin:8px 0 6px">MIDL definition</h2><pre style="margin:0;background:#06101a;border:1px solid #1d2b3a;border-radius:8px;padding:14px;overflow:auto;max-height:360px;color:#9fb4c8;font:12px/1.45 'Montserrat',ui-monospace,monospace">{
+  &quot;midl&quot;: &quot;1.0.0&quot;,
+  &quot;screens&quot;: [
+    {
+      &quot;id&quot;: &quot;trip&quot;,
+      &quot;title&quot;: &quot;Trip&quot;,
+      &quot;_note&quot;: &quot;screen_trip is a locally-integrated odometer: DISTANCE, underway time, avg/max SOG, live SOG. Only live SOG is a SignalK path (navigation.speedOverGround). DISTANCE and underway time are device-local (kind:local) - the firmware persists them in NVS and has no SignalK path. The config schema permits source kind:local, but the square-480 capability manifest advertises sources:[signalk] only, so these two tiles fail the capability (caps) layer by design - see validation report. Modeled hero-split: hero=DISTANCE, column=[underway time, live SOG]; avg/max SOG dropped.&quot;,
+      &quot;elements&quot;: {
+        &quot;distance&quot;: {
+          &quot;type&quot;: &quot;single-value&quot;,
+          &quot;name&quot;: &quot;DISTANCE&quot;,
+          &quot;bindings&quot;: {
+            &quot;value&quot;: {
+              &quot;kind&quot;: &quot;local&quot;,
+              &quot;id&quot;: &quot;trip.distance&quot;
+            }
+          },
+          &quot;format&quot;: {
+            &quot;unit&quot;: &quot;nm&quot;,
+            &quot;decimals&quot;: 2
+          },
+          &quot;style&quot;: {
+            &quot;title&quot;: &quot;DISTANCE&quot;,
+            &quot;size&quot;: 48
+          }
+        },
+        &quot;time&quot;: {
+          &quot;type&quot;: &quot;single-value&quot;,
+          &quot;name&quot;: &quot;TIME&quot;,
+          &quot;bindings&quot;: {
+            &quot;value&quot;: {
+              &quot;kind&quot;: &quot;local&quot;,
+              &quot;id&quot;: &quot;trip.underway&quot;
+            }
+          },
+          &quot;format&quot;: {
+            &quot;unit&quot;: &quot;h&quot;,
+            &quot;decimals&quot;: 1
+          },
+          &quot;style&quot;: {
+            &quot;title&quot;: &quot;UNDERWAY&quot;,
+            &quot;size&quot;: 20
+          }
+        },
+        &quot;sognow&quot;: {
+          &quot;type&quot;: &quot;single-value&quot;,
+          &quot;name&quot;: &quot;SOG&quot;,
+          &quot;bindings&quot;: {
+            &quot;value&quot;: {
+              &quot;kind&quot;: &quot;signalk&quot;,
+              &quot;path&quot;: &quot;navigation.speedOverGround&quot;
+            }
+          },
+          &quot;format&quot;: {
+            &quot;unit&quot;: &quot;kn&quot;,
+            &quot;decimals&quot;: 1
+          },
+          &quot;style&quot;: {
+            &quot;title&quot;: &quot;SOG&quot;,
+            &quot;size&quot;: 28
+          }
+        }
+      },
+      &quot;layout&quot;: {
+        &quot;preset&quot;: &quot;hero-split&quot;,
+        &quot;slots&quot;: [
+          &quot;distance&quot;,
+          &quot;time&quot;,
+          &quot;sognow&quot;
+        ]
+      }
+    }
+  ]
+}</pre></div></body></html>

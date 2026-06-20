@@ -15,4 +15,89 @@ ul{margin:0;padding-left:18px} li{margin:2px 0} .note{color:#ffb84d}
 <div class="meta"><h1>Status</h1><p class="purpose">System + link status.</p>
 <h2>Elements</h2><ul><li>WiFi STA/SSID/IP</li><li>SignalK state</li><li>Device id</li><li>Firmware/uptime</li><li>Heap</li><li>SoC/Fuel/Water bars</li></ul>
 <h2>Design notes</h2><ul><li class="note">Internal heap is a SRAM-pressure watch.</li></ul>
-<h2>Resolution</h2><p>480 × 480 · ST7701 RGB · LVGL 9</p></div></div></body></html>
+<h2>Resolution</h2><p>480 × 480 · ST7701 RGB · LVGL 9</p></div></div><div style="padding:0 20px 24px"><h2 style="font-size:12px;letter-spacing:.08em;text-transform:uppercase;color:#52736f;margin:8px 0 6px">MIDL definition</h2><pre style="margin:0;background:#06101a;border:1px solid #1d2b3a;border-radius:8px;padding:14px;overflow:auto;max-height:360px;color:#9fb4c8;font:12px/1.45 'Montserrat',ui-monospace,monospace">{
+  &quot;midl&quot;: &quot;1.0.0&quot;,
+  &quot;screens&quot;: [
+    {
+      &quot;id&quot;: &quot;status&quot;,
+      &quot;title&quot;: &quot;Status&quot;,
+      &quot;_note&quot;: &quot;screen_status shows WIFI/SSID/IP/RSSI/BLE-id/SIGNALK/HEAP/PSRAM/UPTIME/BUILD - all device-local or const values with no SignalK path. square-480 maxTiles=4: modeled as 2x2 IP/SIGNALK/HEAP/UPTIME text tiles. All bindings are kind:local/const (valid per config schema). The square-480 capability manifest advertises sources:[signalk] only, so every tile here fails the capability (caps) layer by design - this screen is intrinsically local-only diagnostics. See validation report.&quot;,
+      &quot;elements&quot;: {
+        &quot;ip&quot;: {
+          &quot;type&quot;: &quot;text&quot;,
+          &quot;name&quot;: &quot;IP&quot;,
+          &quot;bindings&quot;: {
+            &quot;value&quot;: {
+              &quot;kind&quot;: &quot;local&quot;,
+              &quot;id&quot;: &quot;net.ip&quot;
+            }
+          },
+          &quot;style&quot;: {
+            &quot;title&quot;: &quot;IP&quot;,
+            &quot;size&quot;: 20
+          }
+        },
+        &quot;sk&quot;: {
+          &quot;type&quot;: &quot;text&quot;,
+          &quot;name&quot;: &quot;SIGNALK&quot;,
+          &quot;bindings&quot;: {
+            &quot;value&quot;: {
+              &quot;kind&quot;: &quot;local&quot;,
+              &quot;id&quot;: &quot;sk.state&quot;
+            }
+          },
+          &quot;style&quot;: {
+            &quot;title&quot;: &quot;SIGNALK&quot;,
+            &quot;size&quot;: 20
+          }
+        },
+        &quot;heap&quot;: {
+          &quot;type&quot;: &quot;text&quot;,
+          &quot;name&quot;: &quot;HEAP&quot;,
+          &quot;bindings&quot;: {
+            &quot;value&quot;: {
+              &quot;kind&quot;: &quot;local&quot;,
+              &quot;id&quot;: &quot;sys.heap&quot;
+            }
+          },
+          &quot;style&quot;: {
+            &quot;title&quot;: &quot;HEAP&quot;,
+            &quot;size&quot;: 20
+          }
+        },
+        &quot;uptime&quot;: {
+          &quot;type&quot;: &quot;text&quot;,
+          &quot;name&quot;: &quot;UPTIME&quot;,
+          &quot;bindings&quot;: {
+            &quot;value&quot;: {
+              &quot;kind&quot;: &quot;local&quot;,
+              &quot;id&quot;: &quot;sys.uptime&quot;
+            }
+          },
+          &quot;style&quot;: {
+            &quot;title&quot;: &quot;UPTIME&quot;,
+            &quot;size&quot;: 20
+          }
+        }
+      },
+      &quot;layout&quot;: {
+        &quot;rows&quot;: 2,
+        &quot;cols&quot;: 2,
+        &quot;cells&quot;: [
+          {
+            &quot;element&quot;: &quot;ip&quot;
+          },
+          {
+            &quot;element&quot;: &quot;sk&quot;
+          },
+          {
+            &quot;element&quot;: &quot;heap&quot;
+          },
+          {
+            &quot;element&quot;: &quot;uptime&quot;
+          }
+        ]
+      }
+    }
+  ]
+}</pre></div></body></html>

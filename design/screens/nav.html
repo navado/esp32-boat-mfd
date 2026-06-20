@@ -15,4 +15,112 @@ ul{margin:0;padding-left:18px} li{margin:2px 0} .note{color:#ffb84d}
 <div class="meta"><h1>Nav</h1><p class="purpose">Position + course overview.</p>
 <h2>Elements</h2><ul><li>Position (DDM)</li><li>COG</li><li>SOG</li><li>HDG</li><li>mini compass (CTS secondary)</li></ul>
 <h2>Design notes</h2><ul><li class="note">COG de-duplicated; compass secondary now CTS.</li></ul>
-<h2>Resolution</h2><p>480 × 480 · ST7701 RGB · LVGL 9</p></div></div></body></html>
+<h2>Resolution</h2><p>480 × 480 · ST7701 RGB · LVGL 9</p></div></div><div style="padding:0 20px 24px"><h2 style="font-size:12px;letter-spacing:.08em;text-transform:uppercase;color:#52736f;margin:8px 0 6px">MIDL definition</h2><pre style="margin:0;background:#06101a;border:1px solid #1d2b3a;border-radius:8px;padding:14px;overflow:auto;max-height:360px;color:#9fb4c8;font:12px/1.45 'Montserrat',ui-monospace,monospace">{
+  &quot;midl&quot;: &quot;1.0.0&quot;,
+  &quot;screens&quot;: [
+    {
+      &quot;id&quot;: &quot;nav&quot;,
+      &quot;title&quot;: &quot;Navigation&quot;,
+      &quot;_note&quot;: &quot;screen_nav shows position + COG + SOG + HDG + a compass (5 readouts). square-480 maxTiles=4: modeled as compass + SOG + COG + HDG. navigation.position is dropped from the tiling (it needs a wide lat/lon field that does not fit a square tile).&quot;,
+      &quot;elements&quot;: {
+        &quot;compass&quot;: {
+          &quot;type&quot;: &quot;compass&quot;,
+          &quot;name&quot;: &quot;HDG&quot;,
+          &quot;bindings&quot;: {
+            &quot;value&quot;: {
+              &quot;kind&quot;: &quot;signalk&quot;,
+              &quot;path&quot;: &quot;navigation.headingTrue&quot;
+            }
+          },
+          &quot;style&quot;: {
+            &quot;title&quot;: &quot;HDG&quot;,
+            &quot;size&quot;: 48
+          },
+          &quot;markers&quot;: [
+            {
+              &quot;id&quot;: &quot;COG&quot;,
+              &quot;glyph&quot;: &quot;chevron_out&quot;,
+              &quot;color&quot;: &quot;accent&quot;,
+              &quot;dir&quot;: {
+                &quot;kind&quot;: &quot;signalk&quot;,
+                &quot;path&quot;: &quot;navigation.courseOverGroundTrue&quot;
+              }
+            }
+          ]
+        },
+        &quot;sog&quot;: {
+          &quot;type&quot;: &quot;single-value&quot;,
+          &quot;name&quot;: &quot;SOG&quot;,
+          &quot;bindings&quot;: {
+            &quot;value&quot;: {
+              &quot;kind&quot;: &quot;signalk&quot;,
+              &quot;path&quot;: &quot;navigation.speedOverGround&quot;
+            }
+          },
+          &quot;format&quot;: {
+            &quot;unit&quot;: &quot;kn&quot;,
+            &quot;decimals&quot;: 1
+          },
+          &quot;style&quot;: {
+            &quot;title&quot;: &quot;SOG&quot;,
+            &quot;size&quot;: 28
+          }
+        },
+        &quot;cog&quot;: {
+          &quot;type&quot;: &quot;single-value&quot;,
+          &quot;name&quot;: &quot;COG&quot;,
+          &quot;bindings&quot;: {
+            &quot;value&quot;: {
+              &quot;kind&quot;: &quot;signalk&quot;,
+              &quot;path&quot;: &quot;navigation.courseOverGroundTrue&quot;
+            }
+          },
+          &quot;format&quot;: {
+            &quot;unit&quot;: &quot;deg&quot;,
+            &quot;decimals&quot;: 0
+          },
+          &quot;style&quot;: {
+            &quot;title&quot;: &quot;COG&quot;,
+            &quot;size&quot;: 28
+          }
+        },
+        &quot;hdg&quot;: {
+          &quot;type&quot;: &quot;single-value&quot;,
+          &quot;name&quot;: &quot;HDG&quot;,
+          &quot;bindings&quot;: {
+            &quot;value&quot;: {
+              &quot;kind&quot;: &quot;signalk&quot;,
+              &quot;path&quot;: &quot;navigation.headingTrue&quot;
+            }
+          },
+          &quot;format&quot;: {
+            &quot;unit&quot;: &quot;deg&quot;,
+            &quot;decimals&quot;: 0
+          },
+          &quot;style&quot;: {
+            &quot;title&quot;: &quot;HDG&quot;,
+            &quot;size&quot;: 28
+          }
+        }
+      },
+      &quot;layout&quot;: {
+        &quot;rows&quot;: 2,
+        &quot;cols&quot;: 2,
+        &quot;cells&quot;: [
+          {
+            &quot;element&quot;: &quot;compass&quot;
+          },
+          {
+            &quot;element&quot;: &quot;sog&quot;
+          },
+          {
+            &quot;element&quot;: &quot;cog&quot;
+          },
+          {
+            &quot;element&quot;: &quot;hdg&quot;
+          }
+        ]
+      }
+    }
+  ]
+}</pre></div></body></html>

@@ -1,0 +1,62 @@
+{
+  "midl": "1.0.0",
+  "screens": [
+    {
+      "id": "wind_steer",
+      "title": "Wind Steer",
+      "_note": "screen_wind_steer overlays a heading compass with HDG/COG/CTS/TWD markers, four wind readouts (AWS/AWA/TWS/TWA) and a tack/gybe + course-adjust button row. square-480 maxTiles=4: modeled as compass + a wind readout + tack + gybe buttons. AWA/TWS/TWA and the +/-course-trim buttons are dropped from the tiling. Firmware autopilot writes go to steering/autopilot/target/headingTrue; tack/gybe are exposed as command actions (manifest actionKinds=[nav,command]; put is not a device action kind).",
+      "elements": {
+        "compass": {
+          "type": "compass",
+          "name": "HDG",
+          "bindings": {
+            "value": { "kind": "signalk", "path": "navigation.headingTrue" }
+          },
+          "style": { "title": "HDG", "size": 48 },
+          "markers": [
+            { "id": "HDG", "glyph": "triangle", "color": "fg", "dir": { "kind": "signalk", "path": "navigation.headingTrue" } },
+            { "id": "COG", "glyph": "chevron_out", "color": "accent", "dir": { "kind": "signalk", "path": "navigation.courseOverGroundTrue" } },
+            { "id": "CTS", "glyph": "diamond", "color": "good", "dir": { "kind": "signalk", "path": "navigation.courseRhumbline.bearingTrackTrue" } },
+            { "id": "TWD", "glyph": "bar", "color": "warn", "dir": { "kind": "signalk", "path": "environment.wind.directionTrue" } }
+          ]
+        },
+        "aws": {
+          "type": "single-value",
+          "name": "AWS",
+          "bindings": {
+            "value": { "kind": "signalk", "path": "environment.wind.speedApparent" }
+          },
+          "format": { "unit": "kn", "decimals": 1 },
+          "style": { "title": "AWS", "size": 28 }
+        },
+        "tack": {
+          "type": "button",
+          "name": "TACK",
+          "style": { "title": "TACK", "size": 20 },
+          "action": { "kind": "command", "target": "ap-tack" }
+        },
+        "gybe": {
+          "type": "button",
+          "name": "GYBE",
+          "style": { "title": "GYBE", "size": 20 },
+          "action": { "kind": "command", "target": "ap-gybe" }
+        }
+      },
+      "layout": {
+        "dir": "col",
+        "weights": [3, 1],
+        "children": [
+          { "element": "compass" },
+          {
+            "dir": "row",
+            "children": [
+              { "element": "aws" },
+              { "element": "tack" },
+              { "element": "gybe" }
+            ]
+          }
+        ]
+      }
+    }
+  ]
+}
