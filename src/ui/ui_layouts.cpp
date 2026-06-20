@@ -245,18 +245,15 @@ static void format_metric(const MetricBinding &m, const sk::Data &d, char *prima
         // convention; the big hero font font_xl_64 has no '+' glyph, so a signed
         // "%+.0f" rendered a tofu box). +ve = right of track (steer port -> 'P'),
         // -ve = left of track (steer starboard -> 'S'). Unit label "m" stays.
+        // Magnitude (k/M scaled) + P/S suffix. fit_value_font auto-shrinks the
+        // hero so even a degenerate sim XTE (hundreds of km) fits without
+        // clipping. No '>' over-range token here: font_xl_64 has no '>' glyph
+        // (renders tofu); the operator's off-scale cue lives on the XTE strip
+        // (build_xte_strip / format_xte), which uses a normal font.
         if (!isnan(d.xte)) {
-            // Sanity guard: the sim has published degenerate XTE of hundreds of
-            // km (no active route / bad reference). Beyond 5 nm (9260 m) off track
-            // the precise figure is meaningless, so show ">5kP"/">5kS" instead.
-            // The static unit label is "m", hence ">5k" reads as ">5 km".
-            if (fabs(d.xte) > 9260.0) {
-                snprintf(primary, pcap, ">5k%c", d.xte >= 0 ? 'P' : 'S');
-            } else {
-                char mag[20];
-                vfmt::format_scaled(fabs(d.xte), s_fmt.distance, mag, sizeof(mag));
-                snprintf(primary, pcap, "%s%c", mag, d.xte >= 0 ? 'P' : 'S');
-            }
+            char mag[20];
+            vfmt::format_scaled(fabs(d.xte), s_fmt.distance, mag, sizeof(mag));
+            snprintf(primary, pcap, "%s%c", mag, d.xte >= 0 ? 'P' : 'S');
         } else {
             snprintf(primary, pcap, "--");
         }
