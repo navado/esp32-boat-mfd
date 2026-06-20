@@ -68,8 +68,9 @@ static void radial_tick(lv_obj_t *group, int gcx, int gcy, int deg, int len, int
 // in one place so build + layout agree.
 static constexpr int LABEL_INSET = 44;
 
-// Cardinal labels are red; the numeric degree labels are dark ink so they read
-// against the white band.
+// Cardinal labels are dark ink (neutral) like the numeric degree labels -- red
+// is reserved for port-side / alarm cues, so the N/E/S/W letters must not steal
+// it. They read against the white band on weight (montserrat_28) instead.
 static bool is_cardinal(int i) {
     return (i % 3) == 0;  // 0=N 90=E 180=S 270=W at i = 0,3,6,9
 }
@@ -140,7 +141,7 @@ Compass build_compass(lv_obj_t *parent, int ox, int oy, int w) {
         lv_label_set_text(l, txt);
         lv_obj_set_style_text_font(
             l, is_cardinal(i) ? &lv_font_montserrat_28 : &lv_font_montserrat_20, 0);
-        lv_obj_set_style_text_color(l, lv_color_hex(is_cardinal(i) ? theme.alarm : 0x16222f), 0);
+        lv_obj_set_style_text_color(l, lv_color_hex(0x16222f), 0);
         lv_obj_set_width(l, 52);
         lv_obj_set_style_text_align(l, LV_TEXT_ALIGN_CENTER, 0);
         lv_obj_add_flag(l, LV_OBJ_FLAG_HIDDEN);
@@ -227,9 +228,10 @@ lv_obj_t *numeric_tile(lv_obj_t *parent, int x, int y, int w, int h, const char 
 // Sane upper bound on a displayable cross-track error. The sim has been seen
 // publishing degenerate XTE of hundreds of km (no active route / bad reference),
 // which renders as a meaningless over-precise number. Beyond 5 nm off track the
-// magnitude carries no steering value, so clamp to a ">5nm" indicator with the
+// magnitude carries no steering value, so clamp to a ">5 nm" indicator with the
 // side preserved. 5 nm = 9260 m.
 static constexpr double kXteSaneCapM = 9260.0;  // 5 nm
+static constexpr double kMetersPerNm = 1852.0;  // exact
 
 void format_xte(double xte_m, char *out, size_t cap) {
     if (isnan(xte_m)) {
@@ -238,13 +240,14 @@ void format_xte(double xte_m, char *out, size_t cap) {
     }
     char side = xte_m >= 0 ? 'P' : 'S';  // +ve = right of track -> steer port
     if (fabs(xte_m) > kXteSaneCapM) {
-        snprintf(out, cap, ">5nm%c", side);
+        snprintf(out, cap, ">5 nm %c", side);
         return;
     }
-    // In-range (<= 5 nm): plain whole meters + the P/S side suffix. Capped at
-    // 9260 m so this is at most 4 digits; no k/M scaling needed (and scaling
-    // here would mislabel a "9.3k" string with a trailing "m").
-    snprintf(out, cap, "%.0fm%c", fabs(xte_m), side);
+    // In-range (<= 5 nm): cross-track in nautical miles + the P/S side suffix.
+    // Steering wants nm (the unit the chart plotter / autopilot speak), not raw
+    // meters. Two decimals resolves down to ~0.01 nm (~19 m) which is plenty for
+    // close-quarters steering, and stays narrow enough for the strip's font.
+    snprintf(out, cap, "%.2f nm %c", fabs(xte_m) / kMetersPerNm, side);
 }
 
 XteStrip build_xte_strip(lv_obj_t *parent, int x, int y, int w, int h) {
@@ -257,8 +260,13 @@ XteStrip build_xte_strip(lv_obj_t *parent, int x, int y, int w, int h) {
     xs.root = root;
 
     int cx = w / 2;
-    int half = w / 2 - 28;  // leave room for PORT / STBD text
-    int base_y = h / 2 + 4;
+    int half = w / 2 - 28;  // leave room for the -1.0 / 1.0 axis end labels
+    // The strip has three stacked rows: a top label row (PORT | readout | STBD),
+    // the axis baseline below it, and the -1.0..1.0 numeric ticks in a reserved
+    // gutter under the axis. PORT/STBD live ABOVE the axis so they never collide
+    // with the end ticks. base_y pushed down to make room for the top label row.
+    int label_row_y = 0;
+    int base_y = 18;
     xs.center_x = cx;
     xs.half_px = half;
 
@@ -270,7 +278,8 @@ XteStrip build_xte_strip(lv_obj_t *parent, int x, int y, int w, int h) {
     lv_obj_set_style_bg_opa(line, LV_OPA_COVER, 0);
     no_chrome(line);
 
-    // Scale ticks + numeric labels at -1, -0.5, 0, 0.5, 1.
+    // Scale ticks + numeric labels at -1, -0.5, 0, 0.5, 1. Numeric labels sit in
+    // the gutter below the baseline; the top row above carries PORT/STBD.
     static const float fr[] = {-1.0f, -0.5f, 0.0f, 0.5f, 1.0f};
     static const char *lbl[] = {"-1.0", "-0.5", "0", "0.5", "1.0"};
     for (int i = 0; i < 5; ++i) {
@@ -286,29 +295,30 @@ XteStrip build_xte_strip(lv_obj_t *parent, int x, int y, int w, int h) {
         lv_label_set_text(nl, lbl[i]);
         lv_obj_set_style_text_font(nl, &lv_font_montserrat_14, 0);
         lv_obj_set_style_text_color(nl, lv_color_hex(theme.fg_dim), 0);
-        lv_obj_set_pos(nl, tx - (int)strlen(lbl[i]) * 4, base_y + 6);
+        lv_obj_set_pos(nl, tx - (int)strlen(lbl[i]) * 4, base_y + 5);
     }
 
-    // PORT / STBD captions at the ends.
+    // PORT / STBD captions in the top label row, ABOVE the axis -- clear of the
+    // -1.0 / 1.0 end ticks (which now live in the gutter below the baseline).
     lv_obj_t *port = lv_label_create(root);
     lv_label_set_text(port, "PORT");
     lv_obj_set_style_text_font(port, &lv_font_montserrat_14, 0);
     lv_obj_set_style_text_color(port, lv_color_hex(theme.fg_dim), 0);
-    lv_obj_align(port, LV_ALIGN_TOP_LEFT, 0, 0);
+    lv_obj_set_pos(port, 0, label_row_y);
     lv_obj_t *stbd = lv_label_create(root);
     lv_label_set_text(stbd, "STBD");
     lv_obj_set_style_text_font(stbd, &lv_font_montserrat_14, 0);
     lv_obj_set_style_text_color(stbd, lv_color_hex(theme.fg_dim), 0);
-    lv_obj_align(stbd, LV_ALIGN_TOP_RIGHT, 0, 0);
+    lv_obj_align(stbd, LV_ALIGN_TOP_RIGHT, 0, label_row_y);
 
-    // Numeric cross-track readout (meters + P/S side) centered at the top, so the
-    // operator can read the magnitude, not just which side the needle is on.
-    // Updated in the screen refresh via format_xte().
+    // Numeric cross-track readout (nm + P/S side) centered in the top label row
+    // between PORT and STBD, so the operator can read the magnitude, not just
+    // which side the needle is on. Updated in the screen refresh via format_xte().
     lv_obj_t *val = lv_label_create(root);
     lv_label_set_text(val, "--");
     lv_obj_set_style_text_font(val, &lv_font_montserrat_14, 0);
     lv_obj_set_style_text_color(val, lv_color_hex(theme.fg), 0);
-    lv_obj_align(val, LV_ALIGN_TOP_MID, 0, 0);
+    lv_obj_align(val, LV_ALIGN_TOP_MID, 0, label_row_y);
     xs.value = val;
 
     // Red deviation needle, centered (zero) at build time.

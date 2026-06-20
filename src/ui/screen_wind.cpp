@@ -90,7 +90,9 @@ static void build_cardinals(lv_obj_t *parent) {
         lv_obj_t *l = lv_label_create(parent);
         lv_label_set_text(l, kCardText[i]);
         lv_obj_set_style_text_font(l, card ? &lv_font_montserrat_20 : &lv_font_montserrat_14, 0);
-        uint32_t color = (i == 0) ? theme.alarm : (card ? 0x16222f : 0x44546a);
+        // Neutral ink for all cardinals (N no longer red): red is reserved for
+        // port-side cues on the wind dial, so the N letter must not claim it.
+        uint32_t color = card ? 0x16222f : 0x44546a;
         lv_obj_set_style_text_color(l, lv_color_hex(color), 0);
         lv_obj_set_width(l, 40);
         lv_obj_set_style_text_align(l, LV_TEXT_ALIGN_CENTER, 0);

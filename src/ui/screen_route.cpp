@@ -37,7 +37,7 @@ static const ui::layouts::MetricBinding s_tiles[] = {
      ui::layouts::WidgetKind::Numeric},
     {"xte",
      "XTE",
-     "m",
+     "nm",
      ui::layouts::MetricSource::XTE,
      0xffb84d /*warn*/,
      nullptr,

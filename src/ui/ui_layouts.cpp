@@ -241,19 +241,18 @@ static void format_metric(const MetricBinding &m, const sk::Data &d, char *prima
             snprintf(primary, pcap, "--");
         break;
     case MetricSource::XTE:
-        // Magnitude with a port/starboard suffix (matches the wind-angle P/S
-        // convention; the big hero font font_xl_64 has no '+' glyph, so a signed
-        // "%+.0f" rendered a tofu box). +ve = right of track (steer port -> 'P'),
-        // -ve = left of track (steer starboard -> 'S'). Unit label "m" stays.
-        // Magnitude (k/M scaled) + P/S suffix. fit_value_font auto-shrinks the
-        // hero so even a degenerate sim XTE (hundreds of km) fits without
-        // clipping. No '>' over-range token here: font_xl_64 has no '>' glyph
-        // (renders tofu); the operator's off-scale cue lives on the XTE strip
-        // (build_xte_strip / format_xte), which uses a normal font.
+        // Cross-track error in NAUTICAL MILES (the unit a steering screen wants,
+        // not raw meters) with a port/starboard suffix (matches the wind-angle
+        // P/S convention; the big hero font font_xl_64 has no '+' glyph, so a
+        // signed "%+.2f" rendered a tofu box). +ve = right of track (steer
+        // port -> 'P'), -ve = left of track (steer starboard -> 'S'). The static
+        // unit label is "nm". Two decimals (~0.01 nm ≈ 19 m) resolves close-
+        // quarters steering. No '>' over-range token here: font_xl_64 has no '>'
+        // glyph (renders tofu); the operator's off-scale cue lives on the XTE
+        // strip (build_xte_strip / format_xte), which uses a normal font.
         if (!isnan(d.xte)) {
-            char mag[20];
-            vfmt::format_scaled(fabs(d.xte), s_fmt.distance, mag, sizeof(mag));
-            snprintf(primary, pcap, "%s%c", mag, d.xte >= 0 ? 'P' : 'S');
+            constexpr double kMetersPerNm = 1852.0;
+            snprintf(primary, pcap, "%.2f%c", fabs(d.xte) / kMetersPerNm, d.xte >= 0 ? 'P' : 'S');
         } else {
             snprintf(primary, pcap, "--");
         }
@@ -614,7 +613,9 @@ static void paint_compass_body(QuadGridTile &t, const MetricBinding &m, int w, i
     static const char *cardinals[4] = {"N", "E", "S", "W"};
     static const lv_align_t aligns[4] = {LV_ALIGN_TOP_MID, LV_ALIGN_RIGHT_MID, LV_ALIGN_BOTTOM_MID,
                                          LV_ALIGN_LEFT_MID};
-    static const int xs[4] = {0, -6, 0, 6};
+    // E/W sit at the ring edge with only a hair of inset so the centre number
+    // (over its vignette disc) never reaches them.
+    static const int xs[4] = {0, -2, 0, 2};
     static const int ys[4] = {4, 0, -4, 0};
     for (int i = 0; i < 4; ++i) {
         lv_obj_t *c = lv_label_create(ring);
@@ -632,6 +633,26 @@ static void paint_compass_body(QuadGridTile &t, const MetricBinding &m, int w, i
     if (dia >= 110) vfont = &lv_font_montserrat_48;
     if (dia >= 135) vfont = &font_xl_64;
     if (dia < 90) vfont = &lv_font_montserrat_28;
+
+    // Vignette disc behind the centre number: a soft panel-coloured pad so the
+    // wide HDG digits (e.g. "359") read on top of, not into, the W/E cardinals
+    // that sit at the ring edge. Sized to the central third of the dial; the
+    // number paints over it. Radius keeps it clear of the E/W letters' inset.
+    {
+        int disc = dia * 0.56;
+        if (disc < 56) disc = 56;
+        lv_obj_t *vig = lv_obj_create(ring);
+        lv_obj_set_size(vig, disc, disc);
+        lv_obj_align(vig, LV_ALIGN_CENTER, 0, 0);
+        lv_obj_set_style_bg_color(vig, lv_color_hex(theme.panel), 0);
+        lv_obj_set_style_bg_opa(vig, LV_OPA_80, 0);
+        lv_obj_set_style_radius(vig, LV_RADIUS_CIRCLE, 0);
+        lv_obj_set_style_border_width(vig, 0, 0);
+        lv_obj_set_style_pad_all(vig, 0, 0);
+        lv_obj_clear_flag(vig, LV_OBJ_FLAG_SCROLLABLE);
+        lv_obj_clear_flag(vig, LV_OBJ_FLAG_CLICKABLE);
+    }
+
     t.value = lv_label_create(ring);
     lv_label_set_text(t.value, "--");
     lv_obj_set_style_text_font(t.value, vfont, 0);
@@ -1094,6 +1115,15 @@ static void update_quad_grid(lv_obj_t *root, const ScreenVariantSpec &spec, cons
                 // Shrink the hero value to fit the tile (scaled k/M strings + a
                 // P/S suffix can be wider than the big font allows).
                 fit_value_font(t.value, pri, QG_TILE_W - 56);
+            }
+            // VMG sign tint: red when negative (opening from the mark / losing
+            // ground), green when making good toward it. Neutral on NaN so a
+            // dropout doesn't flash a false good/bad cue. Applied on the value
+            // label only for the VMG source.
+            if (t.value && m.source == MetricSource::VMG_kn) {
+                double vmg = mps_to_kn(data.vmg);
+                uint32_t col = isnan(vmg) ? theme.fg : (vmg < 0 ? theme.alarm : theme.good);
+                lv_obj_set_style_text_color(t.value, lv_color_hex(col), 0);
             }
             if (t.secondary) {
                 ui::set_text_if_changed(t.secondary, t.last_secondary, sizeof(t.last_secondary),

@@ -153,11 +153,17 @@ lv_obj_t *build(lv_obj_t *parent) {
     lv_obj_set_style_transform_pivot_y(lbl_depth, LV_PCT(50), 0);
     lv_obj_align(lbl_depth, LV_ALIGN_CENTER, -24, 8);
 
+    // Unit sits just to the right of the (2x-scaled) hero value, baseline-
+    // aligned, so number + "m" read as one block centered in the card -- not the
+    // unit pinned to the far right edge with dead space between. The value is
+    // LV_ALIGN_CENTER (-24, 8) and scales about its own centre, so its rendered
+    // right edge lands ~+60 px right of card centre for a 2-3 digit reading; the
+    // unit anchors there with a downward bias to share the digits' baseline.
     lv_obj_t *unit = lv_label_create(hero);
     lv_label_set_text(unit, "m");
     lv_obj_set_style_text_font(unit, &lv_font_montserrat_28, 0);
     lv_obj_set_style_text_color(unit, lv_color_hex(theme.fg_dim), 0);
-    lv_obj_align(unit, LV_ALIGN_BOTTOM_RIGHT, -12, -8);
+    lv_obj_align(unit, LV_ALIGN_CENTER, 60, 30);
 
     // Three stats side by side. Shorter (88 px) and higher than Trip's row to
     // leave a ~170 px history strip at the bottom.
@@ -165,7 +171,9 @@ lv_obj_t *build(lv_obj_t *parent) {
     int col_w = (LCD_W - 32) / 3;
     make_stat(s_root, "WATER TEMP", 8, row_y, col_w, 88, &lbl_temp, theme.fg);
     make_stat(s_root, "SOG", 8 + col_w + 8, row_y, col_w, 88, &lbl_sog, theme.fg);
-    make_stat(s_root, "TWA", 8 + (col_w + 8) * 2, row_y, col_w - 8, 88, &lbl_twa, theme.good);
+    // TWA neutral (theme.fg): green is reserved for a favoured-tack cue, which
+    // we don't compute -- so a permanently-green TWA was a false signal.
+    make_stat(s_root, "TWA", 8 + (col_w + 8) * 2, row_y, col_w - 8, 88, &lbl_twa, theme.fg);
 
     // Depth-history card (sparkline) spans the bottom (y 298..468).
     lv_obj_t *hist = lv_obj_create(s_root);

@@ -126,11 +126,15 @@ lv_obj_t *build(lv_obj_t *parent) {
     lv_obj_set_style_text_color(lbl_dist, lv_color_hex(theme.fg), 0);
     lv_obj_align(lbl_dist, LV_ALIGN_CENTER, -30, 10);
 
+    // Unit attaches just to the right of the value (baseline-aligned) so number
+    // + "nm" read as one centered block, instead of "nm" pinned to the card's
+    // right edge with dead space between. lv_obj_align_to tracks the value box,
+    // so it stays attached as the digit count changes (0.00 -> 12.3).
     lbl_dist_unit = lv_label_create(hero);
     lv_label_set_text(lbl_dist_unit, "nm");
     lv_obj_set_style_text_font(lbl_dist_unit, &lv_font_montserrat_28, 0);
     lv_obj_set_style_text_color(lbl_dist_unit, lv_color_hex(theme.fg_dim), 0);
-    lv_obj_align(lbl_dist_unit, LV_ALIGN_RIGHT_MID, -20, 10);
+    lv_obj_align_to(lbl_dist_unit, lbl_dist, LV_ALIGN_OUT_RIGHT_BOTTOM, 8, -6);
 
     // Three stats side by side
     int row_y = 248;
@@ -139,8 +143,10 @@ lv_obj_t *build(lv_obj_t *parent) {
               theme.fg);
     make_stat(s_root, "AVG SPEED", 8 + col_w + 8, row_y, col_w, 100, &lbl_avg,
               &lv_font_montserrat_28, theme.fg);
+    // MAX SPEED neutral (theme.fg): green implied a "good" state it doesn't have
+    // (it's just a record); reserve green for genuine favourable cues.
     make_stat(s_root, "MAX SPEED", 8 + (col_w + 8) * 2, row_y, col_w - 8, 100, &lbl_max,
-              &lv_font_montserrat_28, theme.good);
+              &lv_font_montserrat_28, theme.fg);
 
     // Live SOG strip
     lv_obj_t *strip = lv_obj_create(s_root);

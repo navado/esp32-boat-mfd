@@ -28,8 +28,9 @@ namespace config {
 // speed/angle/temp/volts/percent keep their legacy fixed-decimal form. The
 // painters (ui_layouts) and manager schema both consume this.
 struct FormatConfig {
-    vfmt::UnitFormat distance = {2, true};      // nm / m (XTE, DTW, log)
-    vfmt::UnitFormat depth = {1, true};         // m below transducer / keel
+    vfmt::UnitFormat distance = {2, true};      // nm / m (XTE, DTW, log) — only k/M class
+    vfmt::UnitFormat depth = {1, false};        // m below transducer/keel: bounded (<~200 m),
+                                                // never k/M-scale (design review S1)
     vfmt::UnitFormat speed = {1, false};        // kn (SOG/STW/AWS/TWS/VMG)
     vfmt::UnitFormat angle = {0, false};        // deg (HDG/COG/BTW/CTS/AWA/TWA/rudder)
     vfmt::UnitFormat temperature = {1, false};  // C
