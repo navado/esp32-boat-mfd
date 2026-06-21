@@ -1214,6 +1214,10 @@ void ota_task(void *) {
     s_ota_in_flight = true;
     String job_id = s_ota_job_id;
     String url = s_ota_url;
+    // A manager-relative URL ("/firmware/download/<job>") means pull the binary
+    // from the manager over plain HTTP (it proxies the GitHub asset host-side),
+    // avoiding device-side HTTPS. Resolve it against the plugin base.
+    if (url.startsWith("/")) url = build_url(url.c_str());
     String want_sha = s_ota_sha256;
     size_t want_size = s_ota_size;
     const char *failure_detail = nullptr;
@@ -1228,6 +1232,9 @@ void ota_task(void *) {
         failure_detail = "http begin failed";
         goto fail;
     }
+    // Send the device token so the manager's download route authorizes this
+    // job's device (same auth the device uses for /commands).
+    prepare_http(http);
     http.setConnectTimeout(5000);
     http.setTimeout(15000);  // longer for big binaries
     // GitHub release-asset URLs 302-redirect to objects.githubusercontent.com;
