@@ -44,6 +44,12 @@ Files:
   layout variant, widget, and font-size management contract.
 - `20-dashboard-config-import-export-security.md` - dashboard JSON/YAML
   import/export and device web/BLE access security contract.
+- `21-arduino-to-espidf-migration.md` - migration from arduino-esp32 2.x /
+  esp-idf 4.4.7 to esp-idf 5.x via the pioarduino hybrid framework;
+  motivated by OTA production-safety (rollback + flash-cache hang),
+  flicker-free double-buffered render, heap headroom, and MIDL runtime
+  rendering; phased module plan with the `ssl_client` link blocker and the
+  esp_lcd display port as the critical path.
 
 Use these specs when implementing the data-driven renderer, refining individual
 screens, or adding Signal K plugin/device-management features.
