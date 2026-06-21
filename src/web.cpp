@@ -166,6 +166,17 @@ static bool api_auth_required() {
 }
 
 static bool require_api_auth() {
+#ifdef YEYBOATS_LAB_OPEN_WEB
+    // ---- LAB-ONLY, TEMPORARY: web API auth bypass ------------------------
+    // Compiled in ONLY when the build explicitly defines YEYBOATS_LAB_OPEN_WEB
+    // (e.g. PLATFORMIO_BUILD_FLAGS="-D YEYBOATS_LAB_OPEN_WEB=1"). Production
+    // builds never define it, so this branch compiles out and normal Basic
+    // Auth applies. Used to capture headless /api/screenshot.png on a bench
+    // device whose web password is unknown. Re-secure by reflashing a normal
+    // build (the NVS web/{auth,user,pass} are left untouched).
+    // See docs/lab/temporary-web-auth-bypass.md. DO NOT SHIP.
+    return true;
+#else
     if (!api_auth_required()) return true;
     storage::Namespace p("web", true);
     String user = String(p.get_string("user", "espdisp").c_str());
@@ -174,6 +185,7 @@ static bool require_api_auth() {
     if (server.authenticate(user.c_str(), pass.c_str())) return true;
     server.requestAuthentication(BASIC_AUTH, "espdisp", "auth required");
     return false;
+#endif
 }
 
 // ---- /api/state --------------------------------------------------------
