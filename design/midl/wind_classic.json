@@ -14,7 +14,7 @@
             "dir": { "kind": "signalk", "path": "environment.wind.angleApparent" }
           },
           "format": { "unit": "kn", "decimals": 1 },
-          "style": { "title": "AWS", "size": 48 },
+          "style": { "title": "AWS", "size": 48, "hull": true, "sectors": [ { "from": -30, "to": 0, "color": "port" }, { "from": 0, "to": 30, "color": "starboard" } ] },
           "markers": [
             {
               "id": "TWA",
@@ -53,12 +53,12 @@
         }
       },
       "layout": {
-        "dir": "col",
+        "flow": "col",
         "weights": [3, 1],
         "children": [
           { "element": "rose" },
           {
-            "dir": "row",
+            "flow": "row",
             "children": [
               { "element": "tws" },
               { "element": "hdg" },

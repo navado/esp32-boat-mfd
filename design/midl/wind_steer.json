@@ -12,7 +12,7 @@
           "bindings": {
             "value": { "kind": "signalk", "path": "navigation.headingTrue" }
           },
-          "style": { "title": "HDG", "size": 48 },
+          "style": { "title": "HDG", "size": 48, "shape": "band" },
           "markers": [
             { "id": "HDG", "glyph": "triangle", "color": "fg", "dir": { "kind": "signalk", "path": "navigation.headingTrue" } },
             { "id": "COG", "glyph": "chevron_out", "color": "accent", "dir": { "kind": "signalk", "path": "navigation.courseOverGroundTrue" } },
@@ -43,12 +43,12 @@
         }
       },
       "layout": {
-        "dir": "col",
+        "flow": "col",
         "weights": [3, 1],
         "children": [
           { "element": "compass" },
           {
-            "dir": "row",
+            "flow": "row",
             "children": [
               { "element": "aws" },
               { "element": "tack" },
