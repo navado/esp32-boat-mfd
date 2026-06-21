@@ -45,6 +45,8 @@
 
 #include "storage.h"
 #include "midl_demo_doc.h"
+#include "midl_render.h"
+#include "psram_json.h"
 #include <math.h>
 #include <string.h>
 
@@ -2446,6 +2448,7 @@ void setup() {
     // get allocated when the operator navigates to them, freeing boot heap
     // for SK websocket buffers and OTA. Once visited, the root is cached
     // for the session - no rebuild on subsequent visits.
+#ifndef YEYBOATS_MIDL_ONLY
 #if defined(BOARD_ID_WAVESHARE_KNOB_1_8)
     // Waveshare knob: dedicated round views only. The autopilot HUD is the
     // first/home view; the rotary menu (knob_ui) drives mode + view switching.
@@ -2496,6 +2499,19 @@ void setup() {
     ui::register_screen_lazy("demo_grid", "Demo Grid", ui::demo_grid::build, ui::demo_grid::refresh,
                              true);
 #endif  // BOARD_ID_WAVESHARE_KNOB_1_8 (else: Sunton screen registration)
+#else   // YEYBOATS_MIDL_ONLY
+    {
+        // MIDL-only boot: the device's UI is the baked MIDL dashboard.
+        // setup() runs on the LVGL/loop task, so building LVGL here is safe.
+        JsonDocument midlDoc(&yeyboats::psram_json);  // pool in PSRAM, not internal heap
+        if (deserializeJson(midlDoc, midl::demo::SQUARE_480_JSON) == DeserializationError::Ok) {
+            midl::render::apply_doc(midlDoc.as<JsonVariantConst>(), "midl");
+            ui::show_by_id("midl");
+        } else {
+            net::logf("[midl-only] baked doc parse failed");
+        }
+    }
+#endif  // YEYBOATS_MIDL_ONLY
 
     // Attach the gesture handler to EVERY screen root via a post-build
     // hook. LVGL routes LV_EVENT_GESTURE to the currently loaded screen

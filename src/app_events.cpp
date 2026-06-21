@@ -243,7 +243,11 @@ void pump() {
             // hand it to manager_screens::apply() and free below.
             if (cmd.blob) {
                 const auto *plan_p = static_cast<const manager_config::RenderPlan *>(cmd.blob);
+#ifndef YEYBOATS_MIDL_ONLY
                 manager_screens::apply(*plan_p);
+#else
+                (void)plan_p;  // MIDL-only boot: ignore manager screens (blob freed below)
+#endif
             }
             break;
         }
