@@ -43,6 +43,8 @@ enum SolveStatus {
 // Expand a preset node `{preset, slots}` into concrete geometry by solving it
 // directly (the firmware never materialises an intermediate tree). Known
 // presets: "full" (1 slot) and "hero-split" (3 slots, {1,{2,3}}).
+// Returns SOLVE_BAD_NODE if slots missing/wrong count, SOLVE_UNKNOWN_PRESET if
+// name unrecognised, SOLVE_TOO_MANY_TILES if out is full.
 SolveStatus expand_preset(JsonVariantConst node, Rect area, PlacementSet &out);
 
 // Solve one screen's `layout` node into leaf placements within `area`.

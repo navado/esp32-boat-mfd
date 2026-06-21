@@ -1,5 +1,6 @@
 #include "midl_solve.h"
 
+#include <stdint.h>
 #include <string.h>
 
 namespace midl {
@@ -9,8 +10,8 @@ namespace {
 // Integer boundary for fraction `acc/total` of `span`. Using cumulative
 // weights and flooring each boundary distributes the remainder deterministically
 // and makes the last child end exactly at `span` (no gaps, no overlap).
-inline int boundary(int span, long acc, long total) {
-    return (int)((long)span * acc / total);
+inline int boundary(int span, int64_t acc, int64_t total) {
+    return (int)((int64_t)span * acc / total);
 }
 
 bool push_leaf(const char *id, Rect r, PlacementSet &out) {
@@ -30,16 +31,17 @@ SolveStatus solve_split(JsonVariantConst node, Rect area, int depth, PlacementSe
     bool row = strcmp(node["flow"] | node["dir"] | "row", "row") == 0;
 
     JsonArrayConst weights = node["weights"].as<JsonArrayConst>();
-    long total = 0;
+    if (!weights.isNull() && weights.size() != kids.size()) return SOLVE_BAD_NODE;
+    int64_t total = 0;
     for (size_t i = 0; i < kids.size(); i++)
-        total += weights.isNull() ? 1 : (long)(weights[i] | 1);
+        total += weights.isNull() ? 1 : (int64_t)(weights[i] | 1);
     if (total <= 0) return SOLVE_BAD_NODE;
 
-    long acc = 0;
+    int64_t acc = 0;
     int span = row ? area.w : area.h;
     int prev = 0;
     for (size_t i = 0; i < kids.size(); i++) {
-        acc += weights.isNull() ? 1 : (long)(weights[i] | 1);
+        acc += weights.isNull() ? 1 : (int64_t)(weights[i] | 1);
         int next = boundary(span, acc, total);
         Rect cr = row ? Rect{area.x + prev, area.y, next - prev, area.h}
                       : Rect{area.x, area.y + prev, area.w, next - prev};

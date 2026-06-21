@@ -1,6 +1,8 @@
 #include <unity.h>
 #include <ArduinoJson.h>
+#include <stdio.h>
 #include <string.h>
+#include <string>
 
 #include "midl_solve.h"
 
@@ -16,9 +18,14 @@ static PlacementSet solve(const char *json, Rect area) {
 }
 
 static const midl::Placement *find(const PlacementSet &p, const char *id) {
-    for (size_t i = 0; i < p.count; i++)
-        if (strcmp(p.items[i].element, id) == 0) return &p.items[i];
-    return nullptr;
+    const midl::Placement *result = nullptr;
+    for (size_t i = 0; i < p.count; i++) {
+        if (strcmp(p.items[i].element, id) == 0) {
+            TEST_ASSERT_NULL_MESSAGE(result, "duplicate element id in PlacementSet");
+            result = &p.items[i];
+        }
+    }
+    return result;
 }
 
 void test_leaf_fills_area() {
@@ -26,19 +33,23 @@ void test_leaf_fills_area() {
     TEST_ASSERT_EQUAL_size_t(1, p.count);
     const midl::Placement *a = find(p, "a");
     TEST_ASSERT_NOT_NULL(a);
-    TEST_ASSERT_EQUAL_INT(0, a->rect.x);
-    TEST_ASSERT_EQUAL_INT(480, a->rect.w);
-    TEST_ASSERT_EQUAL_INT(480, a->rect.h);
+    TEST_ASSERT_EQUAL_INT(0, a->rect.x);    // NOLINT — guarded above
+    TEST_ASSERT_EQUAL_INT(480, a->rect.w);  // NOLINT
+    TEST_ASSERT_EQUAL_INT(480, a->rect.h);  // NOLINT
 }
 
 void test_row_split_equal() {
     PlacementSet p =
         solve(R"({"flow":"row","children":[{"element":"a"},{"element":"b"}]})", {0, 0, 480, 480});
     TEST_ASSERT_EQUAL_size_t(2, p.count);
-    TEST_ASSERT_EQUAL_INT(0, find(p, "a")->rect.x);
-    TEST_ASSERT_EQUAL_INT(240, find(p, "a")->rect.w);
-    TEST_ASSERT_EQUAL_INT(240, find(p, "b")->rect.x);
-    TEST_ASSERT_EQUAL_INT(240, find(p, "b")->rect.w);
+    const midl::Placement *a = find(p, "a");
+    TEST_ASSERT_NOT_NULL(a);
+    const midl::Placement *b = find(p, "b");
+    TEST_ASSERT_NOT_NULL(b);
+    TEST_ASSERT_EQUAL_INT(0, a->rect.x);
+    TEST_ASSERT_EQUAL_INT(240, a->rect.w);
+    TEST_ASSERT_EQUAL_INT(240, b->rect.x);
+    TEST_ASSERT_EQUAL_INT(240, b->rect.w);
 }
 
 void test_row_split_weighted_distributes_remainder() {
@@ -47,10 +58,14 @@ void test_row_split_weighted_distributes_remainder() {
     PlacementSet p =
         solve(R"({"flow":"row","weights":[1,2],"children":[{"element":"a"},{"element":"b"}]})",
               {0, 0, 481, 480});
-    TEST_ASSERT_EQUAL_INT(0, find(p, "a")->rect.x);
-    TEST_ASSERT_EQUAL_INT(160, find(p, "a")->rect.w);
-    TEST_ASSERT_EQUAL_INT(160, find(p, "b")->rect.x);
-    TEST_ASSERT_EQUAL_INT(321, find(p, "b")->rect.w);
+    const midl::Placement *a = find(p, "a");
+    TEST_ASSERT_NOT_NULL(a);
+    const midl::Placement *b = find(p, "b");
+    TEST_ASSERT_NOT_NULL(b);
+    TEST_ASSERT_EQUAL_INT(0, a->rect.x);
+    TEST_ASSERT_EQUAL_INT(160, a->rect.w);
+    TEST_ASSERT_EQUAL_INT(160, b->rect.x);
+    TEST_ASSERT_EQUAL_INT(321, b->rect.w);
 }
 
 void test_col_split_nested() {
@@ -58,11 +73,17 @@ void test_col_split_nested() {
         R"({"flow":"col","children":[{"element":"a"},{"flow":"row","children":[{"element":"b"},{"element":"c"}]}]})",
         {0, 0, 480, 480});
     TEST_ASSERT_EQUAL_size_t(3, p.count);
-    TEST_ASSERT_EQUAL_INT(0, find(p, "a")->rect.y);
-    TEST_ASSERT_EQUAL_INT(240, find(p, "a")->rect.h);
-    TEST_ASSERT_EQUAL_INT(240, find(p, "b")->rect.y);
-    TEST_ASSERT_EQUAL_INT(240, find(p, "b")->rect.w);  // half of 480 width
-    TEST_ASSERT_EQUAL_INT(240, find(p, "c")->rect.x);
+    const midl::Placement *a = find(p, "a");
+    TEST_ASSERT_NOT_NULL(a);
+    const midl::Placement *b = find(p, "b");
+    TEST_ASSERT_NOT_NULL(b);
+    const midl::Placement *c = find(p, "c");
+    TEST_ASSERT_NOT_NULL(c);
+    TEST_ASSERT_EQUAL_INT(0, a->rect.y);
+    TEST_ASSERT_EQUAL_INT(240, a->rect.h);
+    TEST_ASSERT_EQUAL_INT(240, b->rect.y);
+    TEST_ASSERT_EQUAL_INT(240, b->rect.w);  // half of 480 width
+    TEST_ASSERT_EQUAL_INT(240, c->rect.x);
 }
 
 void test_grid_2x2_rowmajor() {
@@ -70,33 +91,49 @@ void test_grid_2x2_rowmajor() {
         R"({"rows":2,"cols":2,"cells":[{"element":"a"},{"element":"b"},{"element":"c"},{"element":"d"}]})",
         {0, 0, 480, 480});
     TEST_ASSERT_EQUAL_size_t(4, p.count);
-    TEST_ASSERT_EQUAL_INT(0, find(p, "a")->rect.x);
-    TEST_ASSERT_EQUAL_INT(0, find(p, "a")->rect.y);
-    TEST_ASSERT_EQUAL_INT(240, find(p, "b")->rect.x);
-    TEST_ASSERT_EQUAL_INT(0, find(p, "b")->rect.y);
-    TEST_ASSERT_EQUAL_INT(0, find(p, "c")->rect.x);
-    TEST_ASSERT_EQUAL_INT(240, find(p, "c")->rect.y);
-    TEST_ASSERT_EQUAL_INT(240, find(p, "d")->rect.x);
-    TEST_ASSERT_EQUAL_INT(240, find(p, "d")->rect.y);
-    TEST_ASSERT_EQUAL_INT(240, find(p, "a")->rect.w);
-    TEST_ASSERT_EQUAL_INT(240, find(p, "a")->rect.h);
+    const midl::Placement *a = find(p, "a");
+    TEST_ASSERT_NOT_NULL(a);
+    const midl::Placement *b = find(p, "b");
+    TEST_ASSERT_NOT_NULL(b);
+    const midl::Placement *c = find(p, "c");
+    TEST_ASSERT_NOT_NULL(c);
+    const midl::Placement *d = find(p, "d");
+    TEST_ASSERT_NOT_NULL(d);
+    TEST_ASSERT_EQUAL_INT(0, a->rect.x);
+    TEST_ASSERT_EQUAL_INT(0, a->rect.y);
+    TEST_ASSERT_EQUAL_INT(240, b->rect.x);
+    TEST_ASSERT_EQUAL_INT(0, b->rect.y);
+    TEST_ASSERT_EQUAL_INT(0, c->rect.x);
+    TEST_ASSERT_EQUAL_INT(240, c->rect.y);
+    TEST_ASSERT_EQUAL_INT(240, d->rect.x);
+    TEST_ASSERT_EQUAL_INT(240, d->rect.y);
+    TEST_ASSERT_EQUAL_INT(240, a->rect.w);
+    TEST_ASSERT_EQUAL_INT(240, a->rect.h);
 }
 
 void test_preset_full() {
     PlacementSet p = solve(R"({"preset":"full","slots":["a"]})", {0, 0, 480, 480});
     TEST_ASSERT_EQUAL_size_t(1, p.count);
-    TEST_ASSERT_EQUAL_INT(480, find(p, "a")->rect.w);
+    const midl::Placement *a = find(p, "a");
+    TEST_ASSERT_NOT_NULL(a);
+    TEST_ASSERT_EQUAL_INT(480, a->rect.w);
 }
 
 void test_preset_hero_split() {
     // {1,{2,3}} = row[ leaf, col[leaf,leaf] ], equal weights.
     PlacementSet p = solve(R"({"preset":"hero-split","slots":["hero","x","y"]})", {0, 0, 480, 480});
     TEST_ASSERT_EQUAL_size_t(3, p.count);
-    TEST_ASSERT_EQUAL_INT(0, find(p, "hero")->rect.x);
-    TEST_ASSERT_EQUAL_INT(240, find(p, "hero")->rect.w);
-    TEST_ASSERT_EQUAL_INT(240, find(p, "x")->rect.x);
-    TEST_ASSERT_EQUAL_INT(0, find(p, "x")->rect.y);
-    TEST_ASSERT_EQUAL_INT(240, find(p, "y")->rect.y);
+    const midl::Placement *hero = find(p, "hero");
+    TEST_ASSERT_NOT_NULL(hero);
+    const midl::Placement *x = find(p, "x");
+    TEST_ASSERT_NOT_NULL(x);
+    const midl::Placement *y = find(p, "y");
+    TEST_ASSERT_NOT_NULL(y);
+    TEST_ASSERT_EQUAL_INT(0, hero->rect.x);
+    TEST_ASSERT_EQUAL_INT(240, hero->rect.w);
+    TEST_ASSERT_EQUAL_INT(240, x->rect.x);
+    TEST_ASSERT_EQUAL_INT(0, x->rect.y);
+    TEST_ASSERT_EQUAL_INT(240, y->rect.y);
 }
 
 void test_preset_unknown_rejected() {
@@ -137,8 +174,15 @@ void test_malformed_node_rejected() {
                           midl::solve_screen(doc.as<JsonVariantConst>(), {0, 0, 480, 480}, out));
 }
 
-#include <stdio.h>
-#include <string>
+void test_weights_length_mismatch_rejected() {
+    // weights array has 1 entry but children has 2 — must be rejected.
+    JsonDocument doc;
+    deserializeJson(doc,
+                    R"({"flow":"row","weights":[1],"children":[{"element":"a"},{"element":"b"}]})");
+    PlacementSet out;
+    TEST_ASSERT_EQUAL_INT(midl::SOLVE_BAD_NODE,
+                          midl::solve_screen(doc.as<JsonVariantConst>(), {0, 0, 480, 480}, out));
+}
 
 static std::string slurp2(const char *path) {
     FILE *f = fopen(path, "rb");
@@ -160,15 +204,23 @@ void test_steering_fixture_geometry() {
     PlacementSet p;
     TEST_ASSERT_EQUAL_INT(midl::SOLVE_OK, midl::solve_screen(layout, {0, 0, 480, 480}, p));
     TEST_ASSERT_EQUAL_size_t(4, p.count);
+    const midl::Placement *compass = find(p, "compass");
+    TEST_ASSERT_NOT_NULL(compass);
+    const midl::Placement *cts = find(p, "cts");
+    TEST_ASSERT_NOT_NULL(cts);
+    const midl::Placement *xte = find(p, "xte");
+    TEST_ASSERT_NOT_NULL(xte);
+    const midl::Placement *rudder = find(p, "rudder");
+    TEST_ASSERT_NOT_NULL(rudder);
     // row weights [3,2] over 480: compass = [0,288), right col = [288,480).
-    TEST_ASSERT_EQUAL_INT(0, find(p, "compass")->rect.x);
-    TEST_ASSERT_EQUAL_INT(288, find(p, "compass")->rect.w);
-    TEST_ASSERT_EQUAL_INT(288, find(p, "cts")->rect.x);
-    TEST_ASSERT_EQUAL_INT(192, find(p, "cts")->rect.w);
+    TEST_ASSERT_EQUAL_INT(0, compass->rect.x);
+    TEST_ASSERT_EQUAL_INT(288, compass->rect.w);
+    TEST_ASSERT_EQUAL_INT(288, cts->rect.x);
+    TEST_ASSERT_EQUAL_INT(192, cts->rect.w);
     // right column split into 3 equal rows over 480: 160 each.
-    TEST_ASSERT_EQUAL_INT(0, find(p, "cts")->rect.y);
-    TEST_ASSERT_EQUAL_INT(160, find(p, "xte")->rect.y);
-    TEST_ASSERT_EQUAL_INT(320, find(p, "rudder")->rect.y);
+    TEST_ASSERT_EQUAL_INT(0, cts->rect.y);
+    TEST_ASSERT_EQUAL_INT(160, xte->rect.y);
+    TEST_ASSERT_EQUAL_INT(320, rudder->rect.y);
 }
 
 int main(int, char **) {
@@ -184,6 +236,7 @@ int main(int, char **) {
     RUN_TEST(test_too_deep_rejected);
     RUN_TEST(test_too_many_tiles_rejected);
     RUN_TEST(test_malformed_node_rejected);
+    RUN_TEST(test_weights_length_mismatch_rejected);
     RUN_TEST(test_steering_fixture_geometry);
     return UNITY_END();
 }
