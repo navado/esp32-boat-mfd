@@ -17,11 +17,11 @@
           "bindings": { "value": { "kind": "signalk", "path": "steering.rudderAngle" } } }
       },
       "layout": {
-        "dir": "row",
+        "flow": "row",
         "weights": [3, 2],
         "children": [
           { "element": "compass" },
-          { "dir": "col", "children": [ { "element": "cts" }, { "element": "xte" }, { "element": "rudder" } ] }
+          { "flow": "col", "children": [ { "element": "cts" }, { "element": "xte" }, { "element": "rudder" } ] }
         ]
       }
     }
