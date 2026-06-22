@@ -44,10 +44,10 @@ inline constexpr const char *SQUARE_480_JSON = R"midl({
         {"rows":2,"cols":2,"cells":[{"element":"hdg"},{"element":"rud"},{"element":"xte"},{"element":"vmg"}]},
         {"flow":"row","children":[{"element":"n10"},{"element":"n1"},{"element":"p1"},{"element":"p10"}]}]}},
     {"id":"route","title":"Route","elements":{
-      "dtw":{"type":"single-value","name":"DTW","format":{"unit":"nm"},"bindings":{"value":{"kind":"signalk","path":"navigation.courseRhumbline.nextPoint.distance"}}},
-      "btw":{"type":"single-value","name":"BTW","format":{"unit":"deg"},"bindings":{"value":{"kind":"signalk","path":"navigation.courseRhumbline.nextPoint.bearingTrue"}}},
-      "xte":{"type":"single-value","name":"XTE","format":{"unit":"nm"},"bindings":{"value":{"kind":"signalk","path":"navigation.courseRhumbline.crossTrackError"}}},
-      "vmg":{"type":"single-value","name":"VMG","format":{"unit":"kn"},"bindings":{"value":{"kind":"signalk","path":"navigation.courseRhumbline.velocityMadeGood"}}}},
+      "dtw":{"type":"single-value","name":"DTW","format":{"unit":"nm"},"style":{"color":"#57c7d8"},"bindings":{"value":{"kind":"signalk","path":"navigation.courseRhumbline.nextPoint.distance"}}},
+      "btw":{"type":"single-value","name":"BTW","format":{"unit":"deg"},"style":{"color":"#39d98a"},"bindings":{"value":{"kind":"signalk","path":"navigation.courseRhumbline.nextPoint.bearingTrue"}}},
+      "xte":{"type":"single-value","name":"XTE","format":{"unit":"nm"},"style":{"color":"#ffb84d"},"bindings":{"value":{"kind":"signalk","path":"navigation.courseRhumbline.crossTrackError"}}},
+      "vmg":{"type":"single-value","name":"VMG","format":{"unit":"kn"},"style":{"color":"#52736f"},"bindings":{"value":{"kind":"signalk","path":"navigation.courseRhumbline.velocityMadeGood"}}}},
       "layout":{"rows":2,"cols":2,"cells":[{"element":"dtw"},{"element":"btw"},{"element":"xte"},{"element":"vmg"}]}}
   ]
 })midl";

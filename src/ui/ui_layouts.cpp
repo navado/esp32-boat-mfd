@@ -73,6 +73,8 @@ const char *source_to_path(MetricSource s) {
         return "environment.wind.angleTrueWater";
     case MetricSource::SOG_kn:
         return "navigation.speedOverGround";
+    case MetricSource::STW_kn:
+        return "navigation.speedThroughWater";
     case MetricSource::COG_deg:
         return "navigation.courseOverGroundTrue";
     case MetricSource::HDG_deg:
@@ -189,6 +191,9 @@ static void format_metric(const MetricBinding &m, const sk::Data &d, char *prima
         break;
     case MetricSource::SOG_kn:
         vfmt::format_scaled(mps_to_kn(d.sog), s_fmt.speed, primary, pcap);
+        break;
+    case MetricSource::STW_kn:
+        vfmt::format_scaled(mps_to_kn(d.stw), s_fmt.speed, primary, pcap);
         break;
     case MetricSource::COG_deg:
         if (!isnan(d.cogTrue))
@@ -356,6 +361,8 @@ static double metric_scalar(const MetricBinding &m, const sk::Data &d) {
         return isnan(d.tws) ? NAN : mps_to_kn(d.tws);
     case MetricSource::SOG_kn:
         return isnan(d.sog) ? NAN : mps_to_kn(d.sog);
+    case MetricSource::STW_kn:
+        return isnan(d.stw) ? NAN : mps_to_kn(d.stw);
     case MetricSource::Depth_m:
         return d.depth;
     case MetricSource::DepthKeel_m:
@@ -465,6 +472,8 @@ static double scalar_unit_fraction(MetricSource src, double v) {
         return clamp01(v / 40.0);
     case MetricSource::SOG_kn:
         return clamp01(v / 15.0);
+    case MetricSource::STW_kn:
+        return clamp01(v / 15.0);
     case MetricSource::VMG_kn:
         return clamp01(v / 15.0);
     case MetricSource::WaterTemp_C:
@@ -520,6 +529,14 @@ static void fit_value_font(lv_obj_t *label, const char *txt, int max_w) {
     lv_obj_set_style_text_font(label, ladder[3], 0);
 }
 
+// Hero-value color: honor the element's authored style.color (MetricBinding.accent,
+// 0xRRGGBB) when set, else the theme accent. Restores the per-tile semantic colors
+// the glass-cockpit design intends (warn XTE, good depth, etc.); MIDL docs set it
+// via style.color → map_element → m.accent. accent==0 keeps the legacy theme color.
+static inline uint32_t value_color(const MetricBinding &m) {
+    return m.accent ? m.accent : theme.accent;
+}
+
 static void paint_numeric_body(QuadGridTile &t, const MetricBinding &m, int w, int h) {
     bool has_extras = (m.extras_count > 0);
 
@@ -557,7 +574,7 @@ static void paint_numeric_body(QuadGridTile &t, const MetricBinding &m, int w, i
     t.value = lv_label_create(row);
     lv_label_set_text(t.value, "--");
     lv_obj_set_style_text_font(t.value, vfont, 0);
-    lv_obj_set_style_text_color(t.value, lv_color_hex(theme.accent), 0);
+    lv_obj_set_style_text_color(t.value, lv_color_hex(value_color(m)), 0);
     lv_obj_clear_flag(t.value, LV_OBJ_FLAG_CLICKABLE);
 
     if (m.unit && m.unit[0]) {
@@ -697,7 +714,7 @@ static void paint_compass_body(QuadGridTile &t, const MetricBinding &m, int w, i
     t.value = lv_label_create(ring);
     lv_label_set_text(t.value, "--");
     lv_obj_set_style_text_font(t.value, vfont, 0);
-    lv_obj_set_style_text_color(t.value, lv_color_hex(theme.accent), 0);
+    lv_obj_set_style_text_color(t.value, lv_color_hex(value_color(m)), 0);
     lv_obj_align(t.value, LV_ALIGN_CENTER, 0, 0);
     lv_obj_clear_flag(t.value, LV_OBJ_FLAG_CLICKABLE);
 
@@ -784,14 +801,14 @@ static void paint_gauge_body(QuadGridTile &t, const MetricBinding &m, int w, int
     t.value = lv_label_create(t.root);
     lv_label_set_text(t.value, "--");
     lv_obj_set_style_text_font(t.value, vfont, 0);
-    lv_obj_set_style_text_color(t.value, lv_color_hex(theme.accent), 0);
+    lv_obj_set_style_text_color(t.value, lv_color_hex(value_color(m)), 0);
     lv_obj_align(t.value, LV_ALIGN_CENTER, 0, 4);
     lv_obj_clear_flag(t.value, LV_OBJ_FLAG_CLICKABLE);
 }
 
 // Bar widget: title row (label left, percent right) + LVGL bar fill.
 // Mirrors editor .wpreview .bar.
-static void paint_bar_body(QuadGridTile &t, const MetricBinding & /*m*/, int w, int h) {
+static void paint_bar_body(QuadGridTile &t, const MetricBinding &m, int w, int h) {
     // Bar tile: percent number is the hero element (centered, big), bar
     // sits below it. Percent dominates the tile so the operator can
     // read SOC / fuel / fresh-water at a glance, like editor's preview.
@@ -805,7 +822,7 @@ static void paint_bar_body(QuadGridTile &t, const MetricBinding & /*m*/, int w, 
     t.value = lv_label_create(t.root);
     lv_label_set_text(t.value, "--%");
     lv_obj_set_style_text_font(t.value, vfont, 0);
-    lv_obj_set_style_text_color(t.value, lv_color_hex(theme.accent), 0);
+    lv_obj_set_style_text_color(t.value, lv_color_hex(value_color(m)), 0);
     lv_obj_align(t.value, LV_ALIGN_CENTER, 0, -18);
     lv_obj_clear_flag(t.value, LV_OBJ_FLAG_CLICKABLE);
 
@@ -843,7 +860,7 @@ static void paint_trend_body(QuadGridTile &t, const MetricBinding &m, int w, int
     t.value = lv_label_create(t.root);
     lv_label_set_text(t.value, "--");
     lv_obj_set_style_text_font(t.value, vfont, 0);
-    lv_obj_set_style_text_color(t.value, lv_color_hex(theme.accent), 0);
+    lv_obj_set_style_text_color(t.value, lv_color_hex(value_color(m)), 0);
     lv_obj_align(t.value, LV_ALIGN_TOP_MID, 0, 26);
     lv_obj_clear_flag(t.value, LV_OBJ_FLAG_CLICKABLE);
 
@@ -934,7 +951,7 @@ static void paint_wind_rose_body(QuadGridTile &t, const MetricBinding &m, int w,
 }
 
 // Text widget: monospace value centered. Mirrors editor .wpreview .text-val.
-static void paint_text_body(QuadGridTile &t, const MetricBinding & /*m*/, int /*w*/, int h) {
+static void paint_text_body(QuadGridTile &t, const MetricBinding &m, int /*w*/, int h) {
     // Text widget covers multi-line values like position (lat / lon on
     // two lines). Pick a font that won't overflow short tiles.
     const lv_font_t *vfont = &lv_font_montserrat_20;
@@ -942,7 +959,7 @@ static void paint_text_body(QuadGridTile &t, const MetricBinding & /*m*/, int /*
     t.value = lv_label_create(t.root);
     lv_label_set_text(t.value, "--");
     lv_obj_set_style_text_font(t.value, vfont, 0);
-    lv_obj_set_style_text_color(t.value, lv_color_hex(theme.accent), 0);
+    lv_obj_set_style_text_color(t.value, lv_color_hex(value_color(m)), 0);
     lv_obj_set_style_text_align(t.value, LV_TEXT_ALIGN_CENTER, 0);
     lv_obj_align(t.value, LV_ALIGN_CENTER, 0, 6);
     lv_obj_clear_flag(t.value, LV_OBJ_FLAG_CLICKABLE);
@@ -1047,12 +1064,17 @@ static QuadGridTile build_tile(lv_obj_t *parent, int x, int y, int w, int h,
     lv_obj_set_pos(t.root, x, y);
     style_panel(t.root);
 
-    t.cap = lv_label_create(t.root);
-    lv_label_set_text(t.cap, m.label ? m.label : "");
-    lv_obj_set_style_text_font(t.cap, &lv_font_montserrat_20, 0);
-    lv_obj_set_style_text_color(t.cap, lv_color_hex(theme.fg_dim), 0);
-    lv_obj_set_pos(t.cap, 10, 2);
-    lv_obj_clear_flag(t.cap, LV_OBJ_FLAG_CLICKABLE);
+    // Chrome caption (top-left dim label). Buttons render their own label inside
+    // the accent bubble (paint_button_body), so a chrome cap would duplicate it —
+    // skip it for Button tiles. t.cap stays null; update paths never touch it.
+    if (m.kind != WidgetKind::Button) {
+        t.cap = lv_label_create(t.root);
+        lv_label_set_text(t.cap, m.label ? m.label : "");
+        lv_obj_set_style_text_font(t.cap, &lv_font_montserrat_20, 0);
+        lv_obj_set_style_text_color(t.cap, lv_color_hex(theme.fg_dim), 0);
+        lv_obj_set_pos(t.cap, 10, 2);
+        lv_obj_clear_flag(t.cap, LV_OBJ_FLAG_CLICKABLE);
+    }
 
     // --- Body: dispatched per widget kind ---
     switch (m.kind) {
