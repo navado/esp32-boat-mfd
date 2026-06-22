@@ -799,6 +799,58 @@ static void paint_bar_body(QuadGridTile &t, const MetricBinding & /*m*/, int w, 
     t.aux = bar;
 }
 
+// Trend widget: current reading (hero number) above a rolling sparkline. The
+// sparkline is a tile-sized lv_chart LINE series with no axes/markers — distinct
+// from the fullscreen TrendChartState used as a standalone screen template.
+//
+// History is the chart's own point ring: update pushes one normalized sample
+// (0..100 via binding_unit_fraction, the same scale as the gauge/bar fill) with
+// lv_chart_set_next_value, so no separate per-tile sample buffer is needed. A
+// ranged element (format.range) normalizes against its [min,max]; legacy tiles
+// use the per-source heuristic. Samples are pushed on value-change only, matching
+// the fullscreen trend (a steady reading holds the line rather than scrolling it).
+static void paint_trend_body(QuadGridTile &t, const MetricBinding &m, int w, int h) {
+    // Current reading: hero number, upper third of the tile.
+    const lv_font_t *vfont = &lv_font_montserrat_28;
+    if (h >= 160) vfont = &lv_font_montserrat_38;
+    if (w < 140) vfont = &lv_font_montserrat_20;
+    t.value = lv_label_create(t.root);
+    lv_label_set_text(t.value, "--");
+    lv_obj_set_style_text_font(t.value, vfont, 0);
+    lv_obj_set_style_text_color(t.value, lv_color_hex(theme.accent), 0);
+    lv_obj_align(t.value, LV_ALIGN_TOP_MID, 0, 26);
+    lv_obj_clear_flag(t.value, LV_OBJ_FLAG_CLICKABLE);
+
+    // Sparkline fills the lower half of the tile.
+    int chart_w = w - 24;
+    int chart_h = h / 2 - 12;
+    if (chart_h < 36) chart_h = 36;
+    lv_obj_t *chart = lv_chart_create(t.root);
+    lv_obj_set_size(chart, chart_w, chart_h);
+    lv_obj_align(chart, LV_ALIGN_BOTTOM_MID, 0, -10);
+    lv_chart_set_type(chart, LV_CHART_TYPE_LINE);
+    lv_chart_set_point_count(chart, 30);
+    lv_chart_set_div_line_count(chart, 0, 0);
+    lv_chart_set_range(chart, LV_CHART_AXIS_PRIMARY_Y, 0, 100);
+    lv_chart_set_update_mode(chart, LV_CHART_UPDATE_MODE_SHIFT);
+    lv_obj_set_style_bg_opa(chart, LV_OPA_TRANSP, 0);
+    lv_obj_set_style_border_width(chart, 0, 0);
+    lv_obj_set_style_pad_all(chart, 0, 0);
+    lv_obj_set_style_line_width(chart, 2, LV_PART_ITEMS);
+    // Hide the per-point dot markers: a clean line is the sparkline idiom.
+    lv_obj_set_style_width(chart, 0, LV_PART_INDICATOR);
+    lv_obj_set_style_height(chart, 0, LV_PART_INDICATOR);
+    lv_obj_clear_flag(chart, LV_OBJ_FLAG_CLICKABLE);
+    lv_obj_clear_flag(chart, LV_OBJ_FLAG_SCROLLABLE);
+    uint32_t accent = m.accent ? m.accent : theme.accent;
+    lv_chart_series_t *s =
+        lv_chart_add_series(chart, lv_color_hex(accent), LV_CHART_AXIS_PRIMARY_Y);
+    // Start empty so the line grows in from the right instead of sitting at 0.
+    lv_chart_set_all_values(chart, s, LV_CHART_POINT_NONE);
+    t.aux = chart;
+    t.last_aux_pct = -1;  // unset; first real sample always pushes
+}
+
 // Wind rose: dashed warn ring with center AWS value. Mirrors editor
 // .wpreview .rose - small visual stand-in; the fullscreen wind dial
 // (screen_wind.cpp) is the high-fidelity render.
@@ -995,7 +1047,9 @@ static QuadGridTile build_tile(lv_obj_t *parent, int x, int y, int w, int h,
     case WidgetKind::Autopilot:
         paint_autopilot_body(t, m, w, h);
         break;
-    case WidgetKind::Trend:  // sparkline not yet implemented; fall back
+    case WidgetKind::Trend:
+        paint_trend_body(t, m, w, h);
+        break;
     case WidgetKind::Numeric:
     default:
         paint_numeric_body(t, m, w, h);
@@ -1160,8 +1214,28 @@ static void update_quad_grid(lv_obj_t *root, const ScreenVariantSpec &spec, cons
                 ui::marker_ring_update(t.markers, live, 3, /*reference=*/0.0);
             }
             break;
+        case WidgetKind::Trend: {
+            // Hero number is the live reading; sparkline gets one normalized
+            // sample (0..100, same scale as the gauge/bar fill) on value-change.
+            ui::set_text_if_changed(t.value, t.last_value, sizeof(t.last_value), pri);
+            if (t.aux) {
+                double frac = binding_unit_fraction(m, metric_scalar(m, data));
+                if (!isnan(frac)) {
+                    int v = (int)(frac * 100.0 + 0.5);
+                    if (v != t.last_aux_pct) {
+                        lv_chart_series_t *s = lv_chart_get_series_next(t.aux, NULL);
+                        if (s) {
+                            lv_chart_set_next_value(t.aux, s, v);
+                            lv_chart_refresh(t.aux);
+                        }
+                        t.last_aux_pct = v;
+                    }
+                }
+            }
+            break;
+        }
         default:
-            // Numeric, WindRose, Text, Trend fallback - all use
+            // Numeric, WindRose, Text fallback - all use
             // the value/secondary text slots populated by format_metric.
             if (ui::set_text_if_changed(t.value, t.last_value, sizeof(t.last_value), pri) &&
                 t.kind == WidgetKind::Numeric && m.extras_count == 0) {
@@ -2707,8 +2781,28 @@ void update_freeform(lv_obj_t *root, const ScreenVariantSpec &spec, const sk::Da
                 ui::marker_ring_update(t.markers, live, 3, /*reference=*/0.0);
             }
             break;
+        case WidgetKind::Trend: {
+            // Mirrors update_quad_grid: hero number is the live reading; the
+            // sparkline gets one normalized 0..100 sample on value-change.
+            ui::set_text_if_changed(t.value, t.last_value, sizeof(t.last_value), pri);
+            if (t.aux) {
+                double frac = binding_unit_fraction(m, metric_scalar(m, data));
+                if (!isnan(frac)) {
+                    int v = (int)(frac * 100.0 + 0.5);
+                    if (v != t.last_aux_pct) {
+                        lv_chart_series_t *s = lv_chart_get_series_next(t.aux, NULL);
+                        if (s) {
+                            lv_chart_set_next_value(t.aux, s, v);
+                            lv_chart_refresh(t.aux);
+                        }
+                        t.last_aux_pct = v;
+                    }
+                }
+            }
+            break;
+        }
         default:
-            // Numeric, WindRose, Text, Trend — value/secondary text slots.
+            // Numeric, WindRose, Text — value/secondary text slots.
             if (ui::set_text_if_changed(t.value, t.last_value, sizeof(t.last_value), pri) &&
                 t.kind == WidgetKind::Numeric && m.extras_count == 0) {
                 // Use the tile's own width (solver may pick a rect different
