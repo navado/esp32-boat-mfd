@@ -1,14 +1,141 @@
 # Arduino → ESP-IDF Migration
 
+> **Target platform.** Today the firmware is **arduino-esp32 2.x on a
+> precompiled esp-idf 4.4.7 core** (`platform = espressif32@^6.7.0`,
+> `framework = arduino`). The migration target is **esp-idf 5.x via the
+> pioarduino hybrid framework** (`framework = arduino, espidf`,
+> `platform = pioarduino .../53.03.13`). The hybrid **rebuilds IDF from
+> source**, which is what makes `sdkconfig.defaults` actually take effect
+> — the single fact the whole migration turns on.
+>
+> **Status (2026-06-21).** The hybrid env (`[env:esp32-4848s040-idf5]`)
+> exists in `platformio.ini`, `sdkconfig.defaults` is written, and the
+> build reaches the **LINK stage** on pioarduino. Two concrete blockers
+> remain on the critical path: a pioarduino **duplicate-library link bug**
+> (`ssl_client.cpp` symbols, §A.1) and the **`Arduino_RGB_Display` gap on
+> arduino-3.x** (§H). Everything below the line is the dependency-ordered
+> module work behind those two.
+
+## Why now — three production drivers
+
+This is no longer a flash-savings / tidiness refactor. Three concrete,
+recent pain points each point at the same root cause — **no control over
+`sdkconfig` / the bootloader because the Arduino core is precompiled** —
+and each is only properly fixable on IDF5/hybrid.
+
+### 1. OTA reliability hang (production-severity, this week)
+
+A manager-pull OTA **hung the device mid-flash and required a physical
+power-cycle** — unacceptable for a deployed marine display. Root cause is
+a heap + flash-cache double-bind:
+
+- **Heap starvation.** Internal-SRAM low-water is already ~22 KB. The pull
+  path runs, concurrently: an HTTPS download, `Update.write` (2 MB flash
+  erase/write), a streaming sha256, and progress POSTs back to the
+  manager. Together they exhaust the internal heap.
+- **Flash-cache vs. live panel DMA.** A sustained flash write disables the
+  flash cache; meanwhile flash-resident code (the LVGL task) keeps running
+  against the RGB panel DMA + PSRAM framebuffer. The write races the cache
+  against live rendering.
+
+Interim 4.4 mitigation **already shipped**: pause the LVGL pump during OTA
+(`app_pause_ui`, in `src/main.cpp` / `src/manager.cpp`). That reduces the
+contention but does not remove it — the real fix is an **IRAM-safe
+esp_lcd** path plus **heap headroom**, both of which require `sdkconfig`
+control, i.e. the hybrid/IDF5 build.
+
+### 2. No OTA rollback / auto-recovery
+
+A bad OTA cannot auto-recover. Confirm-after-boot
+(`ESP_OTA_IMG_PENDING_VERIFY` → `esp_ota_mark_app_valid`) **cannot fire**
+because the precompiled Arduino bootloader was built **without**
+`CONFIG_BOOTLOADER_APP_ROLLBACK_ENABLE` — there is no pending-verify state
+to confirm. So a firmware that boots but is broken (or never reaches the
+"valid" point) bricks the device to a power-cycle + USB re-flash.
+
+IDF5/hybrid lets us **rebuild the bootloader + sdkconfig with rollback
+enabled**. An interim 4.4 workaround is an **NVS confirm-flag** (write a
+"booted OK" flag on first healthy heartbeat; a watchdog/boot-counter
+forces last-known-good if it is missing) — a software emulation of what
+rollback gives for free once the bootloader can be rebuilt.
+
+### 3. Flicker-free + fast render needs esp_lcd double-buffer (≥ IDF 5.0)
+
+Tear-free, high-FPS rendering needs **esp_lcd RGB `num_fbs = 2` +
+vsync-driven page-flip**, which is **esp-idf ≥ 5.0 only**. On 4.4 we hit a
+hard ceiling:
+
+- Shipped on 4.4 (the ceiling): quantize-and-cache rotations, a
+  **dedicated LVGL task**, fit-to-width and value scaling (spec 09). This
+  is single-buffer; it reduces redraw cost but **cannot give tear-free
+  double-buffering**.
+- `LV_DISPLAY_RENDER_MODE_DIRECT` on the single framebuffer **flickers**
+  (tearing on the live scan-out) — confirmed on the bench.
+- The RGB + PSRAM + flash combination triggers a **"Cache disabled but
+  cached memory region accessed" panic** unless the RGB refill ISR is
+  IRAM-safe (`CONFIG_LCD_RGB_ISR_IRAM_SAFE=y` + bounce buffers). The
+  **precompiled Arduino esp_lcd is not IRAM-safe**, so this is unreachable
+  on 4.4 — only the hybrid (which regenerates `sdkconfig`) can set it.
+
+Net: double-buffer + IRAM-safe ISR are the same `sdkconfig` lever, and the
+same lever that fixes driver #1's flash-cache race.
+
+### 4 (cross-cutting). Heap / BLE headroom needs sdkconfig
+
+Internal-SRAM low-water swings to **~1–22 KB** with BLE (NimBLE 2.x) +
+esp_lcd + the LVGL task all live. NimBLE memory tuning (host task stack,
+ACL buffer counts, GATT cache) is `sdkconfig`-only — unreachable on the
+precompiled core. LVGL allocations already go to PSRAM (good); the
+pressure is internal SRAM, exactly the resource `sdkconfig` lets us trim
+BLE/Wi-Fi/driver buffers to free.
+
+### 5 (forward-looking). MIDL runtime rendering raises the stakes
+
+The device is gaining **runtime dashboard rendering from YB-MIDL** (spec:
+`docs/superpowers/specs/2026-06-19-generic-dashboard-runtime-design.md`;
+`midl/` git submodule; active branch `feat/midl-firmware-render`). MIDL
+builds LVGL widget trees **at runtime from a config document** instead of
+the current compile-time hand-built `screen_*.cpp` HUDs. That means **more
+heap/PSRAM churn and more dynamic LVGL object construction/teardown** on
+config apply. Two consequences for this migration, both pulling it
+*earlier*:
+
+- it makes the ~22 KB internal-heap ceiling (driver #1, #4) **more
+  dangerous** — a runtime-built tree is exactly when you least want to be
+  one allocation from the floor;
+- smooth dynamic dashboards **benefit strongly from tear-free
+  double-buffering** (driver #3) — rebuilt screens flipping in on vsync
+  rather than tearing.
+
+So the migration should be **sequenced with the MIDL firmware work, not
+after it** (see §M).
+
 ## Goal
 
-Drop the Arduino-ESP32 framework wrapper and call ESP-IDF directly. The
-firmware already runs on top of ESP-IDF — Arduino-ESP32 is a layer of
+Move to **esp-idf 5.x via the pioarduino hybrid framework**, then drop the
+Arduino-ESP32 wrapper module-by-module until `framework = espidf` alone.
+The hybrid is the vehicle; the production payoff is the four drivers
+above (rollback-safe OTA, IRAM-safe esp_lcd, heap headroom, double-buffer)
+— flash savings (~120 KB) and one-fewer-release-notes are now secondary.
+
+The firmware already runs on top of ESP-IDF — Arduino-ESP32 is a layer of
 C++ classes plus a handful of helpers (`Serial`, `String`,
 `Preferences`, `WiFi`, `HTTPClient`, `ESPmDNS`, `ArduinoOTA`) wrapping
-ESP-IDF and FreeRTOS calls. Removing the wrapper saves ~120 KB of flash,
-unlocks the streaming HTTP / lower-level LCD APIs we already want, and
-removes one set of release notes to track.
+ESP-IDF and FreeRTOS calls.
+
+## What IDF5/hybrid unlocks (mapped to the drivers)
+
+| Unlock (sdkconfig / bootloader / API) | Fixes driver | Reachable on 4.4? |
+|---|---|---|
+| `CONFIG_BOOTLOADER_APP_ROLLBACK_ENABLE` + `ESP_OTA_IMG_PENDING_VERIFY` | #2 rollback | No (precompiled bootloader) — NVS-flag emulation only |
+| `CONFIG_LCD_RGB_ISR_IRAM_SAFE=y` + bounce buffers | #1 flash-cache race, #3 panic | No (precompiled esp_lcd not IRAM-safe) |
+| esp_lcd RGB `num_fbs=2` + vsync page-flip | #3 tear-free, #5 MIDL smoothness | No (needs IDF ≥ 5.0) |
+| NimBLE/Wi-Fi/driver buffer trims via `sdkconfig` | #4 heap headroom, #1 OTA heap | No (baked sdkconfig) |
+| Streaming `esp_http_client` + `esp_ota_*` | #1 lower-overhead OTA path | Partly (Arduino exposes some) |
+
+The recurring word is **`sdkconfig`**: the hybrid rebuilds IDF from
+source, so `sdkconfig.defaults` finally takes effect. That is the entire
+reason the hybrid is the migration vehicle rather than a straight port.
 
 ## Non-goals
 
@@ -16,6 +143,8 @@ removes one set of release notes to track.
 - Rewriting ArduinoJson (also framework-agnostic; host tests already
   link it without Arduino).
 - Rewriting the SignalK plugin or any spec 17/18/19/20 contracts.
+- Re-deriving the MIDL config grammar — that is the runtime-rendering
+  spec's job; this spec only sequences the platform move around it.
 - Changing PCB / pin maps. The verified ST7701 init table in
   `board_pins.h` and the GT911 quirks must round-trip unchanged.
 
@@ -33,77 +162,144 @@ cheap mechanical work has shaken out the build system).
 
 ---
 
-## A. Hybrid framework + IDF version bump
+## A. Hybrid framework + IDF 5 bump (the critical path)
 
 ### Scope
 
-Switch `platformio.ini`:
+Stand up `[env:esp32-4848s040-idf5]` on the **pioarduino** platform with
+`framework = arduino, espidf`, driven by `sdkconfig.defaults`, and get it
+to **boot on the bench**. This is no longer a "switch one line in
+`platformio.ini`" change — the precompiled `espressif32@^6.x` core never
+rebuilds IDF, so it can't apply `sdkconfig`; only the source-rebuilding
+pioarduino hybrid can. The env and defaults already exist; the remaining
+work is the **link blocker (§A.1)** and the **display port (§H)**.
+
+### The working hybrid recipe (already in-tree)
+
+`platformio.ini`, `[env:esp32-4848s040-idf5]`:
 
 ```ini
-[env:esp32-4848s040]
-platform = espressif32@^6.9.0     ; was ^6.7.0
-framework = arduino, espidf       ; was arduino
+platform = https://github.com/pioarduino/platform-espressif32/releases/download/53.03.13/platform-espressif32.zip
+framework = arduino, espidf
+custom_component_remove =
+    espressif/esp_rainmaker
+    espressif/rmaker_common
+    espressif/esp_insights
+    espressif/esp_diagnostics
+    espressif/esp-sr
+    espressif/esp-zboss-lib
+    espressif/esp-zigbee-lib
+    espressif/esp-dsp
+    espressif/esp-modbus
+    espressif/esp_modem
+    espressif/network_provisioning
+    chmorgan/esp-libhelix-mp3
 ```
 
-This bumps Arduino-ESP32 2.0.x → 3.x and ESP-IDF 4.4 → 5.1 in one shot
-(PlatformIO ties them together at this platform version).
+Two non-obvious pieces of the recipe, both load-bearing:
 
-### Design
+1. **`custom_component_remove`, not `EXCLUDE_COMPONENTS`.** Arduino's
+   `idf_component.yml` pulls a large IoT stack (RainMaker, Insights,
+   esp-sr, Zigbee, DSP, modbus, modem, …) we use none of.
+   `EXCLUDE_COMPONENTS` only excludes *after* fetch, so
+   `esp_rainmaker`'s `https_server.crt` embed still ran and tripped a
+   **PlatformIO doubled-embed-path bug**. `custom_component_remove` is the
+   pioarduino mechanism that **deletes** the deps from the component
+   manifest so the manager never fetches them. Keep `mdns`, `qrcode`,
+   `libsodium`, `littlefs`.
 
-No code changes intended; this is a build-system change. The Arduino
-3.x release contains breaking changes the build will surface:
+2. **`sdkconfig.defaults` (in-tree) carries the unlocks** — because the
+   hybrid rebuilds IDF from source, these finally apply:
 
-- `ledcSetup` / `ledcAttachPin` signatures changed — `board::set_backlight`
-  needs the new `ledcAttach` 4-arg form.
+   ```ini
+   CONFIG_FREERTOS_HZ=1000
+   CONFIG_SPIRAM_MODE_OCT=y
+   CONFIG_SPIRAM_SPEED_80M=y
+   CONFIG_ESP32S3_SPIRAM_SUPPORT=y
+   CONFIG_SPIRAM=y
+   CONFIG_LCD_RGB_ISR_IRAM_SAFE=y      ; driver #1/#3 — RGB refill ISR in IRAM
+   CONFIG_GDMA_CTRL_FUNC_IN_IRAM=y     ; pairs with bounce buffers
+   CONFIG_BT_ENABLED=y
+   CONFIG_BT_BLUEDROID_ENABLED=n
+   CONFIG_BT_NIMBLE_ENABLED=y          ; NimBLE host (Bluedroid off)
+   CONFIG_AUTOSTART_ARDUINO=y          ; Arduino provides app_main() → setup()/loop()
+   ```
+
+   The SPIRAM octal block is the same class of trap as `qio_opi` in
+   CLAUDE.md: omit it and the octal-PSRAM cache config mismatches and the
+   app faults **at entry** on every boot (silent reboot, no panic text).
+   `CONFIG_AUTOSTART_ARDUINO=y` is what gives the hybrid an `app_main`
+   (Arduino's loopTask) — without it the link fails on `undefined
+   reference to app_main`. **To enable rollback (driver #2)** add
+   `CONFIG_BOOTLOADER_APP_ROLLBACK_ENABLE=y` here once the env links — it
+   only takes effect under the source-rebuilding hybrid.
+
+### A.1 Remaining LINK blocker — `ssl_client` duplicate-library (critical path)
+
+The hybrid build reaches the **LINK stage**, then fails on a
+**pioarduino duplicate-library resolution bug**: Arduino's
+`NetworkClientSecure.cpp` (pulled in by `manager.cpp`'s
+`WiFiClientSecure`) references symbols defined in `ssl_client.cpp`, but
+the separately-archived copy of the library the linker selects **does not
+resolve them**. This is the single thing standing between "links" and
+"boots".
+
+Candidate fixes, cheapest first:
+
+- **Drop `WiFiClientSecure` from the IDF5 slice.** `manager.cpp` only
+  needs TLS once SK/manager move to `https`/`wss`; the migration replaces
+  `HTTPClient`/`WebSockets` with `esp_http_client`/`esp_websocket_client`
+  (§F, §K), which carry their **own** mbedTLS path and don't need
+  `NetworkClientSecure` at all. Sequencing F/K before the cutover makes
+  this blocker evaporate rather than be patched.
+- If TLS is needed before F/K land: force a single `ssl_client`/`mbedtls`
+  archive via `lib_ldf_mode`/`lib_archive` so the linker can't pick the
+  unresolved copy, or pin the pioarduino release that doesn't double-archive.
+
+**Document this as the crux remaining work for §A.** Everything else in A
+is done or mechanical.
+
+### A.2 BLE temporarily disabled in the spike slice
+
+The current `-idf5` env disables BLE (`-DYEYBOATS_DISABLE_BLE`, NimBLE
+dropped from `lib_deps`) to shrink the first booting slice. **NimBLE-Arduino
+1.4 does not build on IDF 5** (`NimBLEDevice.h` → `esp_bt.h` moved out of
+the global include path); **NimBLE-Arduino 2.x** builds against the
+Arduino-3.x API the pioarduino platform ships and against IDF5, so the
+sequence is: land the booting display slice with BLE off, then re-enable
+BLE on NimBLE-Arduino 2.x, then do the §J C-API rewrite. So **§J is the
+effective long-pole for full feature parity**, but it no longer *blocks*
+the first IDF5 boot.
+
+### Arduino-3.x API breakage to expect on first compile
+
+- `ledcSetup` / `ledcAttachPin` → new `ledcAttach` 4-arg form
+  (`board::set_backlight`).
 - `WiFi.onEvent` callback shape changed.
 - `attachInterrupt` arg cast tightened.
-- `NimBLE-Arduino` major-version bump (2.x → 3.x); some characteristic
-  ctor signatures move.
-
-### Risks
-
-The IDF 4 → 5 bump is the real surface area. Some component-manager
-components require IDF 5.
+- `~36` `%lu`/`%ld` format-string sites become **errors** (`uint32_t` is
+  `unsigned int` on xtensa) — cast `(unsigned long)x` or switch to
+  `%u`/`%d`. Mechanical, ~1–2 h; belongs in §B and can land on 4.4 first
+  to decouple it from A.
+- One pre-existing `-Wmisleading-indentation` in
+  `src/boards/board_cli.cpp:30` surfaces under the stricter flags — fix
+  in §B.
+- Stale global platform forks (e.g. a Tasmota `espressif32@2023.6.2`) can
+  win SemVer resolution — `pio platform uninstall espressif32 -y` before
+  building the pinned pioarduino URL.
 
 ### Test plan
 
-USB flash + boot + walk all 14 screens + run host suite + Lane A
-smoke (SK live, manager-status hb=200).
+`pio run -e esp32-4848s040-idf5` links → USB flash → **boots** (no entry
+fault / silent reboot) → walk all 14 screens → host suite → Lane A smoke
+(SK live, manager-status hb=200). Internal-SRAM low-water logged; confirm
+headroom vs. the 4.4 baseline.
 
 ### Estimate
 
-L — 5-7 days. Confidence: high (revised after a Jan-2025 spike).
-
-### Spike findings (2025-05-29)
-
-Attempted the platform bump in isolation. What surfaced:
-
-1. **Platform 6.9 ships Arduino-ESP32 2.0.17 + IDF 5.3.1**, not Arduino
-   3.x as the spec originally guessed. Good news: no Arduino major bump.
-2. **A stale Tasmota fork** (`espressif32@2023.6.2`) at the global
-   PlatformIO platforms dir won the SemVer resolution race against
-   `^6.9.0`. Diagnostic cost: 30 minutes. Mitigation: `pio platform
-   uninstall espressif32 -y` before retrying.
-3. **`sdkconfig.defaults` required** to set `CONFIG_FREERTOS_HZ=1000`,
-   `CONFIG_SPIRAM_MODE_OCT=y`, `CONFIG_SPIRAM_SPEED_80M=y`. The pure
-   Arduino framework set these implicitly; hybrid does not.
-4. **36 `%lu` / `%ld` format-string sites become errors** under the new
-   stricter compiler flags (`uint32_t` is `unsigned int` on the
-   xtensa toolchain, not `unsigned long`). Each needs an explicit cast
-   `(unsigned long)x` or a flag change to `%u`/`%d`. Mechanical,
-   ~1-2 hours; in scope for B and not A.
-5. **NimBLE-Arduino 1.4.x does not compile on IDF 5** —
-   `NimBLEDevice.h` includes `esp_bt.h` which moved out of the global
-   include path. Either bump NimBLE-Arduino to a 5.x-compatible version
-   (no longer maintained at 1.4.x; 2.x is for Arduino 3.x only), or
-   land **Spec J ahead of schedule**. A in practice forces J to run
-   first or in parallel.
-6. **One pre-existing `-Wmisleading-indentation` bug** in
-   `src/boards/board_cli.cpp:30` revealed by the stricter flags.
-   Pre-existing issue, fix in B.
-
-Revised dependency: **A practically requires J first.** Update the
-execution order accordingly.
+L — 5-7 days **remaining** (the blocker in A.1 + the §H display port
+dominate; the env/defaults/recipe are done). Confidence: medium — A.1 is
+the unknown.
 
 ---
 
@@ -408,9 +604,19 @@ listener. Update `docs/specs/17 §10`.
 - Loss of `make ota` removes a path the dev workflow has used a lot
   this session. Document the `firmware.update` command-line equivalent
   via `curl` to the plugin.
-- Rollback safety: the `PENDING_VERIFY` → `mark_app_valid` sequence
-  must run on first successful heartbeat after the new image boots.
-  Already implemented; preserve.
+- **Rollback safety (driver #2).** The `PENDING_VERIFY` →
+  `mark_app_valid` sequence on first successful heartbeat only does
+  anything if the **bootloader was built with**
+  `CONFIG_BOOTLOADER_APP_ROLLBACK_ENABLE` — impossible on the precompiled
+  4.4 core. On IDF5/hybrid, set it in `sdkconfig.defaults` so a never-
+  confirmed image auto-reverts to the previous partition on the next boot.
+  Interim 4.4 emulation: an **NVS confirm-flag** + boot-counter that
+  forces last-known-good when the flag is missing (software stand-in for
+  the bootloader feature).
+- **OTA heap/cache stability (driver #1).** Pair this step with the
+  IRAM-safe esp_lcd (§H) and the `app_pause_ui` pump-pause; the streaming
+  `esp_ota_write` path here removes the `Update.write` + duplicate-buffer
+  overhead that contributed to the mid-flash hang.
 
 ### Test plan
 
@@ -426,14 +632,33 @@ S — 2 days. Confidence: high.
 
 ## H. Display: Arduino_GFX + custom ST7701 → esp_lcd_panel_rgb
 
+> **This step is forced, not optional, on the IDF5 env.** `Arduino_GFX`'s
+> `Arduino_RGB_Display` only exists in its `ESP_ARDUINO_VERSION_MAJOR < 3`
+> branch. The pioarduino hybrid ships **Arduino-3.x**, so the RGB panel
+> **must move fully onto esp_lcd** — the `-idf5` env will not *link*
+> against `Arduino_RGB_Display` at all. (The `Arduino_SWSPI` bus used only
+> for the **ST7701 boot init** *does* survive on 3.x, so the init-table
+> handoff can stay on SWSPI initially and the RGB transfer alone moves to
+> esp_lcd, or both move — see options below.) This is why `[env:...-idf5]`
+> is marked `KNOWN-INCOMPLETE` today: it links everything but the panel.
+>
+> This step is also where drivers **#1 (flash-cache race)**, **#3
+> (tear-free)** and **#5 (MIDL smoothness)** are actually delivered:
+> `num_fbs = 2` + vsync flip + the IRAM-safe ISR (`sdkconfig`) +
+> `bounce_buffer_size_px` together give double-buffering with no
+> "Cache disabled but cached memory region accessed" panic.
+
 ### Scope
 
 The biggest single rewrite. Replace `Arduino_SWSPI` + `Arduino_RGB_Display`
 + the embedded ST7701 init table in `board_pins.h` with:
 
-1. `esp_lcd_panel_io_3wire_spi` for boot SPI commands
-2. `esp_lcd_new_rgb_panel` for the RGB parallel transfer
-3. LVGL `lv_display_set_flush_cb` → `esp_lcd_panel_draw_bitmap`
+1. `esp_lcd_panel_io_3wire_spi` for boot SPI commands (or keep
+   `Arduino_SWSPI` for the init table — it survives on 3.x)
+2. `esp_lcd_new_rgb_panel` for the RGB parallel transfer (**mandatory** on
+   arduino-3.x — `Arduino_RGB_Display` is gone)
+3. LVGL `lv_display_set_flush_cb` → `esp_lcd_panel_draw_bitmap`, **or**
+   the `num_fbs=2` page-flip path for tear-free double-buffer
 
 ### Design
 
@@ -504,14 +729,25 @@ Or in `LV_DISPLAY_RENDER_MODE_FULL` mode, swap framebuffers via
   equivalent `esp_lcd_panel_io_tx_param` / `esp_lcd_panel_io_tx_color`
   call. One-for-one. Camera color test (white/red/green/blue gradients
   visible on screen with no banding) is the acceptance gate.
-- LVGL flush cadence and dirty-rect handling — the existing
-  performance work (PSRAM double-buffer, 60 Hz) must not regress.
+- LVGL flush cadence and dirty-rect handling — the existing 4.4 perf work
+  (quantize-and-cache, dedicated LVGL task, fit-to-width; spec 09) must not
+  regress, and the `DIRECT`-mode flicker seen on 4.4 single-buffer must be
+  resolved by the `num_fbs=2` flip, not reintroduced.
+- **IRAM-safe ISR + bounce buffers are mandatory, not optional.** Set
+  `bounce_buffer_size_px` (non-zero) in `esp_lcd_rgb_panel_config_t` and
+  rely on `CONFIG_LCD_RGB_ISR_IRAM_SAFE=y` + `CONFIG_GDMA_CTRL_FUNC_IN_IRAM=y`
+  (already in `sdkconfig.defaults`). Without them, the first sustained
+  flash write *during live RGB scan-out* (e.g. an OTA, driver #1)
+  re-triggers the cache panic. The acceptance gate for this step includes
+  "an OTA completes while a dashboard is rendering, no panic, no hang."
 
 ### Test plan
 
 USB flash, walk every screen, camera color test, frame-rate check
-(target ≥ 50 Hz on dashboard). Stay on `framework = arduino, espidf`
-hybrid during this step so a bad rev can be reverted with one commit.
+(target ≥ 50 Hz on dashboard), **and an OTA-while-rendering soak** (ties
+the display port to driver #1's acceptance). Stay on
+`framework = arduino, espidf` hybrid during this step so a bad rev can be
+reverted with one commit.
 
 ### Estimate
 
@@ -709,6 +945,75 @@ the linker tells you exactly where).
 
 ---
 
+## M. MIDL runtime-rendering interplay & sequencing
+
+The migration and the **MIDL firmware-render** work
+(`feat/midl-firmware-render`, runtime LVGL trees from a config doc — spec
+`docs/superpowers/specs/2026-06-19-generic-dashboard-runtime-design.md`)
+touch the **same two resources**: the internal-SRAM heap and the LVGL
+render path. They must be co-planned.
+
+### Why they collide
+
+- MIDL replaces compile-time `screen_*.cpp` HUDs with **runtime-built
+  widget trees** (`layout_renderer.cpp` walking an `Element`/split-grid
+  tree). Building/tearing down trees on every config apply is a **burst of
+  heap + LVGL-object churn** — exactly the peak the ~22 KB internal-SRAM
+  ceiling (drivers #1/#4) is most fragile against. A config apply that
+  coincides with an OTA or a BLE write is the worst case.
+- MIDL dashboards are **dynamic** (screens rebuilt on apply, swapped on
+  `nav` actions). Tearing on a swapped-in screen is far more visible than
+  on a static HUD — so MIDL is the **strongest beneficiary of tear-free
+  double-buffering** (driver #3), delivered only by §H on IDF5.
+- MIDL's own constraints (spec §6) are the **same CLAUDE.md memory traps**
+  this migration must preserve: `memset`-in-place parse, PSRAM-allocated
+  live `Config`, no large scratch on task-callback stacks, 512-byte BLE
+  cap → REST fetch for large configs. The migration must not regress any
+  of them, and MIDL's larger runtime POD makes the PSRAM-allocation rule
+  even less negotiable.
+
+### Sequencing (do *with*, not *after*)
+
+1. **MIDL schema/web-renderer/manager work (v1 items 1–8) proceeds in
+   parallel** — it is host/web/manager-side and platform-agnostic; it does
+   not wait on IDF5.
+2. **The firmware MIDL port (MIDL spec item 9: port `layout_renderer` to
+   the grammar on-device) should land on IDF5**, after §H, so the dynamic
+   dashboards it produces get double-buffering and the heap headroom from
+   `sdkconfig` trims (driver #4). Landing the firmware MIDL port on the
+   4.4 single-buffer path would ship a tearing, heap-fragile dashboard —
+   technically possible, but it spends the migration's whole payoff.
+3. **§H's acceptance gate gains a MIDL clause:** a MIDL config apply that
+   rebuilds a multi-element screen must not drop internal-SRAM low-water
+   below the safety floor, and the swapped-in screen must flip tear-free.
+4. **Don't block MIDL v1 on the link blocker (§A.1).** Keep MIDL firmware
+   work on the bench-usable hybrid slice; the `ssl_client` blocker is
+   about `WiFiClientSecure`, orthogonal to rendering.
+
+**One-line ordering:** MIDL schema/web ∥ A.1 link fix → §H display
+port (double-buffer + IRAM-safe) → firmware MIDL render port → BLE
+re-enable (§J) → cutover (§L).
+
+---
+
+## Interim 4.4 mitigations shipped vs. what only IDF5 unlocks
+
+| Pain / capability | Shipped on 4.4 (interim) | Only on IDF5 / hybrid |
+|---|---|---|
+| OTA mid-flash hang (#1) | `app_pause_ui` pauses LVGL during OTA; reduces heap+cache contention | IRAM-safe esp_lcd + bounce buffers (no cache panic) + `sdkconfig` heap trims; streaming `esp_ota_write` |
+| OTA rollback (#2) | NVS confirm-flag + boot-counter (software emulation) | `CONFIG_BOOTLOADER_APP_ROLLBACK_ENABLE` + real `PENDING_VERIFY` auto-revert |
+| Render speed (#3) | quantize-and-cache rotations, dedicated LVGL task, fit-to-width, value scaling (spec 09) | esp_lcd RGB `num_fbs=2` + vsync page-flip (tear-free double-buffer) |
+| `DIRECT`-mode flicker (#3) | none — single-buffer DIRECT flickers, left disabled | resolved by the double-buffer flip |
+| RGB cache panic (#3) | avoided by not running sustained flash writes during scan-out (fragile) | `CONFIG_LCD_RGB_ISR_IRAM_SAFE=y` + `CONFIG_GDMA_CTRL_FUNC_IN_IRAM=y` |
+| Heap / BLE headroom (#4) | LVGL allocs already in PSRAM; manual buffer trimming | NimBLE/Wi-Fi/driver buffer sizing via `sdkconfig` |
+| MIDL dynamic dashboards (#5) | runs on 4.4 single-buffer (tears, heap-fragile) | double-buffer + heap headroom make it smooth and safe |
+
+The 4.4 column is the **current ceiling** — every entry there is a
+workaround that buys time, not a fix. The IDF5 column is the actual
+remediation, and it is gated almost entirely on §A.1 + §H.
+
+---
+
 ## Summary
 
 ### Ordered by complexity (lowest → highest)
@@ -723,10 +1028,11 @@ the linker tells you exactly where).
 | C    | Storage (NVS)      | M          | Low     | High       |
 | K    | WebSockets         | M          | Low     | High       |
 | F    | HTTP client        | M          | Medium  | High       |
-| A    | Hybrid + IDF 5     | L          | Medium  | High       |
+| A    | Hybrid + IDF 5 (link blocker A.1) | L | High | Medium |
 | D    | WiFi STA/AP        | L          | Medium  | Medium     |
 | J    | NimBLE C API       | L          | Medium  | Medium     |
-| H    | Display (RGB+LCD)  | L          | High    | Low-Medium |
+| M    | MIDL interplay (co-plan) | —    | —       | —          |
+| H    | Display (RGB+LCD, double-buffer) | L | High | Low-Medium |
 
 ### Ordered by dev speed (fastest → slowest)
 
@@ -749,39 +1055,54 @@ the linker tells you exactly where).
 weeks at one dev's pace** with code review, integration, and the
 inevitable "but on the bench..." debugging baked in.
 
-### Recommended execution order (dependency-aware, post-spike)
+### Recommended execution order (dependency-aware, post-link-stage)
 
-The spike showed **A is effectively gated on J** (NimBLE-Arduino 1.4
-doesn't compile on IDF 5), and a chunk of "B mechanicals" is in fact
-on the A critical path (the 36 fmt-string fixes block the compile).
-Recommended new order:
+The earlier spike concluded *A is gated on J* (NimBLE-Arduino 1.4 won't
+build on IDF 5). That conclusion is **superseded**: the hybrid env boots
+its first slice with **BLE disabled** (`-DYEYBOATS_DISABLE_BLE`), so A no
+longer waits on the NimBLE rewrite. The real critical path is now the
+**§A.1 `ssl_client` link blocker** then the **§H display port** (the only
+thing keeping `-idf5` from a clean link), and BLE re-enables on
+NimBLE-Arduino 2.x afterward. Revised order:
 
 1. **B-mechanicals-only** (fmt-string casts + the
-   `-Wmisleading-indentation` fix in `board_cli.cpp:30`). Lands while
-   still on Arduino 2.x + IDF 4.4 - low risk, decouples B from A.
-2. **J** — NimBLE C API rewrite. Bench validates BLE NUS console +
-   CONFIGURATION characteristic. Lands on the current platform first
-   if Apache NimBLE is exposed there too; otherwise piggybacks on A.
-3. **A** — Hybrid framework + IDF 5.3 bump. With J + the fmt-string
-   prep already merged, A becomes a config-only commit again.
-4. **C** — Storage (unblocks D and re-validates J's NVS use).
-5. **E** — mDNS (independent quick win after A).
-6. **D** — WiFi (unblocks F, K).
-7. **F** — HTTP (unblocks G).
-8. **G** — OTA (fast after F).
+   `-Wmisleading-indentation` fix in `board_cli.cpp:30`). Lands on Arduino
+   2.x + IDF 4.4 — low risk, decouples the compile from A.
+2. **A.1** — resolve the `ssl_client` duplicate-library link blocker
+   (preferably by dropping `WiFiClientSecure` and letting §F/§K bring
+   their own mbedTLS). **Critical path.** Gets `-idf5` to a clean link.
+3. **H** — esp_lcd RGB port with `num_fbs=2` + IRAM-safe ISR + bounce
+   buffers. The other half of the critical path: it's what makes `-idf5`
+   *boot a screen*, and it delivers drivers #1/#3/#5. Do it on the hybrid
+   so a bad rev reverts in one commit.
+4. **A (finish)** — env boots end-to-end: walk screens, host suite, Lane A.
+   Add `CONFIG_BOOTLOADER_APP_ROLLBACK_ENABLE=y` here (driver #2).
+5. **G** — OTA on `esp_ota_*` + real rollback; soak OTA-while-rendering
+   (driver #1 acceptance). (After F for the streaming HTTP path.)
+6. **C** — Storage (unblocks D).
+7. **D** — WiFi (unblocks F, K).
+8. **F** — HTTP (also removes the `WiFiClientSecure` dependency for good).
 9. **K** — WebSockets (after D).
-10. **I** — Touch (low risk, do whenever after A).
-11. **H** — Display (biggest risk; do alone after the rest has
-    shaken out the build system).
-12. **L** — Cutover.
+10. **E** — mDNS (independent quick win).
+11. **I** — Touch (low risk, any time after A).
+12. **J** — re-enable BLE on NimBLE-Arduino 2.x, then the C-API rewrite.
+    No longer an A prerequisite; it's the feature-parity long-pole.
+13. **MIDL firmware render port** — land on IDF5 after §H (see §M): gets
+    double-buffer + heap headroom for the dynamic dashboards.
+14. **L** — Cutover to `framework = espidf`.
 
 ### Recommended commit cadence
 
-- A, B, C, E, G, I, L are single-commit changes.
+- A.1, B, C, E, G, I, L are single-commit changes.
 - D, F, K want 2-3 commits (one per sub-area: STA / AP / scan; or
   GET / POST / streaming).
 - H, J want 5-7 commits (per-board for H; per-service for J).
+- §M is not a step — it is a co-planning constraint applied across H, G,
+  and the firmware MIDL port.
 
-Worst case (everything slowest, every risk fires) is ~14 weeks. Best
-case (the IDF 5 bump is clean and the display panel timings copy
-verbatim) is ~7 weeks.
+Worst case (everything slowest, the `ssl_client` blocker needs a
+pioarduino-side fix, RGB timings fight back) is ~14 weeks. Best case (A.1
+is resolved by dropping `WiFiClientSecure`, the panel timings copy
+verbatim into the esp_lcd struct) is ~7 weeks. The two genuine unknowns
+are **§A.1 (link blocker)** and **§H (RGB + double-buffer)** — both now on
+the critical path; everything else is well-trodden.
