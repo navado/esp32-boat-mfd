@@ -2428,18 +2428,31 @@ static WindSteerState *build(lv_obj_t *parent, int w, int h) {
     lv_obj_add_flag(st->root, LV_OBJ_FLAG_EVENT_BUBBLE);
     lv_obj_t *r = st->root;
 
-    // --- vertical band budget (mirrors aphud::build) --------------------------
-    //   [ top chip row ][ compass region ][ sub-line ][ RUDDER strip ][ tile band? ]
+    // --- vertical band budget -------------------------------------------------
+    //   [ top chip row ][ compass region ][ sub-line ][ RUDDER strip ][ RUDDER cap ][
+    //   SOG/STW/VMG/VMGw band? ]
+    // Unlike aphud (which simply DROPS its tile band below 440 px), the SOG / STW
+    // / VMG / VMGw band is the point of the wind_steer screen, so we keep it on a
+    // SHORT leaf by reserving a COMPACT band and letting the dial radius shrink to
+    // whatever vertical space is left after the fixed bands. Only a genuinely tiny
+    // leaf (h < 280) drops the band entirely; there the dial + HDG + TWA/TWD +
+    // RUDDER are the steering essentials and a squeezed band would collide.
     const int top_bar_h = 44;  // engage + HOME chip row
     const int sub_h = 28;      // TWA/TWD sub-line strip (own reserved band)
     const int rud_h = 44;      // RUDDER center-zero strip (own reserved band)
+    const int rud_cap_h = 18;  // "RUDDER" caption strip under the helm bar
     const int gap = 8;
     const int n = 4;
-    const int sq = (w - gap * (n + 1)) / n;  // numeric-tile square side
-    const int tile_band_h = sq + gap;        // tiles + bottom gap
-    // Drop the secondary numeric tiles when the leaf is too short (matches aphud).
-    const bool show_tiles = (h >= 440);
-    const int reserved_below = sub_h + rud_h + (show_tiles ? tile_band_h : 0);
+    const int band_tw = (w - gap * (n + 1)) / n;  // tile width (4 across)
+    // Compact band: a fixed short tile height (NOT the full square `band_tw`,
+    // which would be ~110 px at w=480 and crowd the dial off a 360 px leaf).
+    // numeric_tile honours an explicit h, so the band reads as a low value strip.
+    const int band_th = 72;                 // compact tile content height
+    const int tile_band_h = band_th + gap;  // band + bottom gap
+    // Keep the band on any non-tiny leaf; only drop it when the dial would have
+    // no room left at all.
+    const bool show_tiles = (h >= 280);
+    const int reserved_below = sub_h + rud_h + rud_cap_h + (show_tiles ? tile_band_h : 0);
 
     // --- engage chip (top-LEFT): Auto/STBY toggle wired DIRECTLY to a state PUT
     // (on_engage_short), exactly like aphud::build. A composite tile can't carry a
@@ -2567,17 +2580,23 @@ static WindSteerState *build(lv_obj_t *parent, int w, int h) {
     lv_obj_set_width(rud_cap, w);
     lv_obj_set_pos(rud_cap, 0, rud_y + rud_h);
 
-    // --- numeric tiles (square, pinned to the bottom) --- SOG/STW/VMG/VMGwind ---
-    // Steering-useful speed band (AWS center + TWA/TWD live on the dial). Dropped
-    // entirely on a short leaf (show_tiles == false), like aphud::build.
+    // --- numeric tiles (compact, pinned to the bottom) --- SOG/STW/VMG/VMGwind ---
+    // Steering-useful speed band (AWS center + TWA/TWD live on the dial). Unlike
+    // aphud, this band stays on a short leaf: it's COMPACT (band_th tall, not a
+    // full square) and the dial radius already shrank to make room (region_h
+    // budget above). A 28px value font fits the short tile without clipping the
+    // caption/unit; the dial is a touch smaller but the fields are the point. The
+    // band is pinned to the very bottom, below the RUDDER caption strip.
     if (show_tiles) {
-        const lv_font_t *tv = &lv_font_montserrat_38;
-        int ty = h - sq - gap;  // bottom row, below the rudder band
-        st->tile_sog = ui::numeric_tile(r, gap, ty, sq, sq, "SOG", "kn", tv, theme.fg);
-        st->tile_stw = ui::numeric_tile(r, gap * 2 + sq, ty, sq, sq, "STW", "kn", tv, theme.fg);
-        st->tile_vmg = ui::numeric_tile(r, gap * 3 + sq * 2, ty, sq, sq, "VMG", "kn", tv, theme.fg);
-        st->tile_vmgw =
-            ui::numeric_tile(r, gap * 4 + sq * 3, ty, sq, sq, "VMGw", "kn", tv, theme.fg);
+        const lv_font_t *tv = &lv_font_montserrat_28;
+        int ty = h - band_th - gap;  // bottom row, below the rudder band + caption
+        st->tile_sog = ui::numeric_tile(r, gap, ty, band_tw, band_th, "SOG", "kn", tv, theme.fg);
+        st->tile_stw =
+            ui::numeric_tile(r, gap * 2 + band_tw, ty, band_tw, band_th, "STW", "kn", tv, theme.fg);
+        st->tile_vmg = ui::numeric_tile(r, gap * 3 + band_tw * 2, ty, band_tw, band_th, "VMG", "kn",
+                                        tv, theme.fg);
+        st->tile_vmgw = ui::numeric_tile(r, gap * 4 + band_tw * 3, ty, band_tw, band_th, "VMGw",
+                                         "kn", tv, theme.fg);
     }
 
     lv_obj_set_user_data(st->root, st);
@@ -2938,12 +2957,36 @@ static void paint_button_body(QuadGridTile &t, const MetricBinding &m, int w, in
     lv_obj_clear_flag(btn, LV_OBJ_FLAG_CLICKABLE);
 
     lv_obj_t *label = lv_label_create(btn);
-    lv_label_set_text(label, (m.label && m.label[0]) ? m.label : "TAP");
-    // Scale the label by bubble height. Must be a Montserrat font — font_xl_64
-    // is digits-only and would drop letters from labels like "HOME".
+    const char *ltxt = (m.label && m.label[0]) ? m.label : "TAP";
+    lv_label_set_text(label, ltxt);
+    // Scale the label by bubble HEIGHT first. Must be a Montserrat font —
+    // font_xl_64 is digits-only and would drop letters from labels like "HOME".
     const lv_font_t *lfont = &lv_font_montserrat_20;
     if (btn_h >= 60) lfont = &lv_font_montserrat_28;
     if (btn_h < 36) lfont = &lv_font_montserrat_14;
+    // Then fit by WIDTH: on a narrow tile (e.g. the wind_steer 6-button row at
+    // ~80 px) a height-picked 28/20 px font would clip a 4-letter label like
+    // "TACK"/"GYBE". Step the font DOWN the 28→20→14 ladder until the measured
+    // label width fits the bubble (minus a small horizontal pad). Roomy buttons
+    // keep their large height-picked font (the first ladder entry already fits).
+    {
+        static const lv_font_t *const ladder[] = {&lv_font_montserrat_28, &lv_font_montserrat_20,
+                                                  &lv_font_montserrat_14};
+        const int max_w = btn_w - 12;  // small horizontal pad inside the bubble
+        // Find where the height-picked font sits in the ladder; never step UP
+        // from it (width-fit only shrinks).
+        int start = 1;  // default lv_font_montserrat_20
+        if (lfont == &lv_font_montserrat_28)
+            start = 0;
+        else if (lfont == &lv_font_montserrat_14)
+            start = 2;
+        for (int i = start; i < 3; ++i) {
+            lv_point_t sz;
+            lv_text_get_size(&sz, ltxt, ladder[i], 0, 0, LV_COORD_MAX, LV_TEXT_FLAG_NONE);
+            lfont = ladder[i];
+            if (sz.x <= max_w) break;  // fits — stop shrinking
+        }
+    }
     lv_obj_set_style_text_font(label, lfont, 0);
     lv_obj_set_style_text_color(label, lv_color_hex(0x001218), 0);  // dark ink
     lv_obj_center(label);
