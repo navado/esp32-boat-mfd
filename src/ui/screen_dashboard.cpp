@@ -24,14 +24,26 @@ static lv_obj_t *s_root = nullptr;
 // approximates the editor's widgetPreview() canvas.
 static const ui::layouts::MetricBinding s_tiles[] = {
     // WIND: wind-rose ring with AWS in center (tap -> wind detail).
+    // The WindRose painter draws the apparent/true wind-angle chevrons and the
+    // secondary AWA text, so the tile MUST subscribe the angle + true-wind paths
+    // as well as AWS. extras[] is the ONLY hook collect_paths() reads beyond the
+    // primary source (see ui_layouts.cpp::collect_paths): without AWA/TWA/TWS
+    // here the per-screen subscription manager never requests
+    // environment.wind.angleApparent / angleTrueWater / speedTrue, so once the
+    // device settles on the dashboard those paths are unsubscribed and the wind
+    // angle reads "--" everywhere (sk::data.awa/twa/tws go NaN). The extras are
+    // not rendered as text rows by the WindRose painter (it consumes the values
+    // directly from boat::View); they exist purely to declare the subscription.
     {"wind",
      "WIND",
      "kn",
      ui::layouts::MetricSource::AWS_kn,
      0xffb84d /*warn*/,
      "wind",
-     0,
-     {},
+     3,
+     {{"AWA", ui::layouts::MetricSource::AWA_deg},
+      {"TWS", ui::layouts::MetricSource::TWS_kn},
+      {"TWA", ui::layouts::MetricSource::TWA_deg}},
      ui::layouts::WidgetKind::WindRose},
     // SOG: big numeric primary, accent color (matches editor numeric tile).
     {"sog",

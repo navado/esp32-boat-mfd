@@ -22,6 +22,7 @@ WidgetKind token_to_kind(const char *t) {
     if (!t) return WidgetKind::Numeric;
     if (!strcmp(t, "compass")) return WidgetKind::Compass;
     if (!strcmp(t, "windrose")) return WidgetKind::WindRose;
+    if (!strcmp(t, "windsteer")) return WidgetKind::WindSteer;
     if (!strcmp(t, "gauge")) return WidgetKind::Gauge;
     if (!strcmp(t, "bar")) return WidgetKind::Bar;
     if (!strcmp(t, "autopilot")) return WidgetKind::Autopilot;
@@ -81,9 +82,10 @@ JsonVariantConst find_element(JsonVariantConst elements_obj, const char *element
 }
 
 bool map_element(JsonVariantConst el, const char *element_id, MetricBinding &out, char *id_buf,
-                 char *label_buf, char *unit_buf) {
+                 char *label_buf, char *unit_buf, char *action_buf) {
     if (!el.is<JsonObjectConst>()) return false;
     memset(&out, 0, sizeof(out));
+    if (action_buf) action_buf[0] = 0;
     copy32(id_buf, element_id);
     const char *name = el["name"] | element_id;
     copy32(label_buf, name);
@@ -124,6 +126,26 @@ bool map_element(JsonVariantConst el, const char *element_id, MetricBinding &out
             char *end = nullptr;
             unsigned long v = strtoul(cs + 1, &end, 16);
             if (end == cs + 7) out.accent = (uint32_t)v;
+        }
+    }
+    // action block (buttons / interactive elements). actionKinds == {nav, command}
+    // per the MIDL manifest. "nav" -> target_screen (reuses the tile-nav path);
+    // "command" -> command (routed through net::dispatchCommand on tap). The target
+    // string is copied into action_buf so the MetricBinding keeps a non-owning ptr
+    // with caller-controlled lifetime, exactly like id/label/unit.
+    if (action_buf) {
+        JsonObjectConst action = el["action"].as<JsonObjectConst>();
+        if (!action.isNull()) {
+            const char *kind = action["kind"] | "";
+            const char *target = action["target"] | "";
+            if (target[0]) {
+                copy32(action_buf, target);
+                if (!strcmp(kind, "nav")) {
+                    out.target_screen = action_buf;
+                } else if (!strcmp(kind, "command")) {
+                    out.command = action_buf;
+                }
+            }
         }
     }
     return true;

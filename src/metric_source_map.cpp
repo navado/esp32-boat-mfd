@@ -24,6 +24,7 @@ WidgetKind widget_to_kind(const char *widget) {
     if (strcmp(widget, "gauge") == 0) return WidgetKind::Gauge;
     if (strcmp(widget, "bar") == 0) return WidgetKind::Bar;
     if (strcmp(widget, "windRose") == 0) return WidgetKind::WindRose;
+    if (strcmp(widget, "windSteer") == 0) return WidgetKind::WindSteer;
     if (strcmp(widget, "autopilot") == 0) return WidgetKind::Autopilot;
     if (strcmp(widget, "text") == 0) return WidgetKind::Text;
     if (strcmp(widget, "button") == 0) return WidgetKind::Button;
@@ -38,6 +39,7 @@ MetricSource path_to_source(const char *p) {
     if (strcmp(p, "environment.wind.speedTrue") == 0) return MetricSource::TWS_kn;
     if (strcmp(p, "environment.wind.angleTrueWater") == 0) return MetricSource::TWA_deg;
     if (strcmp(p, "navigation.speedOverGround") == 0) return MetricSource::SOG_kn;
+    if (strcmp(p, "navigation.speedThroughWater") == 0) return MetricSource::STW_kn;
     if (strcmp(p, "navigation.courseOverGroundTrue") == 0) return MetricSource::COG_deg;
     if (strcmp(p, "navigation.headingTrue") == 0) return MetricSource::HDG_deg;
     if (strcmp(p, "navigation.position") == 0) return MetricSource::Position;

@@ -1,6 +1,7 @@
 #include "ui_layouts.h"
 
 #include "layout.h"
+#include "midl_limits.h"  // midl::FirmwareLimits (spec-derived tile bound), budget caps
 #include "subscription_set.h"
 #include "ui_theme.h"
 #include "config_runtime.h"
@@ -9,6 +10,7 @@
 #include "ui_dirty.h"
 #include "ui_fonts.h"
 #include "ui_markers.h"
+#include "ui_compass.h"  // ui::numeric_tile for the full-screen wind dial's AWS/AWA/TWS/TWA band
 #include "signalk.h"
 #include "ui_screens.h"
 #include "board_pins.h"
@@ -19,6 +21,7 @@
 
 #include "storage.h"
 
+#include <ctype.h>
 #include <math.h>
 #include <stdio.h>
 #include <string.h>
@@ -42,13 +45,17 @@ struct QuadGridTile {
     // Painter sets only the slots it needs; updater uses them via `kind`.
     lv_obj_t *aux;           // primary aux widget (arc / bar / ring)
     lv_obj_t *aux2;          // secondary aux (gauge needle / autopilot pill)
-    ui::MarkerRing markers;  // compass steering markers (HDG/COG/CTS)
+    ui::MarkerRing markers;  // compass steering markers (HDG + CTS, inner ring)
     char last_value[24];
     char last_secondary[24];
     char last_extras[4][32];
     int last_aux_pct;  // last gauge/bar value (0..100); -1 = unset
     int idx;           // metric index into spec.metrics[]
     WidgetKind kind;
+    // COG on its OWN outer ring so an HDG≈COG overlap doesn't merge into one
+    // faint marker (the inner `markers` ring carries HDG + CTS). Additive
+    // trailing field — preserves the gnu++11 aggregate-init order above.
+    ui::MarkerRing markers_cog;
 };
 
 struct QuadGridState {
@@ -72,6 +79,8 @@ const char *source_to_path(MetricSource s) {
         return "environment.wind.angleTrueWater";
     case MetricSource::SOG_kn:
         return "navigation.speedOverGround";
+    case MetricSource::STW_kn:
+        return "navigation.speedThroughWater";
     case MetricSource::COG_deg:
         return "navigation.courseOverGroundTrue";
     case MetricSource::HDG_deg:
@@ -119,6 +128,52 @@ void collect_paths(const ScreenVariantSpec &spec, sk::SubscriptionSet &out) {
         for (uint8_t e = 0; e < ne; ++e) {
             const char *pe = source_to_path(m.extras[e].source);
             if (pe) out.add(pe);
+        }
+        // Composite elements (windrose/wind-steer/autopilot/compass) read extra
+        // boat::View fields DIRECTLY — not via a single MetricSource binding — so the
+        // per-screen subscription manager would otherwise starve them (wind angle,
+        // laylines, helm, course markers stay NaN while only the primary value
+        // updates). Request those paths here per kind. Some (current.*, beat/gybe,
+        // apTarget) have no MetricSource, so they are literal strings.
+        switch (m.kind) {
+        case WidgetKind::WindRose:
+            out.add("environment.wind.angleApparent");
+            out.add("environment.wind.angleTrueWater");
+            out.add("environment.wind.speedTrue");
+            out.add("navigation.headingTrue");
+            out.add("environment.current.setTrue");
+            out.add("environment.current.drift");
+            out.add("navigation.courseRhumbline.nextPoint.bearingTrue");
+            break;
+        case WidgetKind::WindSteer:
+            out.add("environment.wind.angleApparent");
+            out.add("environment.wind.angleTrueWater");
+            out.add("environment.wind.speedApparent");
+            out.add("environment.wind.speedTrue");
+            out.add("performance.beatAngle");
+            out.add("performance.gybeAngle");
+            out.add("navigation.headingTrue");
+            out.add("navigation.courseOverGroundTrue");
+            out.add("navigation.courseRhumbline.bearingTrackTrue");
+            break;
+        case WidgetKind::Autopilot:
+            out.add("navigation.headingTrue");
+            out.add("navigation.courseOverGroundTrue");
+            out.add("navigation.speedOverGround");
+            out.add("navigation.courseRhumbline.bearingTrackTrue");
+            out.add("steering.autopilot.target.headingTrue");
+            out.add("steering.rudderAngle");
+            out.add("environment.depth.belowKeel");
+            out.add("navigation.speedThroughWater");
+            out.add("environment.wind.speedApparent");
+            out.add("environment.wind.angleApparent");
+            break;
+        case WidgetKind::Compass:
+            out.add("navigation.courseOverGroundTrue");
+            out.add("navigation.courseRhumbline.bearingTrackTrue");
+            break;
+        default:
+            break;
         }
     }
 }
@@ -188,6 +243,9 @@ static void format_metric(const MetricBinding &m, const boat::View &d, char *pri
         break;
     case MetricSource::SOG_kn:
         vfmt::format_scaled(mps_to_kn(d.sog), s_fmt.speed, primary, pcap);
+        break;
+    case MetricSource::STW_kn:
+        vfmt::format_scaled(mps_to_kn(d.stw), s_fmt.speed, primary, pcap);
         break;
     case MetricSource::COG_deg:
         if (!isnan(d.cogTrue))
@@ -355,6 +413,8 @@ static double metric_scalar(const MetricBinding &m, const boat::View &d) {
         return isnan(d.tws) ? NAN : mps_to_kn(d.tws);
     case MetricSource::SOG_kn:
         return isnan(d.sog) ? NAN : mps_to_kn(d.sog);
+    case MetricSource::STW_kn:
+        return isnan(d.stw) ? NAN : mps_to_kn(d.stw);
     case MetricSource::Depth_m:
         return d.depth;
     case MetricSource::DepthKeel_m:
@@ -415,6 +475,31 @@ static void tile_clicked_cb(lv_event_t *e) {
     app::post(c, 0);
 }
 
+// Button element tap handler (MIDL `action`). user_data is the tile's
+// MetricBinding* (stable: it points into the screen's arena/spec). A command
+// action funnels its target through net::dispatchCommand on the UI task — the
+// same path screen_settings uses for `theme`/`demo`, so it is safe here (the
+// funnel posts SignalK PUTs onto the net worker itself; it does no blocking
+// I/O on this task). A nav action posts ShowScreen, mirroring tile_clicked_cb.
+static void button_action_cb(lv_event_t *e) {
+    if (lv_event_get_code(e) != LV_EVENT_CLICKED) return;
+    const MetricBinding *m = (const MetricBinding *)lv_event_get_user_data(e);
+    if (!m) return;
+    if (m->command && m->command[0]) {
+        net::logf("[layout] button command='%s'", m->command);
+        net::dispatchCommand(m->command);
+        return;
+    }
+    if (m->target_screen && m->target_screen[0]) {
+        net::logf("[layout] button nav target=%s", m->target_screen);
+        app::Command c;
+        c.type = app::CommandType::ShowScreen;
+        strncpy(c.a, m->target_screen, sizeof(c.a) - 1);
+        c.t_post_us = micros();
+        app::post(c, 0);
+    }
+}
+
 // Map a scalar source value to a 0..1 fraction for gauge/bar widgets.
 // Heuristic per-source ranges; widgets that don't have an obvious range
 // (e.g., heading angles, positions) return NAN and render as empty.
@@ -438,6 +523,8 @@ static double scalar_unit_fraction(MetricSource src, double v) {
     case MetricSource::TWS_kn:
         return clamp01(v / 40.0);
     case MetricSource::SOG_kn:
+        return clamp01(v / 15.0);
+    case MetricSource::STW_kn:
         return clamp01(v / 15.0);
     case MetricSource::VMG_kn:
         return clamp01(v / 15.0);
@@ -494,6 +581,33 @@ static void fit_value_font(lv_obj_t *label, const char *txt, int max_w) {
     lv_obj_set_style_text_font(label, ladder[3], 0);
 }
 
+// Text-tile variant of fit_value_font with a smaller Montserrat ladder. Picks
+// the largest font whose measured width (lv_text_get_size over the full,
+// possibly multi-line string) fits max_w. Fixes POS clipping on the narrow
+// (160 px) freeform/quad text tiles where the lat/lon line was wider than the
+// 28 px font. Called only on text change.
+static void fit_text_font(lv_obj_t *label, const char *txt, int max_w) {
+    static const lv_font_t *const ladder[] = {&lv_font_montserrat_28, &lv_font_montserrat_20,
+                                              &lv_font_montserrat_14};
+    for (int i = 0; i < 3; ++i) {
+        lv_point_t sz;
+        lv_text_get_size(&sz, txt, ladder[i], 0, 0, LV_COORD_MAX, LV_TEXT_FLAG_NONE);
+        if (sz.x <= max_w) {
+            lv_obj_set_style_text_font(label, ladder[i], 0);
+            return;
+        }
+    }
+    lv_obj_set_style_text_font(label, ladder[2], 0);
+}
+
+// Hero-value color: honor the element's authored style.color (MetricBinding.accent,
+// 0xRRGGBB) when set, else the theme accent. Restores the per-tile semantic colors
+// the glass-cockpit design intends (warn XTE, good depth, etc.); MIDL docs set it
+// via style.color → map_element → m.accent. accent==0 keeps the legacy theme color.
+static inline uint32_t value_color(const MetricBinding &m) {
+    return m.accent ? m.accent : theme.accent;
+}
+
 static void paint_numeric_body(QuadGridTile &t, const MetricBinding &m, int w, int h) {
     bool has_extras = (m.extras_count > 0);
 
@@ -531,7 +645,7 @@ static void paint_numeric_body(QuadGridTile &t, const MetricBinding &m, int w, i
     t.value = lv_label_create(row);
     lv_label_set_text(t.value, "--");
     lv_obj_set_style_text_font(t.value, vfont, 0);
-    lv_obj_set_style_text_color(t.value, lv_color_hex(theme.accent), 0);
+    lv_obj_set_style_text_color(t.value, lv_color_hex(value_color(m)), 0);
     lv_obj_clear_flag(t.value, LV_OBJ_FLAG_CLICKABLE);
 
     if (m.unit && m.unit[0]) {
@@ -609,19 +723,27 @@ static void paint_compass_body(QuadGridTile &t, const MetricBinding &m, int w, i
     lv_obj_clear_flag(ring, LV_OBJ_FLAG_CLICKABLE);
     t.aux = ring;
 
-    // Steering marker set: HDG (solid triangle), COG (hollow triangle),
-    // CTS (solid diamond, alarm/red). Bearings filled live in update from
-    // metric_scalar(). Amber is reserved for the AP-target / TWD diamonds so
-    // CTS and target stay distinguishable on the AP HUD.
-    ui::MarkerSpec steer_markers[3] = {
-        {NAN, ui::Glyph::Triangle, true, theme.accent},
-        {NAN, ui::Glyph::Triangle, false, theme.good},
-        {NAN, ui::Glyph::Diamond, true, theme.alarm},
-    };
+    // Steering marker set, split across two concentric rings so an HDG≈COG
+    // overlap stays legible (they otherwise stack into one faint glyph):
+    //   inner ring (dia/2 - 6): HDG (solid accent triangle) + CTS (solid alarm
+    //                           diamond).
+    //   outer ring (dia/2):     COG alone (hollow good-green triangle), drawn
+    //                           AFTER the inner ring so its outline reads on top.
+    // Bearings filled live in update from metric_scalar(). Amber is reserved for
+    // the AP-target / TWD diamonds so CTS and target stay distinguishable.
     int mcx, mcy;
     dial_center(w, h, mcx, mcy);
-    t.markers = ui::build_marker_ring(t.root, mcx, mcy, dia / 2, steer_markers, 3,
+    ui::MarkerSpec inner_markers[2] = {
+        {NAN, ui::Glyph::Triangle, true, theme.accent},  // HDG
+        {NAN, ui::Glyph::Diamond, true, theme.alarm},    // CTS
+    };
+    t.markers = ui::build_marker_ring(t.root, mcx, mcy, dia / 2 - 6, inner_markers, 2,
                                       /*occlude_lower=*/false);
+    ui::MarkerSpec cog_markers[1] = {
+        {NAN, ui::Glyph::Triangle, false, theme.good},  // COG (hollow)
+    };
+    t.markers_cog = ui::build_marker_ring(t.root, mcx, mcy, dia / 2, cog_markers, 1,
+                                          /*occlude_lower=*/false);
 
     // N/E/S/W cardinals: padded in from the ring border so they don't
     // visually merge with the heading number (which is centered).
@@ -671,9 +793,22 @@ static void paint_compass_body(QuadGridTile &t, const MetricBinding &m, int w, i
     t.value = lv_label_create(ring);
     lv_label_set_text(t.value, "--");
     lv_obj_set_style_text_font(t.value, vfont, 0);
-    lv_obj_set_style_text_color(t.value, lv_color_hex(theme.accent), 0);
-    lv_obj_align(t.value, LV_ALIGN_CENTER, 0, 0);
+    lv_obj_set_style_text_color(t.value, lv_color_hex(value_color(m)), 0);
+    // Nudge the number down a touch so the "HDG" caption rides above it (web ref).
+    lv_obj_align(t.value, LV_ALIGN_CENTER, 0, 6);
     lv_obj_clear_flag(t.value, LV_OBJ_FLAG_CLICKABLE);
+
+    // Small dim "HDG" caption directly above the big heading number, matching the
+    // web compass. Positioned at a fixed offset above the ring centre (the value
+    // is centre-anchored, so the gap is stable regardless of the live digits'
+    // width). The offset scales with the value font's height.
+    int vh = lv_font_get_line_height(vfont);
+    lv_obj_t *hcap = lv_label_create(ring);
+    lv_label_set_text(hcap, "HDG");
+    lv_obj_set_style_text_font(hcap, &lv_font_montserrat_14, 0);
+    lv_obj_set_style_text_color(hcap, lv_color_hex(theme.fg_dim), 0);
+    lv_obj_align(hcap, LV_ALIGN_CENTER, 0, 6 - vh / 2 - 8);
+    lv_obj_clear_flag(hcap, LV_OBJ_FLAG_CLICKABLE);
 
     // CTS line tracks the ring's bottom (label-tracks-number geometry).
     t.secondary = lv_label_create(t.root);
@@ -682,18 +817,71 @@ static void paint_compass_body(QuadGridTile &t, const MetricBinding &m, int w, i
     lv_obj_set_style_text_color(t.secondary, lv_color_hex(theme.warn), 0);
     lv_obj_align_to(t.secondary, ring, LV_ALIGN_OUT_BOTTOM_MID, 0, 2);
     lv_obj_clear_flag(t.secondary, LV_OBJ_FLAG_CLICKABLE);
+
+    // Legend (bottom-left): tells the operator which glyph is which without
+    // memorizing color/shape. Three compact rows — cyan▲ HDG, green△ COG, red◆
+    // CTS — built from the same ui::draw_glyph the rings use (so the legend glyph
+    // matches the rim glyph exactly). A 16px glyph canvas scaled into a small box
+    // sits left of each montserrat_14 label in theme.fg_dim. Kept tight in the
+    // tile's lower-left corner so it doesn't crowd the dial. Only drawn when the
+    // tile is tall enough that the rows clear the ring.
+    if (h >= 150) {
+        struct LegendItem {
+            ui::Glyph glyph;
+            bool filled;
+            uint32_t color;
+            const char *txt;
+        };
+        static const LegendItem kLegend[3] = {
+            {ui::Glyph::Triangle, true, theme.accent, "HDG"},
+            {ui::Glyph::Triangle, false, theme.good, "COG"},
+            {ui::Glyph::Diamond, true, theme.alarm, "CTS"},
+        };
+        const int row_h = 16;
+        const int gx = 4;  // left inset within content box
+        int gy = h - 2 * (chrome::panel_border + chrome::panel_pad) - 3 * row_h - 2;
+        if (gy < 0) gy = 0;
+        for (int i = 0; i < 3; ++i) {
+            lv_obj_t *g =
+                ui::draw_glyph(t.root, kLegend[i].glyph, kLegend[i].filled, kLegend[i].color);
+            // draw_glyph returns a 28x28 canvas; scale 50% about its center so the
+            // visible glyph fills ~14px while the object box stays 28px. The box
+            // top-left is pinned at (gx-7, row-7) so the scaled-down content centers
+            // at (gx+7, row+1), i.e. a 14px swatch starting at the left inset.
+            lv_obj_set_style_transform_pivot_x(g, 14, 0);
+            lv_obj_set_style_transform_pivot_y(g, 14, 0);
+            lv_obj_set_style_transform_scale(g, 128, 0);  // 50% (256 = 100%)
+            lv_obj_set_pos(g, gx - 7, gy + i * row_h - 7);
+            lv_obj_clear_flag(g, LV_OBJ_FLAG_CLICKABLE);
+            lv_obj_t *l = lv_label_create(t.root);
+            lv_label_set_text(l, kLegend[i].txt);
+            lv_obj_set_style_text_font(l, &lv_font_montserrat_14, 0);
+            lv_obj_set_style_text_color(l, lv_color_hex(theme.fg_dim), 0);
+            lv_obj_set_pos(l, gx + 14, gy + i * row_h);
+            lv_obj_clear_flag(l, LV_OBJ_FLAG_CLICKABLE);
+        }
+    }
 }
 
 // Gauge widget: LVGL arc spanning 270° with the value fill in accent
 // and a center percent label. Mirrors editor .wpreview .gauge.
-static void paint_gauge_body(QuadGridTile &t, const MetricBinding & /*m*/, int w, int h) {
+//
+// Tick scale: a ranged element (MIDL format.range, i.e. range_min != range_max)
+// drives the surrounding lv_scale with the binding's real [min,max] and turns on
+// numeric labels, so e.g. a rudder gauge on [-35,35] shows -35 … 0 … 35 around
+// the arc. The arc *fill* keeps its 0..100 internal range (the update path feeds
+// it a percent via binding_unit_fraction), so only the decorative tick ring
+// follows the real scale. Legacy/default tiles (range_min==range_max) keep the
+// label-less 0–100 tick ring byte-for-byte.
+static void paint_gauge_body(QuadGridTile &t, const MetricBinding &m, int w, int h) {
+    const bool ranged = (m.range_min != m.range_max);
     int dia = (w < h ? w : h) - 56;
     if (dia < 88) dia = 88;
     lv_obj_t *arc = lv_arc_create(t.root);
     lv_obj_set_size(arc, dia, dia);
     lv_obj_align(arc, LV_ALIGN_CENTER, 0, 4);
     lv_arc_set_bg_angles(arc, 135, 45);  // 270 degree sweep, bottom open
-    lv_arc_set_range(arc, 0, 100);
+    lv_arc_set_range(arc, 0, 100);       // fill is percent-driven; see header note
     lv_arc_set_value(arc, 0);
     lv_obj_remove_style(arc, NULL, LV_PART_KNOB);
     lv_obj_clear_flag(arc, LV_OBJ_FLAG_CLICKABLE);
@@ -705,7 +893,10 @@ static void paint_gauge_body(QuadGridTile &t, const MetricBinding & /*m*/, int w
     lv_obj_set_style_arc_rounded(arc, true, LV_PART_INDICATOR);
     t.aux = arc;
 
-    // Tick marks at 0/25/50/75/100% (LVGL 9 lv_scale).
+    // Tick ring (LVGL 9 lv_scale). Default tiles: 5 unlabeled ticks over 0–100,
+    // matching the editor preview. Ranged tiles: span the binding's real
+    // [range_min,range_max] and show numeric labels at the 5 major ticks (rounded
+    // to whole units) so the operator reads the true scale endpoints.
     lv_obj_t *scale = lv_scale_create(t.root);
     lv_obj_set_size(scale, dia, dia);
     lv_obj_align(scale, LV_ALIGN_CENTER, 0, 4);
@@ -714,7 +905,20 @@ static void paint_gauge_body(QuadGridTile &t, const MetricBinding & /*m*/, int w
     lv_scale_set_rotation(scale, 135);
     lv_scale_set_total_tick_count(scale, 5);
     lv_scale_set_major_tick_every(scale, 1);
-    lv_scale_set_range(scale, 0, 100);
+    if (ranged) {
+        // lv_scale range is integer; round the binding's float window to the
+        // nearest whole unit. lo<hi is guaranteed by ranged && the painter only
+        // labels endpoints, so an inverted/degenerate pair just shows lo..lo.
+        int lo = (int)lroundf(m.range_min);
+        int hi = (int)lroundf(m.range_max);
+        if (hi <= lo) hi = lo + 1;  // defensive: keep a valid increasing range
+        lv_scale_set_range(scale, lo, hi);
+        lv_scale_set_label_show(scale, true);
+        lv_obj_set_style_text_font(scale, &lv_font_montserrat_14, LV_PART_MAIN);
+        lv_obj_set_style_text_color(scale, lv_color_hex(theme.fg_dim), LV_PART_MAIN);
+    } else {
+        lv_scale_set_range(scale, 0, 100);
+    }
     lv_obj_set_style_length(scale, 6, LV_PART_INDICATOR);
     lv_obj_set_style_line_color(scale, lv_color_hex(theme.fg_dim), LV_PART_INDICATOR);
     lv_obj_set_style_line_width(scale, 1, LV_PART_INDICATOR);
@@ -733,14 +937,48 @@ static void paint_gauge_body(QuadGridTile &t, const MetricBinding & /*m*/, int w
     t.value = lv_label_create(t.root);
     lv_label_set_text(t.value, "--");
     lv_obj_set_style_text_font(t.value, vfont, 0);
-    lv_obj_set_style_text_color(t.value, lv_color_hex(theme.accent), 0);
+    lv_obj_set_style_text_color(t.value, lv_color_hex(value_color(m)), 0);
     lv_obj_align(t.value, LV_ALIGN_CENTER, 0, 4);
     lv_obj_clear_flag(t.value, LV_OBJ_FLAG_CLICKABLE);
 }
 
+// True when a gauge's range straddles zero (e.g. rudder [-35,35]) — its fill
+// must be centre-anchored at the zero position, not left-anchored.
+static inline bool gauge_is_bipolar(const MetricBinding &m) {
+    return m.range_min < 0.0 && m.range_max > 0.0;
+}
+
+// Center-anchored arc fill for a bipolar gauge. The 270° background sweeps
+// 135°(lower-left) → 180 → 270(top) → 0 → 45°(lower-right) clockwise; zero sits
+// at the top centre (270°). A positive value fills clockwise from 270° toward
+// 45° (right half); a negative value fills counter-clockwise from 270° toward
+// 135° (left half). Each half spans 135° of arc, so |v| at the range endpoint
+// fills its whole half. Drives the indicator angles directly (NOT
+// lv_arc_set_value, which always fills from the background start).
+static void gauge_set_bipolar_fill(lv_obj_t *arc, const MetricBinding &m, double v) {
+    if (!arc) return;
+    const double kZero = 270.0;       // top centre, in LVGL arc degrees
+    const double kHalfSweep = 135.0;  // each polarity owns half of the 270° band
+    if (isnan(v)) {
+        lv_arc_set_angles(arc, (uint16_t)kZero, (uint16_t)kZero);  // empty
+        return;
+    }
+    if (v >= 0.0) {
+        double frac = m.range_max > 0.0 ? v / m.range_max : 0.0;
+        if (frac > 1.0) frac = 1.0;
+        double end = kZero + frac * kHalfSweep;  // 270 → up to 405 (==45)
+        lv_arc_set_angles(arc, (uint16_t)lround(kZero), (uint16_t)lround(end));
+    } else {
+        double frac = m.range_min < 0.0 ? v / m.range_min : 0.0;  // v,min both <0 → positive
+        if (frac > 1.0) frac = 1.0;
+        double start = kZero - frac * kHalfSweep;  // 270 → down to 135
+        lv_arc_set_angles(arc, (uint16_t)lround(start), (uint16_t)lround(kZero));
+    }
+}
+
 // Bar widget: title row (label left, percent right) + LVGL bar fill.
 // Mirrors editor .wpreview .bar.
-static void paint_bar_body(QuadGridTile &t, const MetricBinding & /*m*/, int w, int h) {
+static void paint_bar_body(QuadGridTile &t, const MetricBinding &m, int w, int h) {
     // Bar tile: percent number is the hero element (centered, big), bar
     // sits below it. Percent dominates the tile so the operator can
     // read SOC / fuel / fresh-water at a glance, like editor's preview.
@@ -754,7 +992,7 @@ static void paint_bar_body(QuadGridTile &t, const MetricBinding & /*m*/, int w, 
     t.value = lv_label_create(t.root);
     lv_label_set_text(t.value, "--%");
     lv_obj_set_style_text_font(t.value, vfont, 0);
-    lv_obj_set_style_text_color(t.value, lv_color_hex(theme.accent), 0);
+    lv_obj_set_style_text_color(t.value, lv_color_hex(value_color(m)), 0);
     lv_obj_align(t.value, LV_ALIGN_CENTER, 0, -18);
     lv_obj_clear_flag(t.value, LV_OBJ_FLAG_CLICKABLE);
 
@@ -774,10 +1012,1589 @@ static void paint_bar_body(QuadGridTile &t, const MetricBinding & /*m*/, int w, 
     t.aux = bar;
 }
 
+// Trend widget: current reading (hero number) above a rolling sparkline. The
+// sparkline is a tile-sized lv_chart LINE series with no axes/markers — distinct
+// from the fullscreen TrendChartState used as a standalone screen template.
+//
+// History is the chart's own point ring: update pushes one normalized sample
+// (0..100 via binding_unit_fraction, the same scale as the gauge/bar fill) with
+// lv_chart_set_next_value, so no separate per-tile sample buffer is needed. A
+// ranged element (format.range) normalizes against its [min,max]; legacy tiles
+// use the per-source heuristic. Samples are pushed on value-change only, matching
+// the fullscreen trend (a steady reading holds the line rather than scrolling it).
+static void paint_trend_body(QuadGridTile &t, const MetricBinding &m, int w, int h) {
+    // Current reading: hero number, upper third of the tile.
+    const lv_font_t *vfont = &lv_font_montserrat_28;
+    if (h >= 160) vfont = &lv_font_montserrat_38;
+    if (w < 140) vfont = &lv_font_montserrat_20;
+    t.value = lv_label_create(t.root);
+    lv_label_set_text(t.value, "--");
+    lv_obj_set_style_text_font(t.value, vfont, 0);
+    lv_obj_set_style_text_color(t.value, lv_color_hex(value_color(m)), 0);
+    lv_obj_align(t.value, LV_ALIGN_TOP_MID, 0, 26);
+    lv_obj_clear_flag(t.value, LV_OBJ_FLAG_CLICKABLE);
+
+    // Sparkline fills the lower half of the tile.
+    int chart_w = w - 24;
+    int chart_h = h / 2 - 12;
+    if (chart_h < 36) chart_h = 36;
+    lv_obj_t *chart = lv_chart_create(t.root);
+    lv_obj_set_size(chart, chart_w, chart_h);
+    lv_obj_align(chart, LV_ALIGN_BOTTOM_MID, 0, -10);
+    lv_chart_set_type(chart, LV_CHART_TYPE_LINE);
+    lv_chart_set_point_count(chart, 30);
+    lv_chart_set_div_line_count(chart, 0, 0);
+    lv_chart_set_range(chart, LV_CHART_AXIS_PRIMARY_Y, 0, 100);
+    lv_chart_set_update_mode(chart, LV_CHART_UPDATE_MODE_SHIFT);
+    lv_obj_set_style_bg_opa(chart, LV_OPA_TRANSP, 0);
+    lv_obj_set_style_border_width(chart, 0, 0);
+    lv_obj_set_style_pad_all(chart, 0, 0);
+    lv_obj_set_style_line_width(chart, 2, LV_PART_ITEMS);
+    // Hide the per-point dot markers: a clean line is the sparkline idiom.
+    lv_obj_set_style_width(chart, 0, LV_PART_INDICATOR);
+    lv_obj_set_style_height(chart, 0, LV_PART_INDICATOR);
+    lv_obj_clear_flag(chart, LV_OBJ_FLAG_CLICKABLE);
+    lv_obj_clear_flag(chart, LV_OBJ_FLAG_SCROLLABLE);
+    uint32_t accent = m.accent ? m.accent : theme.accent;
+    lv_chart_series_t *s =
+        lv_chart_add_series(chart, lv_color_hex(accent), LV_CHART_AXIS_PRIMARY_Y);
+    // Start empty so the line grows in from the right instead of sitting at 0.
+    lv_chart_set_all_values(chart, s, LV_CHART_POINT_NONE);
+    t.aux = chart;
+    t.last_aux_pct = -1;  // unset; first real sample always pushes
+}
+
+// ---------------------------------------------------------------------------
+// Full-screen wind dial (windrose element on a single-leaf full-screen screen).
+//
+// Ported from src/ui/screen_wind.cpp. The legacy screen uses ~15 file-static
+// lv_obj_t* handles; here all dial state lives in a PSRAM-allocated
+// WindDialState attached to the dial root's user_data, so a windrose tile can
+// be instantiated more than once (multiple screens) without file-scope state.
+// The dial reads boat::View directly (it is NOT bound through MetricBinding),
+// exactly like the legacy screen. Geometry is derived from the passed (w, h)
+// of the tile rect (≈ the full 480x480 screen), with the dial centre at the
+// tile's local centre — NOT LCD_W/LCD_H — so positions stay tile-relative.
+
+struct WindDialState {
+    // Geometry (local to the dial root)
+    int cx, cy;
+    int r_bezel, r_face, r_closehauled, r_marker;
+
+    // Object handles
+    lv_obj_t *root;
+    lv_obj_t *bezel;
+    lv_obj_t *awa_marker;
+    lv_obj_t *twa_marker;
+    lv_obj_t *tide_arrow;
+    lv_obj_t *tide_zero;
+    lv_obj_t *waypoint_marker;
+    lv_obj_t *card_lbl[8];
+    // Bottom band tiles (AWA / TWS / TWA — AWS is now the centre hero, web ref).
+    // tile_aws stays declared for the (now-removed) AWS band tile but is null on
+    // the dial; the live AWS readout is lbl_aws_value at the dial centre.
+    lv_obj_t *tile_aws, *tile_awa, *tile_tws, *tile_twa;
+    lv_obj_t *lbl_aws_value;  // centre hero (apparent wind speed, kn, amber)
+    lv_obj_t *lbl_hdg_value, *lbl_tide_speed, *lbl_drift_cap;
+    bool show_band;  // false on a short (wind_steer) rect: drop the bottom band
+
+    // Dirty caches (mirror screen_wind.cpp's file-statics)
+    char last_aws[16];
+    char last_tws[16];
+    char last_awa[16];
+    char last_twa[16];
+    char last_hdg[16];
+    char last_tide[16];
+    int16_t last_awa_rot;
+    int16_t last_twa_rot;
+    int16_t last_bezel_rot;
+    int16_t last_tide_rot;
+    int16_t last_wp_rot;
+    int8_t last_awa_hidden;
+    int8_t last_twa_hidden;
+    int8_t last_tide_hidden;
+    int8_t last_tide_zero_hidden;
+    int8_t last_wp_hidden;
+    int8_t last_drift_cap_hidden;
+};
+
+namespace winddial {
+
+static const int kCardBearing[8] = {0, 45, 90, 135, 180, 225, 270, 315};
+static const char *kCardText[8] = {"N", "NE", "E", "SE", "S", "SW", "W", "NW"};
+
+// Position `o` so its tail sits `dist` above (cx, cy) in the PARENT'S coords,
+// with the rotation pivot at the tail. Rotating `o` then sweeps it around
+// (cx, cy).
+static void apply_pivot_at(lv_obj_t *o, int cx, int cy, int half_w, int dist) {
+    lv_obj_set_pos(o, cx - half_w, cy - dist);
+    lv_obj_set_style_transform_pivot_x(o, half_w, 0);
+    lv_obj_set_style_transform_pivot_y(o, dist, 0);
+}
+
+static lv_obj_t *make_ring_at(lv_obj_t *p, int cx, int cy, int diameter, int border, uint32_t color,
+                              int opa) {
+    lv_obj_t *r = lv_obj_create(p);
+    lv_obj_set_size(r, diameter, diameter);
+    lv_obj_set_pos(r, cx - diameter / 2, cy - diameter / 2);
+    lv_obj_set_style_radius(r, LV_RADIUS_CIRCLE, 0);
+    lv_obj_set_style_bg_opa(r, LV_OPA_TRANSP, 0);
+    lv_obj_set_style_border_color(r, lv_color_hex(color), 0);
+    lv_obj_set_style_border_opa(r, opa, 0);
+    lv_obj_set_style_border_width(r, border, 0);
+    lv_obj_set_style_pad_all(r, 0, 0);
+    lv_obj_clear_flag(r, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_clear_flag(r, LV_OBJ_FLAG_CLICKABLE);
+    return r;
+}
+
+static lv_obj_t *make_tick_at(lv_obj_t *parent, int cx, int cy, int angle_deg, int len, int width,
+                              uint32_t color, int r_bezel) {
+    lv_obj_t *t = lv_obj_create(parent);
+    lv_obj_set_size(t, width, len);
+    lv_obj_set_style_bg_color(t, lv_color_hex(color), 0);
+    lv_obj_set_style_bg_opa(t, LV_OPA_COVER, 0);
+    lv_obj_set_style_border_width(t, 0, 0);
+    lv_obj_set_style_radius(t, 1, 0);
+    lv_obj_set_style_pad_all(t, 0, 0);
+    lv_obj_clear_flag(t, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_clear_flag(t, LV_OBJ_FLAG_CLICKABLE);
+    apply_pivot_at(t, cx, cy, width / 2, r_bezel - 4);
+    lv_obj_set_style_transform_rotation(t, angle_deg * 10, 0);
+    return t;
+}
+
+static void build_cardinals(WindDialState *st, lv_obj_t *parent) {
+    for (int i = 0; i < 8; ++i) {
+        bool card = (i % 2) == 0;  // N / E / S / W
+        lv_obj_t *l = lv_label_create(parent);
+        lv_label_set_text(l, kCardText[i]);
+        lv_obj_set_style_text_font(l, card ? &lv_font_montserrat_20 : &lv_font_montserrat_14, 0);
+        uint32_t color = card ? 0x16222f : 0x44546a;
+        lv_obj_set_style_text_color(l, lv_color_hex(color), 0);
+        lv_obj_set_width(l, 40);
+        lv_obj_set_style_text_align(l, LV_TEXT_ALIGN_CENTER, 0);
+        lv_obj_add_flag(l, LV_OBJ_FLAG_HIDDEN);
+        st->card_lbl[i] = l;
+    }
+}
+
+// Reposition the upright cardinals on the white band for the current heading
+// (screen angle = bearing - heading, 0 = up).
+static void layout_cardinals(WindDialState *st, double hdg_deg) {
+    int R = st->r_bezel - 13;
+    for (int i = 0; i < 8; ++i) {
+        if (!st->card_lbl[i]) continue;
+        double a = (kCardBearing[i] - hdg_deg) * M_PI / 180.0;
+        int x = st->cx + (int)(R * sin(a));
+        int y = st->cy - (int)(R * cos(a));
+        int hh = ((i % 2) == 0) ? 13 : 10;
+        lv_obj_set_pos(st->card_lbl[i], x - 20, y - hh);
+        lv_obj_clear_flag(st->card_lbl[i], LV_OBJ_FLAG_HIDDEN);
+    }
+}
+
+static void build_bezel(WindDialState *st, lv_obj_t *parent) {
+    int R_BEZEL = st->r_bezel;
+    st->bezel = lv_obj_create(parent);
+    int size = R_BEZEL * 2 + 12;
+    int bcx = size / 2;
+    int bcy = size / 2;
+    lv_obj_set_size(st->bezel, size, size);
+    lv_obj_set_pos(st->bezel, st->cx - bcx, st->cy - bcy);
+    lv_obj_set_style_bg_opa(st->bezel, LV_OPA_TRANSP, 0);
+    lv_obj_set_style_border_width(st->bezel, 0, 0);
+    lv_obj_set_style_pad_all(st->bezel, 0, 0);
+    lv_obj_clear_flag(st->bezel, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_clear_flag(st->bezel, LV_OBJ_FLAG_CLICKABLE);
+    lv_obj_set_style_transform_pivot_x(st->bezel, bcx, 0);
+    lv_obj_set_style_transform_pivot_y(st->bezel, bcy, 0);
+
+    make_ring_at(st->bezel, bcx, bcy, R_BEZEL * 2, 26, theme.arc_band, LV_OPA_90);
+    make_ring_at(st->bezel, bcx, bcy, R_BEZEL * 2 + 18, 7, theme.good, LV_OPA_80);
+    make_ring_at(st->bezel, bcx, bcy, R_BEZEL * 2 - 26, 1, 0x0c1828, LV_OPA_COVER);
+
+    for (int deg = 0; deg < 360; deg += 45) {
+        make_tick_at(st->bezel, bcx, bcy, deg + 22, 10, 2, 0x5a6b78, R_BEZEL);
+    }
+
+    // Fixed bow indicator (red triangle) outside the bezel group so it stays at top.
+    lv_obj_t *bow_notch = lv_label_create(parent);
+    lv_label_set_text(bow_notch, LV_SYMBOL_DOWN);
+    lv_obj_set_style_text_font(bow_notch, &lv_font_montserrat_20, 0);
+    lv_obj_set_style_text_color(bow_notch, lv_color_hex(theme.alarm), 0);
+    lv_obj_set_pos(bow_notch, st->cx - 9, st->cy - R_BEZEL - 6);
+}
+
+static void build_close_hauled(WindDialState *st, lv_obj_t *parent) {
+    int R = st->r_closehauled;
+    int d = R * 2;
+    lv_obj_t *port = lv_arc_create(parent);
+    lv_obj_remove_style(port, NULL, LV_PART_KNOB);
+    lv_obj_clear_flag(port, LV_OBJ_FLAG_CLICKABLE);
+    lv_obj_set_size(port, d, d);
+    lv_obj_set_pos(port, st->cx - R, st->cy - R);
+    lv_arc_set_rotation(port, 0);
+    lv_arc_set_bg_angles(port, 240, 270);  // -30° to bow
+    lv_arc_set_angles(port, 240, 270);
+    lv_obj_set_style_arc_color(port, lv_color_hex(theme.port), LV_PART_INDICATOR);
+    lv_obj_set_style_arc_color(port, lv_color_hex(theme.port), LV_PART_MAIN);
+    lv_obj_set_style_arc_opa(port, LV_OPA_70, LV_PART_INDICATOR);
+    lv_obj_set_style_arc_opa(port, LV_OPA_70, LV_PART_MAIN);
+    lv_obj_set_style_arc_width(port, 6, LV_PART_INDICATOR);
+    lv_obj_set_style_arc_width(port, 6, LV_PART_MAIN);
+
+    lv_obj_t *stbd = lv_arc_create(parent);
+    lv_obj_remove_style(stbd, NULL, LV_PART_KNOB);
+    lv_obj_clear_flag(stbd, LV_OBJ_FLAG_CLICKABLE);
+    lv_obj_set_size(stbd, d, d);
+    lv_obj_set_pos(stbd, st->cx - R, st->cy - R);
+    lv_arc_set_rotation(stbd, 0);
+    lv_arc_set_bg_angles(stbd, 270, 300);  // bow to +30°
+    lv_arc_set_angles(stbd, 270, 300);
+    lv_obj_set_style_arc_color(stbd, lv_color_hex(theme.starboard), LV_PART_INDICATOR);
+    lv_obj_set_style_arc_color(stbd, lv_color_hex(theme.starboard), LV_PART_MAIN);
+    lv_obj_set_style_arc_opa(stbd, LV_OPA_70, LV_PART_INDICATOR);
+    lv_obj_set_style_arc_opa(stbd, LV_OPA_70, LV_PART_MAIN);
+    lv_obj_set_style_arc_width(stbd, 6, LV_PART_INDICATOR);
+    lv_obj_set_style_arc_width(stbd, 6, LV_PART_MAIN);
+}
+
+static void build_boat(WindDialState *st, lv_obj_t *parent) {
+    int CX = st->cx, CY = st->cy, R_FACE = st->r_face;
+    lv_obj_t *cl = lv_obj_create(parent);
+    lv_obj_set_size(cl, 1, R_FACE);
+    lv_obj_set_pos(cl, CX, CY - R_FACE / 2);
+    lv_obj_set_style_bg_color(cl, lv_color_hex(theme.fg), 0);
+    lv_obj_set_style_bg_opa(cl, LV_OPA_20, 0);
+    lv_obj_set_style_border_width(cl, 0, 0);
+    lv_obj_set_style_pad_all(cl, 0, 0);
+    lv_obj_clear_flag(cl, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_clear_flag(cl, LV_OBJ_FLAG_CLICKABLE);
+
+    int hw = R_FACE * 20 / 130;
+    int bow = R_FACE * 56 / 130;
+    int mid = R_FACE * 26 / 130;
+    int shoulder = R_FACE * 4 / 130;
+    int stern = R_FACE * 40 / 130;
+    // Hull point ring is owned by the line object (LVGL copies points on set in
+    // v9, but to be safe store in the state-adjacent heap). A static would be a
+    // multi-instance hazard, so allocate alongside the dial in PSRAM.
+    lv_point_precise_t *pts =
+        (lv_point_precise_t *)heap_caps_calloc(7, sizeof(lv_point_precise_t), MALLOC_CAP_SPIRAM);
+    if (!pts) return;
+    pts[0] = {(lv_value_precise_t)(CX - hw), (lv_value_precise_t)(CY + stern)};
+    pts[1] = {(lv_value_precise_t)(CX - hw), (lv_value_precise_t)(CY - shoulder)};
+    pts[2] = {(lv_value_precise_t)(CX - hw * 22 / 28), (lv_value_precise_t)(CY - mid)};
+    pts[3] = {(lv_value_precise_t)CX, (lv_value_precise_t)(CY - bow)};
+    pts[4] = {(lv_value_precise_t)(CX + hw * 22 / 28), (lv_value_precise_t)(CY - mid)};
+    pts[5] = {(lv_value_precise_t)(CX + hw), (lv_value_precise_t)(CY - shoulder)};
+    pts[6] = {(lv_value_precise_t)(CX + hw), (lv_value_precise_t)(CY + stern)};
+    lv_obj_t *hull = lv_line_create(parent);
+    lv_line_set_points(hull, pts, 7);
+    lv_obj_set_style_line_color(hull, lv_color_hex(theme.fg), 0);
+    lv_obj_set_style_line_opa(hull, LV_OPA_30, 0);
+    lv_obj_set_style_line_width(hull, 3, 0);
+    lv_obj_set_style_line_rounded(hull, true, 0);
+    lv_obj_clear_flag(hull, LV_OBJ_FLAG_CLICKABLE);
+}
+
+static lv_obj_t *make_wind_marker(WindDialState *st, lv_obj_t *parent, const char *letter,
+                                  uint32_t color) {
+    lv_obj_t *m = lv_obj_create(parent);
+    lv_obj_set_size(m, 34, 76);
+    lv_obj_set_style_bg_opa(m, LV_OPA_TRANSP, 0);
+    lv_obj_set_style_border_width(m, 0, 0);
+    lv_obj_set_style_pad_all(m, 0, 0);
+    lv_obj_clear_flag(m, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_clear_flag(m, LV_OBJ_FLAG_CLICKABLE);
+    apply_pivot_at(m, st->cx, st->cy, 17, st->r_marker);
+
+    lv_obj_t *tri = lv_label_create(m);
+    lv_label_set_text(tri, LV_SYMBOL_DOWN);
+    lv_obj_set_style_text_font(tri, &lv_font_montserrat_28, 0);
+    lv_obj_set_style_text_color(tri, lv_color_hex(color), 0);
+    lv_obj_align(tri, LV_ALIGN_TOP_MID, 0, -6);
+
+    lv_obj_t *stem = lv_obj_create(m);
+    lv_obj_set_size(stem, 6, 34);
+    lv_obj_set_style_bg_color(stem, lv_color_hex(color), 0);
+    lv_obj_set_style_bg_opa(stem, LV_OPA_COVER, 0);
+    lv_obj_set_style_border_width(stem, 0, 0);
+    lv_obj_set_style_radius(stem, 2, 0);
+    lv_obj_set_style_pad_all(stem, 0, 0);
+    lv_obj_clear_flag(stem, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_clear_flag(stem, LV_OBJ_FLAG_CLICKABLE);
+    lv_obj_align(stem, LV_ALIGN_TOP_MID, 0, 20);
+
+    lv_obj_t *l = lv_label_create(m);
+    lv_label_set_text(l, letter);
+    lv_obj_set_style_text_font(l, &lv_font_montserrat_20, 0);
+    lv_obj_set_style_text_color(l, lv_color_hex(color), 0);
+    lv_obj_align(l, LV_ALIGN_TOP_MID, 0, 54);
+    return m;
+}
+
+static void build_tide(WindDialState *st, lv_obj_t *parent) {
+    const int TIDE_H = 132;
+    const int TIDE_MID = TIDE_H / 2;
+    st->tide_arrow = lv_obj_create(parent);
+    lv_obj_set_size(st->tide_arrow, 32, TIDE_H);
+    lv_obj_set_style_bg_opa(st->tide_arrow, LV_OPA_TRANSP, 0);
+    lv_obj_set_style_border_width(st->tide_arrow, 0, 0);
+    lv_obj_set_style_pad_all(st->tide_arrow, 0, 0);
+    lv_obj_clear_flag(st->tide_arrow, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_clear_flag(st->tide_arrow, LV_OBJ_FLAG_CLICKABLE);
+    apply_pivot_at(st->tide_arrow, st->cx, st->cy, 16, TIDE_MID);
+
+    lv_obj_t *shaft = lv_obj_create(st->tide_arrow);
+    lv_obj_set_size(shaft, 5, 54);
+    lv_obj_set_pos(shaft, 16 - 2, TIDE_MID - 54);
+    lv_obj_set_style_bg_color(shaft, lv_color_hex(0x288cff), 0);
+    lv_obj_set_style_bg_opa(shaft, LV_OPA_COVER, 0);
+    lv_obj_set_style_border_width(shaft, 0, 0);
+    lv_obj_set_style_radius(shaft, 2, 0);
+    lv_obj_set_style_pad_all(shaft, 0, 0);
+    lv_obj_clear_flag(shaft, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_clear_flag(shaft, LV_OBJ_FLAG_CLICKABLE);
+
+    lv_obj_t *head = lv_label_create(st->tide_arrow);
+    lv_label_set_text(head, LV_SYMBOL_UP);
+    lv_obj_set_style_text_font(head, &lv_font_montserrat_28, 0);
+    lv_obj_set_style_text_color(head, lv_color_hex(0x288cff), 0);
+    lv_obj_align(head, LV_ALIGN_TOP_MID, 0, -4);
+    lv_obj_add_flag(st->tide_arrow, LV_OBJ_FLAG_HIDDEN);
+
+    st->tide_zero = lv_obj_create(parent);
+    lv_obj_set_size(st->tide_zero, 26, 26);
+    apply_pivot_at(st->tide_zero, st->cx, st->cy, 13, 13);
+    lv_obj_set_style_bg_opa(st->tide_zero, LV_OPA_TRANSP, 0);
+    lv_obj_set_style_border_color(st->tide_zero, lv_color_hex(0x288cff), 0);
+    lv_obj_set_style_border_width(st->tide_zero, 3, 0);
+    lv_obj_set_style_radius(st->tide_zero, LV_RADIUS_CIRCLE, 0);
+    lv_obj_set_style_pad_all(st->tide_zero, 0, 0);
+    lv_obj_clear_flag(st->tide_zero, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_clear_flag(st->tide_zero, LV_OBJ_FLAG_CLICKABLE);
+    lv_obj_add_flag(st->tide_zero, LV_OBJ_FLAG_HIDDEN);
+}
+
+static void build_waypoint(WindDialState *st, lv_obj_t *parent) {
+    st->waypoint_marker = lv_obj_create(parent);
+    lv_obj_set_size(st->waypoint_marker, 14, 18);
+    lv_obj_set_style_bg_color(st->waypoint_marker, lv_color_hex(0xffd21f), 0);
+    lv_obj_set_style_bg_opa(st->waypoint_marker, LV_OPA_COVER, 0);
+    lv_obj_set_style_border_color(st->waypoint_marker, lv_color_hex(theme.panel_edge), 0);
+    lv_obj_set_style_border_width(st->waypoint_marker, 1, 0);
+    lv_obj_set_style_radius(st->waypoint_marker, 4, 0);
+    lv_obj_set_style_pad_all(st->waypoint_marker, 0, 0);
+    lv_obj_clear_flag(st->waypoint_marker, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_clear_flag(st->waypoint_marker, LV_OBJ_FLAG_CLICKABLE);
+    apply_pivot_at(st->waypoint_marker, st->cx, st->cy, 7, st->r_bezel + 4);
+    lv_obj_add_flag(st->waypoint_marker, LV_OBJ_FLAG_HIDDEN);
+}
+
+// Bottom tile band (AWA / TWS / TWA), pinned to the bottom of the dial root and
+// spanning its width — matches the web design (AWS is the centre hero, so it is
+// NOT duplicated in the band). Three tiles evenly spaced across the width.
+// `band_h` is the full band height (TILE_BAND).
+static void build_tiles(WindDialState *st, lv_obj_t *parent, int w, int h, int band_h) {
+    const lv_font_t *tv = &lv_font_montserrat_38;
+    int gap = 8, n = 3;
+    int tw = (w - gap * (n + 1)) / n;
+    int th = band_h - 16;
+    if (th < 40) th = 40;
+    int ty = h - th - 8;
+    st->tile_aws = nullptr;  // AWS now lives at the dial centre, not in the band
+    st->tile_awa = ui::numeric_tile(parent, gap, ty, tw, th, "AWA", "", tv, theme.fg);
+    st->tile_tws = ui::numeric_tile(parent, gap * 2 + tw, ty, tw, th, "TWS", "kn", tv, theme.fg);
+    st->tile_twa = ui::numeric_tile(parent, gap * 3 + tw * 2, ty, tw, th, "TWA", "", tv, theme.fg);
+}
+
+static int16_t deg_to_lvgl(double deg) {
+    int16_t r = (int16_t)(lround(deg) * 10);
+    while (r < 0)
+        r += 3600;
+    while (r >= 3600)
+        r -= 3600;
+    return r;
+}
+
+// Build the dial into `parent` (the tile root) filling its w x h content area.
+// Returns a PSRAM WindDialState* (also attached to the dial root's user_data).
+static WindDialState *build(lv_obj_t *parent, int w, int h) {
+    WindDialState *st =
+        (WindDialState *)heap_caps_calloc(1, sizeof(WindDialState), MALLOC_CAP_SPIRAM);
+    if (!st) {
+        net::logf("[layout] wind dial alloc failed");
+        return nullptr;
+    }
+    // Sentinel-init the dirty caches (calloc gives 0; force "unset").
+    st->last_aws[0] = (char)0xFF;
+    st->last_tws[0] = (char)0xFF;
+    st->last_awa[0] = (char)0xFF;
+    st->last_twa[0] = (char)0xFF;
+    st->last_hdg[0] = (char)0xFF;
+    st->last_tide[0] = (char)0xFF;
+    st->last_awa_rot = INT16_MIN;
+    st->last_twa_rot = INT16_MIN;
+    st->last_bezel_rot = INT16_MIN;
+    st->last_tide_rot = INT16_MIN;
+    st->last_wp_rot = INT16_MIN;
+    st->last_awa_hidden = -1;
+    st->last_twa_hidden = -1;
+    st->last_tide_hidden = -1;
+    st->last_tide_zero_hidden = -1;
+    st->last_wp_hidden = -1;
+    st->last_drift_cap_hidden = -1;
+
+    // Geometry: reserve a bottom tile band; centre the rose in the area above it.
+    // Derived from the tile's local (w, h), NOT LCD_W/LCD_H, so the dial is
+    // tile-relative and the offset is implicit (children are positioned in the
+    // parent's content coordinates).
+    const int TILE_BAND = 132;
+    // On a short rect (wind_steer: dial shares the screen with a button row, so
+    // the dial cell is well under full height) the bottom AWA/TWS/TWA band would
+    // squeeze the rose into stacked rows. Mirror the AP-HUD fix: drop the band so
+    // the dial gets the full height — its own centre AWS + markers carry the wind
+    // info, and the band is redundant on a cramped steering layout.
+    st->show_band = (h >= 440);
+    int rose_h = st->show_band ? h - TILE_BAND : h;
+    if (rose_h < 120) rose_h = h;  // degenerate guard: skip band on tiny rects
+    st->cx = w / 2;
+    st->cy = rose_h / 2;
+    int shortside = (w < rose_h ? w : rose_h);
+    st->r_bezel = shortside / 2 - 16;
+    st->r_face = st->r_bezel - 28;
+    st->r_closehauled = st->r_bezel - 43;
+    st->r_marker = st->r_bezel - 18;
+
+    int CX = st->cx, CY = st->cy, R_FACE = st->r_face;
+
+    // Dial root: a transparent, borderless, no-pad container filling the tile so
+    // it can hold the rose + bottom tiles, and so update_* can find it by
+    // user_data. (The tile chrome is already suppressed by the caller.)
+    st->root = lv_obj_create(parent);
+    lv_obj_set_size(st->root, w, h);
+    lv_obj_set_pos(st->root, 0, 0);
+    lv_obj_set_style_bg_opa(st->root, LV_OPA_TRANSP, 0);
+    lv_obj_set_style_border_width(st->root, 0, 0);
+    lv_obj_set_style_radius(st->root, 0, 0);
+    lv_obj_set_style_pad_all(st->root, 0, 0);
+    lv_obj_clear_flag(st->root, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_add_flag(st->root, LV_OBJ_FLAG_EVENT_BUBBLE);
+    lv_obj_t *r = st->root;
+
+    // Layer order: face -> close-hauled -> boat -> tide -> markers -> bezel
+    // -> waypoint -> centre labels -> tiles.
+    make_ring_at(r, CX, CY, R_FACE * 2, 0, theme.panel, LV_OPA_COVER);  // face bg ring
+    lv_obj_t *face = lv_obj_create(r);
+    lv_obj_set_size(face, R_FACE * 2, R_FACE * 2);
+    lv_obj_set_pos(face, CX - R_FACE, CY - R_FACE);
+    lv_obj_set_style_radius(face, LV_RADIUS_CIRCLE, 0);
+    lv_obj_set_style_bg_color(face, lv_color_hex(theme.panel), 0);
+    lv_obj_set_style_bg_opa(face, LV_OPA_COVER, 0);
+    lv_obj_set_style_border_color(face, lv_color_hex(theme.panel_edge), 0);
+    lv_obj_set_style_border_opa(face, LV_OPA_60, 0);
+    lv_obj_set_style_border_width(face, 1, 0);
+    lv_obj_set_style_pad_all(face, 0, 0);
+    lv_obj_clear_flag(face, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_add_flag(face, LV_OBJ_FLAG_EVENT_BUBBLE);
+
+    build_close_hauled(st, r);
+    build_boat(st, r);
+    build_tide(st, r);
+
+    st->lbl_drift_cap = lv_label_create(r);
+    lv_label_set_text(st->lbl_drift_cap, "DRIFT");
+    lv_obj_set_style_text_font(st->lbl_drift_cap, &lv_font_montserrat_14, 0);
+    lv_obj_set_style_text_color(st->lbl_drift_cap, lv_color_hex(theme.fg_dim), 0);
+    lv_obj_set_style_text_align(st->lbl_drift_cap, LV_TEXT_ALIGN_CENTER, 0);
+    lv_obj_set_width(st->lbl_drift_cap, 60);
+    lv_obj_set_pos(st->lbl_drift_cap, CX - 30, CY + 60);
+    lv_obj_add_flag(st->lbl_drift_cap, LV_OBJ_FLAG_HIDDEN);
+
+    st->lbl_tide_speed = lv_label_create(r);
+    lv_label_set_text(st->lbl_tide_speed, "");
+    lv_obj_set_style_text_font(st->lbl_tide_speed, &lv_font_montserrat_20, 0);
+    lv_obj_set_style_text_color(st->lbl_tide_speed, lv_color_hex(theme.fg), 0);
+    lv_obj_set_style_text_align(st->lbl_tide_speed, LV_TEXT_ALIGN_CENTER, 0);
+    lv_obj_set_width(st->lbl_tide_speed, 60);
+    lv_obj_set_pos(st->lbl_tide_speed, CX - 30, CY + 76);
+
+    // Wind indices: T (true) cyan below A (apparent) amber in z-order.
+    st->twa_marker = make_wind_marker(st, r, "T", 0x2bd4e8);
+    st->awa_marker = make_wind_marker(st, r, "A", 0xff8800);
+
+    build_bezel(st, r);
+    build_cardinals(st, r);
+    build_waypoint(st, r);
+
+    // Centre hero = AWS (apparent wind speed), web-design layout: a small dim
+    // "AWS" caption directly above the big amber/theme.warn number. Heading is
+    // already shown by the rotated bezel + red bow lubber, so HDG is demoted to a
+    // tiny dim readout below the AWS number (kept for at-a-glance reference).
+    lv_obj_t *awscap = lv_label_create(r);
+    lv_label_set_text(awscap, "AWS");
+    lv_obj_set_style_text_font(awscap, &lv_font_montserrat_14, 0);
+    lv_obj_set_style_text_color(awscap, lv_color_hex(theme.fg_dim), 0);
+    lv_obj_set_style_text_align(awscap, LV_TEXT_ALIGN_CENTER, 0);
+    lv_obj_set_width(awscap, 80);
+    lv_obj_set_pos(awscap, CX - 40, CY - 44);
+
+    st->lbl_aws_value = lv_label_create(r);
+    lv_label_set_text(st->lbl_aws_value, "--");
+    lv_obj_set_style_text_font(st->lbl_aws_value, &font_xl_64, 0);
+    lv_obj_set_style_text_color(st->lbl_aws_value, lv_color_hex(theme.warn), 0);
+    lv_obj_set_style_text_align(st->lbl_aws_value, LV_TEXT_ALIGN_CENTER, 0);
+    lv_obj_set_width(st->lbl_aws_value, 200);
+    lv_obj_set_pos(st->lbl_aws_value, CX - 100, CY - 30);
+
+    // Tiny dim HDG readout under the AWS hero (heading is primarily the bezel).
+    st->lbl_hdg_value = lv_label_create(r);
+    lv_label_set_text(st->lbl_hdg_value, "--\xC2\xB0");
+    lv_obj_set_style_text_font(st->lbl_hdg_value, &lv_font_montserrat_14, 0);
+    lv_obj_set_style_text_color(st->lbl_hdg_value, lv_color_hex(theme.fg_dim), 0);
+    lv_obj_set_style_text_align(st->lbl_hdg_value, LV_TEXT_ALIGN_CENTER, 0);
+    lv_obj_set_width(st->lbl_hdg_value, 100);
+    lv_obj_set_pos(st->lbl_hdg_value, CX - 50, CY + 40);
+
+    // Bottom numeric tiles: fixed band pinned to the bottom (TILE_BAND tall),
+    // matching the rose area reserved above. Dropped on a short steering rect
+    // (show_band == false) so the dial gets the full height.
+    if (st->show_band) build_tiles(st, r, w, h, TILE_BAND);
+
+    lv_obj_set_user_data(st->root, st);
+    return st;
+}
+
+static void update(WindDialState *st, const boat::View &d) {
+    if (!st) return;
+    char buf[64];
+
+    // --- AWS centre hero (apparent wind speed, the dominant number) ---
+    if (!isnan(d.aws)) {
+        snprintf(buf, sizeof(buf), "%.1f", mps_to_kn(d.aws));
+        ui::set_text_if_changed(st->lbl_aws_value, st->last_aws, sizeof(st->last_aws), buf);
+    } else {
+        ui::set_text_if_changed(st->lbl_aws_value, st->last_aws, sizeof(st->last_aws), "--");
+    }
+    // --- TWS band tile (null-safe: dropped on a short steering rect) ---
+    if (!isnan(d.tws)) {
+        snprintf(buf, sizeof(buf), "%.1f", mps_to_kn(d.tws));
+        ui::set_text_if_changed(st->tile_tws, st->last_tws, sizeof(st->last_tws), buf);
+    } else {
+        ui::set_text_if_changed(st->tile_tws, st->last_tws, sizeof(st->last_tws), "--");
+    }
+
+    // --- AWA: angle tile + marker rotation ---
+    if (!isnan(d.awa)) {
+        double deg = rad_to_deg_pos(d.awa);
+        bool starboard = deg <= 180.0;
+        double mag = starboard ? deg : 360.0 - deg;
+        snprintf(buf, sizeof(buf), "%.0f%c", mag, starboard ? 'S' : 'P');
+        ui::set_text_if_changed(st->tile_awa, st->last_awa, sizeof(st->last_awa), buf);
+        ui::set_rot_if_changed(st->awa_marker, &st->last_awa_rot, deg_to_lvgl(deg));
+        ui::set_hidden_if_changed(st->awa_marker, &st->last_awa_hidden, false);
+    } else {
+        ui::set_text_if_changed(st->tile_awa, st->last_awa, sizeof(st->last_awa), "--");
+        ui::set_hidden_if_changed(st->awa_marker, &st->last_awa_hidden, true);
+    }
+
+    // --- TWA ---
+    if (!isnan(d.twa)) {
+        double deg = rad_to_deg_pos(d.twa);
+        bool starboard = deg <= 180.0;
+        double mag = starboard ? deg : 360.0 - deg;
+        snprintf(buf, sizeof(buf), "%.0f%c", mag, starboard ? 'S' : 'P');
+        ui::set_text_if_changed(st->tile_twa, st->last_twa, sizeof(st->last_twa), buf);
+        ui::set_rot_if_changed(st->twa_marker, &st->last_twa_rot, deg_to_lvgl(deg));
+        ui::set_hidden_if_changed(st->twa_marker, &st->last_twa_hidden, false);
+    } else {
+        ui::set_text_if_changed(st->tile_twa, st->last_twa, sizeof(st->last_twa), "--");
+        ui::set_hidden_if_changed(st->twa_marker, &st->last_twa_hidden, true);
+    }
+
+    // --- bezel rotation (heading) + cardinal layout + HDG digits ---
+    double hdg_deg = NAN;
+    if (!isnan(d.headingTrue)) hdg_deg = rad_to_deg_pos(d.headingTrue);
+    double card_hdg = isnan(hdg_deg) ? 0.0 : hdg_deg;
+    int16_t bez_rot = deg_to_lvgl(-card_hdg);
+    if (bez_rot != st->last_bezel_rot) {
+        st->last_bezel_rot = bez_rot;
+        lv_obj_set_style_transform_rotation(st->bezel, bez_rot, 0);
+        layout_cardinals(st, card_hdg);
+    }
+    if (!isnan(hdg_deg)) {
+        snprintf(buf, sizeof(buf), "%03.0f\xC2\xB0", hdg_deg);
+        ui::set_text_if_changed(st->lbl_hdg_value, st->last_hdg, sizeof(st->last_hdg), buf);
+    } else {
+        ui::set_text_if_changed(st->lbl_hdg_value, st->last_hdg, sizeof(st->last_hdg),
+                                "--\xC2\xB0");
+    }
+
+    // --- tide / current vector ---
+    bool have_current = !isnan(d.currentSetTrue) && !isnan(d.currentDrift) && !isnan(hdg_deg);
+    bool flowing = have_current && d.currentDrift > 0.05;
+    if (flowing) {
+        double tide_rel = rad_to_deg_pos(d.currentSetTrue) - hdg_deg;
+        while (tide_rel < 0)
+            tide_rel += 360;
+        ui::set_rot_if_changed(st->tide_arrow, &st->last_tide_rot, deg_to_lvgl(tide_rel));
+        ui::set_hidden_if_changed(st->tide_arrow, &st->last_tide_hidden, false);
+        ui::set_hidden_if_changed(st->tide_zero, &st->last_tide_zero_hidden, true);
+        snprintf(buf, sizeof(buf), "%.1fkn", mps_to_kn(d.currentDrift));
+        ui::set_text_if_changed(st->lbl_tide_speed, st->last_tide, sizeof(st->last_tide), buf);
+        ui::set_hidden_if_changed(st->lbl_drift_cap, &st->last_drift_cap_hidden, false);
+    } else {
+        ui::set_hidden_if_changed(st->tide_arrow, &st->last_tide_hidden, true);
+        ui::set_hidden_if_changed(st->tide_zero, &st->last_tide_zero_hidden, !have_current);
+        ui::set_text_if_changed(st->lbl_tide_speed, st->last_tide, sizeof(st->last_tide),
+                                have_current ? "0.0kn" : "");
+        ui::set_hidden_if_changed(st->lbl_drift_cap, &st->last_drift_cap_hidden, !have_current);
+    }
+
+    // --- waypoint pip ---
+    if (!isnan(d.btw) && !isnan(hdg_deg)) {
+        double wp_rel = rad_to_deg_pos(d.btw) - hdg_deg;
+        while (wp_rel < 0)
+            wp_rel += 360;
+        ui::set_rot_if_changed(st->waypoint_marker, &st->last_wp_rot, deg_to_lvgl(wp_rel));
+        ui::set_hidden_if_changed(st->waypoint_marker, &st->last_wp_hidden, false);
+    } else {
+        ui::set_hidden_if_changed(st->waypoint_marker, &st->last_wp_hidden, true);
+    }
+}
+
+}  // namespace winddial
+
+// ---------------------------------------------------------------------------
+// Full-screen autopilot HUD (autopilot element on a large/full-screen leaf).
+//
+// Ported from src/ui/screen_autopilot.cpp. The legacy screen uses ~10 file-static
+// lv_obj_t* handles + a mode modal + touch/nudge wiring; here all HUD state lives
+// in a PSRAM-allocated ApHudState attached to the HUD root's user_data, so the
+// element can be instantiated more than once without file-scope state. The HUD
+// reads boat::View directly (NOT through MetricBinding), like the legacy screen.
+//
+// Crucially this composite renders ONLY the dial + readouts + mode badge — NOT
+// the nudge buttons. A composite element can't carry per-button actions, so the
+// autopilot SCREEN is authored as a col-split: this leaf over a row of `button`
+// leaves whose action.kind=command dispatches "autopilot heading ±N" (exactly
+// like the steering / wind_steer screens). The reusable glass-cockpit parts
+// (semicircular HEADING-UP ui::build_compass, HDG/COG/CTS/AP-target
+// ui::build_marker_ring, ui::build_xte_strip, ui::numeric_tile) are shared with
+// the legacy screen; only the refresh logic is ported here. Geometry is derived
+// from the passed (w, h) of the tile rect (≈ 480x480), centered locally — NOT
+// LCD_W/LCD_H — so positions stay tile-relative.
+
+struct ApHudState {
+    lv_obj_t *root;
+    ui::Compass cp;
+    ui::XteStrip xte;  // repurposed as a RUDDER center-zero strip (PORT..STBD, ±35°)
+    lv_obj_t *lbl_mode;
+    lv_obj_t *lbl_hdg_value;
+    lv_obj_t *lbl_cogsog;
+    lv_obj_t *tile_depth, *tile_speed, *tile_aws, *tile_awa;
+
+    // Engage chip (top-left): Auto/STBY toggle wired DIRECTLY to a SignalK state
+    // PUT (NOT the permission-gated `autopilot mode` command path). lbl_engage is
+    // the chip's text label; s_last_engage is the mode to re-engage from STBY.
+    lv_obj_t *btn_engage, *lbl_engage;
+    char s_last_engage[8];
+    lv_obj_t *lbl_target;  // "TGT <ddd>°" caption near the HDG hero (hidden on NaN)
+
+    // Dirty caches (mirror screen_autopilot.cpp's file-statics).
+    char last_mode[16];
+    uint32_t last_mode_color;
+    char last_hdg[16];
+    char last_cogsog[48];
+    char last_depth[12];
+    char last_speed[12];
+    char last_aws[12];
+    char last_awa[12];
+    int16_t last_scale_rot;
+    int last_xte_x;  // last rudder needle x
+    char last_xte_txt[16];
+    char last_engage[8];
+    uint32_t last_engage_color;
+    char last_target[12];
+};
+
+namespace aphud {
+
+// PUT steering/autopilot/state DIRECTLY (mirrors screen_autopilot.cpp put_state),
+// NOT the `autopilot mode` command funnel: autopilot::set_mode is permission-gated
+// (allow_engage defaults OFF), so the command path is silently Forbidden on a stock
+// device. The legacy HUD engages by PUTting the state string verbatim; do the same.
+static void put_state(const char *state) {
+    app::Command cmd;
+    cmd.type = app::CommandType::SignalKPut;
+    strncpy(cmd.a, "steering/autopilot/state", sizeof(cmd.a) - 1);
+    snprintf(cmd.b, sizeof(cmd.b), "\"%s\"", state);
+    app::post_net(cmd, 50);
+    net::logf("[aphud] state -> %s queued", state);
+}
+
+// Engage chip handler. Runs on the UI task: read boat::View (copyData), decide
+// engaged, then post the state PUT to the net worker (non-blocking). Toggling
+// from STBY re-engages the last steering mode (st->s_last_engage); toggling from
+// any engaged mode drops to standby.
+static void on_engage_short(lv_event_t *e) {
+    ApHudState *st = (ApHudState *)lv_event_get_user_data(e);
+    if (!st) return;
+    boat::View d;
+    boat::current_view(d);
+    bool engaged = d.apState[0] && strcmp(d.apState, "standby") != 0;
+    put_state(engaged ? "standby" : st->s_last_engage);
+}
+
+// HOME chip handler: post ShowScreen "dashboard" (mirrors tile_clicked_cb).
+static void on_home(lv_event_t *e) {
+    (void)e;
+    app::Command c;
+    c.type = app::CommandType::ShowScreen;
+    strncpy(c.a, "dashboard", sizeof(c.a) - 1);
+    c.t_post_us = micros();
+    app::post(c, 0);
+}
+
+// Build the HUD into `parent` (the tile root) filling its w x h content area.
+// Returns a PSRAM ApHudState* (also attached to the HUD root's user_data).
+static ApHudState *build(lv_obj_t *parent, int w, int h) {
+    ApHudState *st = (ApHudState *)heap_caps_calloc(1, sizeof(ApHudState), MALLOC_CAP_SPIRAM);
+    if (!st) {
+        net::logf("[layout] ap hud alloc failed");
+        return nullptr;
+    }
+    // Sentinel-init the dirty caches (calloc gives 0; force "unset").
+    st->last_mode[0] = (char)0xFF;
+    st->last_mode_color = 0xFFFFFFFF;
+    st->last_hdg[0] = (char)0xFF;
+    st->last_cogsog[0] = (char)0xFF;
+    st->last_depth[0] = (char)0xFF;
+    st->last_speed[0] = (char)0xFF;
+    st->last_aws[0] = (char)0xFF;
+    st->last_awa[0] = (char)0xFF;
+    st->last_scale_rot = INT16_MIN;
+    st->last_xte_x = INT16_MIN;
+    st->last_xte_txt[0] = (char)0xFF;
+    st->last_engage[0] = (char)0xFF;
+    st->last_engage_color = 0xFFFFFFFF;
+    st->last_target[0] = (char)0xFF;
+    strcpy(st->s_last_engage, "auto");  // default mode to re-engage from STBY
+
+    // HUD root: transparent, borderless, no-pad container filling the tile so its
+    // local (0..w / 0..h) coordinates line up with the rect and update_* can find
+    // it by user_data. (Tile chrome is already suppressed by the caller.)
+    st->root = lv_obj_create(parent);
+    lv_obj_set_size(st->root, w, h);
+    lv_obj_set_pos(st->root, 0, 0);
+    lv_obj_set_style_bg_opa(st->root, LV_OPA_TRANSP, 0);
+    lv_obj_set_style_border_width(st->root, 0, 0);
+    lv_obj_set_style_radius(st->root, 0, 0);
+    lv_obj_set_style_pad_all(st->root, 0, 0);
+    lv_obj_clear_flag(st->root, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_add_flag(st->root, LV_OBJ_FLAG_EVENT_BUBBLE);
+    lv_obj_t *r = st->root;
+
+    // --- vertical band budget -------------------------------------------------
+    // This HUD can land in a SHORT leaf (e.g. a [4,1] col-split gives the
+    // autopilot leaf ~480x384, NOT 480x480). Lay out from the REAL `h`, never an
+    // assumed 480, and reserve explicit non-overlapping bands so nothing
+    // collides:
+    //   [ badge ][ compass region ][ COG/SOG ][ XTE ][ tile band? ]
+    // The compass radius is the slack: it gets whatever vertical space is left
+    // after the fixed bands, capped by width. On a short leaf the secondary
+    // numeric tiles are dropped so the dial + HDG + COG/SOG + XTE stay legible.
+    const int top_bar_h = 44;  // top mode badge
+    const int cogsog_h = 28;   // COG/SOG sub-line strip (own reserved band)
+    const int xte_h = 44;      // cross-track-error strip
+    const int gap = 8;
+    const int n = 4;
+    const int sq = (w - gap * (n + 1)) / n;  // numeric-tile square side
+    const int tile_band_h = sq + gap;        // tiles + bottom gap
+    // Drop the secondary numeric tiles when the leaf is too short to fit them
+    // under the dial+COG/SOG+XTE without squeezing. The steering essentials
+    // (compass, HDG, COG/SOG, XTE) take priority on a short autopilot leaf.
+    const bool show_tiles = (h >= 440);
+    const int reserved_below = cogsog_h + xte_h + (show_tiles ? tile_band_h : 0);
+
+    // --- mode badge (top-mid): a filled pill (theme.good) when engaged, hollow
+    // outline when standby. Built as a small rounded container with the mode label
+    // centered, so the engaged/standby state reads at a glance even from across
+    // the cockpit. The badge bg/border are recolored in update().
+    lv_obj_t *badge = lv_obj_create(r);
+    lv_obj_set_size(badge, 130, 32);
+    lv_obj_align(badge, LV_ALIGN_TOP_MID, 0, 6);
+    lv_obj_set_style_radius(badge, 16, 0);
+    lv_obj_set_style_bg_opa(badge, LV_OPA_TRANSP, 0);
+    lv_obj_set_style_border_color(badge, lv_color_hex(theme.panel_edge), 0);
+    lv_obj_set_style_border_width(badge, 2, 0);
+    lv_obj_set_style_pad_all(badge, 0, 0);
+    lv_obj_clear_flag(badge, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_clear_flag(badge, LV_OBJ_FLAG_CLICKABLE);
+    st->lbl_mode = lv_label_create(badge);
+    lv_label_set_text(st->lbl_mode, "STANDBY");
+    lv_obj_set_style_text_font(st->lbl_mode, &lv_font_montserrat_20, 0);
+    lv_obj_set_style_text_color(st->lbl_mode, lv_color_hex(theme.fg_dim), 0);
+    lv_obj_center(st->lbl_mode);
+
+    // --- engage chip (top-LEFT): Auto/STBY toggle. A composite tile can't carry
+    // MIDL button actions, so this is wired DIRECTLY (on_engage_short -> direct
+    // state PUT), exactly like the legacy screen_autopilot.cpp ON/STBY chip. ~110x40
+    // rounded button with a label; the label text/color are state-driven in update.
+    st->btn_engage = lv_button_create(r);
+    lv_obj_set_size(st->btn_engage, 110, 40);
+    lv_obj_align(st->btn_engage, LV_ALIGN_TOP_LEFT, 8, 8);
+    lv_obj_set_style_radius(st->btn_engage, ui::chrome::panel_radius, 0);
+    lv_obj_set_style_bg_color(st->btn_engage, lv_color_hex(theme.panel), 0);
+    lv_obj_set_style_border_color(st->btn_engage, lv_color_hex(theme.panel_edge), 0);
+    lv_obj_set_style_border_width(st->btn_engage, ui::chrome::panel_border, 0);
+    lv_obj_set_style_pad_all(st->btn_engage, 0, 0);
+    st->lbl_engage = lv_label_create(st->btn_engage);
+    lv_label_set_text(st->lbl_engage, "ON");
+    lv_obj_set_style_text_font(st->lbl_engage, &lv_font_montserrat_20, 0);
+    lv_obj_set_style_text_color(st->lbl_engage, lv_color_hex(theme.fg), 0);
+    lv_obj_center(st->lbl_engage);
+    lv_obj_add_event_cb(st->btn_engage, on_engage_short, LV_EVENT_SHORT_CLICKED, st);
+
+    // --- HOME chip (top-RIGHT): balances the engage chip, posts ShowScreen. ---
+    lv_obj_t *btn_home = lv_button_create(r);
+    lv_obj_set_size(btn_home, 110, 40);
+    lv_obj_align(btn_home, LV_ALIGN_TOP_RIGHT, -8, 8);
+    lv_obj_set_style_radius(btn_home, ui::chrome::panel_radius, 0);
+    lv_obj_set_style_bg_color(btn_home, lv_color_hex(theme.panel), 0);
+    lv_obj_set_style_border_color(btn_home, lv_color_hex(theme.panel_edge), 0);
+    lv_obj_set_style_border_width(btn_home, ui::chrome::panel_border, 0);
+    lv_obj_set_style_pad_all(btn_home, 0, 0);
+    lv_obj_t *lbl_home = lv_label_create(btn_home);
+    lv_label_set_text(lbl_home, "HOME");
+    lv_obj_set_style_text_font(lbl_home, &lv_font_montserrat_20, 0);
+    lv_obj_set_style_text_color(lbl_home, lv_color_hex(theme.fg), 0);
+    lv_obj_center(lbl_home);
+    lv_obj_add_event_cb(btn_home, on_home, LV_EVENT_SHORT_CLICKED, st);
+
+    // --- semicircular HEADING-UP compass (rotating scale by -heading) ---
+    // Compass region height = h - badge - everything reserved below it. Then
+    // derive the dial WIDTH that yields that region height: build_compass gives
+    // cp.h = r + 24 and r = cw/2 - 8, so cw = 2*(region_h - 24 + 8). Cap cw by
+    // the leaf width (never exceed w - 32) so wide-but-short leaves stay
+    // width-bound, and floor the region so a tiny leaf still draws a usable arc.
+    int coy = top_bar_h;
+    int region_h = h - top_bar_h - reserved_below;
+    if (region_h < 120) region_h = 120;
+    int cw_fit = 2 * (region_h - 24 + 8);  // width that makes cp.h == region_h
+    int cw = w - 32;
+    if (cw_fit < cw) cw = cw_fit;
+    if (cw < 120) cw = 120;
+    int cox = (w - cw) / 2;
+    st->cp = ui::build_compass(r, cox, coy, cw);
+    int scx = cox + st->cp.cx;
+    int scy = coy + st->cp.cy;
+    int compass_bottom = coy + st->cp.h;  // baseline of the compass region
+
+    // --- center readouts (over the dial face) ---
+    lv_obj_t *cap = lv_label_create(r);
+    lv_label_set_text(cap, "HDG");
+    lv_obj_set_style_text_font(cap, &lv_font_montserrat_20, 0);
+    lv_obj_set_style_text_color(cap, lv_color_hex(theme.fg_dim), 0);
+    lv_obj_set_style_text_align(cap, LV_TEXT_ALIGN_CENTER, 0);
+    lv_obj_set_width(cap, 120);
+    lv_obj_set_pos(cap, scx - 60, scy - st->cp.r / 2 - 30);
+
+    st->lbl_hdg_value = lv_label_create(r);
+    lv_label_set_text(st->lbl_hdg_value, "--\xC2\xB0");
+    lv_obj_set_style_text_font(st->lbl_hdg_value, &font_xl_64, 0);
+    lv_obj_set_style_text_color(st->lbl_hdg_value, lv_color_hex(theme.fg), 0);
+    lv_obj_set_style_text_align(st->lbl_hdg_value, LV_TEXT_ALIGN_CENTER, 0);
+    lv_obj_set_width(st->lbl_hdg_value, 240);
+    lv_obj_set_pos(st->lbl_hdg_value, scx - 120, scy - st->cp.r / 2 + 2);
+
+    // "TGT <ddd>°" caption directly under the HDG hero, in the amber AP-target
+    // color so it reads as a pair with the amber target bug on the rim. Hidden
+    // until apTargetHdg is a real bearing (set/cleared in update()).
+    st->lbl_target = lv_label_create(r);
+    lv_label_set_text(st->lbl_target, "");
+    lv_obj_set_style_text_font(st->lbl_target, &lv_font_montserrat_20, 0);
+    lv_obj_set_style_text_color(st->lbl_target, lv_color_hex(theme.warn), 0);
+    lv_obj_set_style_text_align(st->lbl_target, LV_TEXT_ALIGN_CENTER, 0);
+    lv_obj_set_width(st->lbl_target, 160);
+    lv_obj_set_pos(st->lbl_target, scx - 80, scy - st->cp.r / 2 + 2 + 64);
+    lv_obj_add_flag(st->lbl_target, LV_OBJ_FLAG_HIDDEN);
+
+    // COG/SOG sub-line: its OWN reserved strip directly under the compass
+    // baseline (not floating over the dial face at scy), so it never overlaps the
+    // XTE strip or the tile band below it.
+    int cogsog_y = compass_bottom + (cogsog_h - 20) / 2;  // vertically centre the 20px font
+    st->lbl_cogsog = lv_label_create(r);
+    lv_label_set_text(st->lbl_cogsog, "COG --\xC2\xB0  |  SOG -- kn");
+    lv_obj_set_style_text_font(st->lbl_cogsog, &lv_font_montserrat_20, 0);
+    lv_obj_set_style_text_color(st->lbl_cogsog, lv_color_hex(theme.fg_dim), 0);
+    lv_obj_set_style_text_align(st->lbl_cogsog, LV_TEXT_ALIGN_CENTER, 0);
+    lv_obj_set_width(st->lbl_cogsog, w);
+    lv_obj_set_pos(st->lbl_cogsog, 0, cogsog_y);
+
+    // --- HDG/COG/CTS + AP-target marker ring ---
+    // Built on the HUD root (NOT the compass root, which is sized exactly to the
+    // dial and would clip glyphs orbiting its top/sides), centered at the
+    // compass's HUD-local center (scx, scy). The reference is HDG (heading-up),
+    // so the HDG marker rides at offset 0 under the red lubber. occlude_lower
+    // hides the bottom half (it would overlap the XTE strip / tiles). Built AFTER
+    // the center readouts so it draws on top. glyph/filled/color are baked here;
+    // bearings fill in update.
+    ui::MarkerSpec ap_markers[4] = {
+        {NAN, ui::Glyph::Triangle, true, theme.accent},  // HDG (under the red lubber at offset 0)
+        {NAN, ui::Glyph::Triangle, false, theme.good},   // COG
+        {NAN, ui::Glyph::Diamond, true, theme.alarm},    // CTS
+        {NAN, ui::Glyph::Diamond, true, theme.warn},     // AP target (amber bug), hidden until set
+    };
+    st->cp.markers = ui::build_marker_ring(r, scx, scy, st->cp.r - ui::kSemiMarkerInset, ap_markers,
+                                           4, /*occlude_lower=*/true);
+
+    // --- RUDDER strip: its own band directly under the COG/SOG strip ---
+    // Center-zero helm-position indicator (the relevant AP feedback), replacing
+    // the old XTE strip. PORT…STBD, ±35° full-scale, cyan (accent) needle — red is
+    // reserved for alarm/port cues. Caption added below as "RUDDER".
+    int xte_y = compass_bottom + cogsog_h;
+    st->xte = ui::build_centerzero_strip(r, 16, xte_y, w - 32, xte_h, "PORT", "STBD",
+                                         /*full_scale=*/35.0, /*tick_decimals=*/0, theme.accent);
+    lv_obj_t *rud_cap = lv_label_create(r);
+    lv_label_set_text(rud_cap, "RUDDER");
+    lv_obj_set_style_text_font(rud_cap, &lv_font_montserrat_14, 0);
+    lv_obj_set_style_text_color(rud_cap, lv_color_hex(theme.fg_dim), 0);
+    lv_obj_set_style_text_align(rud_cap, LV_TEXT_ALIGN_CENTER, 0);
+    lv_obj_set_width(rud_cap, w);
+    // Sits in the slack below the strip band (tiles, if any, are bottom-pinned far
+    // below). Centered under the helm bar.
+    lv_obj_set_pos(rud_cap, 0, xte_y + xte_h);
+
+    // --- numeric tiles (square, pinned to the bottom) ---
+    // Dropped entirely on a short leaf (show_tiles == false): the compass + HDG +
+    // COG/SOG + XTE are the steering priority, and squeezing 4 tiles under them
+    // would collide. The pointers stay NULL (calloc) and update() is null-safe.
+    if (show_tiles) {
+        const lv_font_t *tv = &lv_font_montserrat_38;
+        int ty = h - sq - gap;  // bottom row, below the XTE band
+        st->tile_depth = ui::numeric_tile(r, gap, ty, sq, sq, "DEPTH", "m", tv, theme.fg);
+        st->tile_speed = ui::numeric_tile(r, gap * 2 + sq, ty, sq, sq, "STW", "kn", tv, theme.fg);
+        st->tile_aws =
+            ui::numeric_tile(r, gap * 3 + sq * 2, ty, sq, sq, "AWS", "kn", tv, theme.warn);
+        st->tile_awa = ui::numeric_tile(r, gap * 4 + sq * 3, ty, sq, sq, "AWA", "", tv, theme.fg);
+    }
+
+    lv_obj_set_user_data(st->root, st);
+    return st;
+}
+
+static void update(ApHudState *st, const boat::View &d) {
+    if (!st) return;
+    char buf[64];
+
+    bool engaged = d.apState[0] && strcmp(d.apState, "standby") != 0;
+
+    // Mode badge: uppercased apState; filled pill (theme.good bg) when engaged,
+    // hollow outline (transparent bg, panel_edge border) when standby. The label
+    // text stays high-contrast either way.
+    if (d.apState[0]) {
+        char up[16];
+        size_t i = 0;
+        for (; d.apState[i] && i < sizeof(up) - 1; ++i)
+            up[i] = toupper((unsigned char)d.apState[i]);
+        up[i] = 0;
+        ui::set_text_if_changed(st->lbl_mode, st->last_mode, sizeof(st->last_mode), up);
+    } else {
+        ui::set_text_if_changed(st->lbl_mode, st->last_mode, sizeof(st->last_mode), "OFFLINE");
+    }
+    // The badge text color is cached on last_mode_color; recolor the pill
+    // container (parent of the label) only when that cache reports a flip, so the
+    // bg/border style writes track the same engaged transition without their own
+    // cache field.
+    uint32_t prev_mode_color = st->last_mode_color;
+    ui::set_text_color_if_changed(st->lbl_mode, &st->last_mode_color,
+                                  engaged ? 0x05101c : theme.fg_dim);
+    if (st->last_mode_color != prev_mode_color) {
+        lv_obj_t *badge = lv_obj_get_parent(st->lbl_mode);
+        if (badge) {
+            lv_obj_set_style_bg_opa(badge, engaged ? LV_OPA_COVER : LV_OPA_TRANSP, 0);
+            lv_obj_set_style_bg_color(badge, lv_color_hex(theme.good), 0);
+            lv_obj_set_style_border_color(badge,
+                                          lv_color_hex(engaged ? theme.good : theme.panel_edge), 0);
+        }
+    }
+
+    // Heading: big value + rotate the compass tick ring by -heading and
+    // reposition the upright degree labels to match (north-up when no heading).
+    double hdg_deg = NAN;
+    if (!isnan(d.headingTrue)) {
+        hdg_deg = rad_to_deg_pos(d.headingTrue);
+        snprintf(buf, sizeof(buf), "%.1f\xC2\xB0", hdg_deg);
+        ui::set_text_if_changed(st->lbl_hdg_value, st->last_hdg, sizeof(st->last_hdg), buf);
+    } else {
+        ui::set_text_if_changed(st->lbl_hdg_value, st->last_hdg, sizeof(st->last_hdg),
+                                "--\xC2\xB0");
+    }
+    double label_hdg = isnan(hdg_deg) ? 0.0 : hdg_deg;
+    int16_t scale_rot = winddial::deg_to_lvgl(-label_hdg);
+    if (scale_rot != st->last_scale_rot) {
+        st->last_scale_rot = scale_rot;
+        lv_obj_set_style_transform_rotation(st->cp.scale, scale_rot, 0);
+        ui::compass_layout_labels(st->cp, label_hdg);
+    }
+
+    // Marker ring: HDG/COG/CTS + AP target. Reference is HDG (heading-up, matching
+    // the rotating scale), so the HDG marker rides at offset 0 under the lubber.
+    // The target uses the AP's reported target heading; NaN hides any marker.
+    double hdg_b = hdg_deg;
+    double cog_b = isnan(d.cogTrue) ? NAN : rad_to_deg_pos(d.cogTrue);
+    double cts_b = isnan(d.cts) ? NAN : rad_to_deg_pos(d.cts);
+    double tgt_b = isnan(d.apTargetHdg) ? NAN : rad_to_deg_pos(d.apTargetHdg);
+    ui::MarkerSpec live[4] = {
+        {hdg_b, ui::Glyph::Triangle, true, theme.accent},
+        {cog_b, ui::Glyph::Triangle, false, theme.good},
+        {cts_b, ui::Glyph::Diamond, true, theme.alarm},
+        {tgt_b, ui::Glyph::Diamond, true, theme.warn},
+    };
+    double ref = isnan(hdg_b) ? 0.0 : hdg_b;
+    ui::marker_ring_update(st->cp.markers, live, 4, ref);
+
+    // Engage chip: "STBY" (drop to standby) when engaged, "ON" (engage) when
+    // standby. Filled green when engaged, hollow outline when standby — mirrors
+    // the badge's engaged cue so the chip and badge agree at a glance.
+    ui::set_text_if_changed(st->lbl_engage, st->last_engage, sizeof(st->last_engage),
+                            engaged ? "STBY" : "ON");
+    uint32_t want_engage_color = engaged ? theme.good : theme.panel_edge;
+    if (want_engage_color != st->last_engage_color) {
+        st->last_engage_color = want_engage_color;
+        lv_obj_set_style_bg_opa(st->btn_engage, engaged ? LV_OPA_COVER : LV_OPA_TRANSP, 0);
+        lv_obj_set_style_bg_color(st->btn_engage, lv_color_hex(theme.good), 0);
+        lv_obj_set_style_border_color(st->btn_engage, lv_color_hex(want_engage_color), 0);
+        lv_obj_set_style_text_color(st->lbl_engage, lv_color_hex(engaged ? 0x05101c : theme.fg), 0);
+    }
+
+    // TGT caption: "TGT <ddd>°" near the HDG hero in the amber target color, hidden
+    // when the AP has no target bearing (NaN).
+    if (st->lbl_target) {
+        if (isnan(tgt_b)) {
+            if (st->last_target[0] != (char)0xFF) {
+                st->last_target[0] = (char)0xFF;  // sentinel: forces re-show when target returns
+                lv_obj_add_flag(st->lbl_target, LV_OBJ_FLAG_HIDDEN);
+            }
+        } else {
+            char tbuf[12];
+            snprintf(tbuf, sizeof(tbuf), "TGT %03.0f\xC2\xB0", tgt_b);
+            if (ui::set_text_if_changed(st->lbl_target, st->last_target, sizeof(st->last_target),
+                                        tbuf))
+                lv_obj_clear_flag(st->lbl_target, LV_OBJ_FLAG_HIDDEN);
+        }
+    }
+
+    // COG / SOG sub-line.
+    char cogs[16], sogs[16];
+    if (!isnan(d.cogTrue))
+        snprintf(cogs, sizeof(cogs), "%03.0f\xC2\xB0", rad_to_deg_pos(d.cogTrue));
+    else
+        snprintf(cogs, sizeof(cogs), "--\xC2\xB0");
+    if (!isnan(d.sog))
+        snprintf(sogs, sizeof(sogs), "%.1f kn", mps_to_kn(d.sog));
+    else
+        snprintf(sogs, sizeof(sogs), "-- kn");
+    snprintf(buf, sizeof(buf), "COG %s  |  SOG %s", cogs, sogs);
+    ui::set_text_if_changed(st->lbl_cogsog, st->last_cogsog, sizeof(st->last_cogsog), buf);
+
+    // RUDDER needle (helm position, the relevant AP feedback — replaces XTE).
+    // steering.rudderAngle is radians; +ve = starboard. Map ±35° full-scale to
+    // ±half_px deflection (clamped). Readout "<mag>° P/S" matches the rudder P/S
+    // convention in format_metric (P for port/negative, S for starboard/positive).
+    if (!isnan(d.rudder)) {
+        double deg = d.rudder * 180.0 / M_PI;  // + = starboard
+        if (deg > 35.0) deg = 35.0;
+        if (deg < -35.0) deg = -35.0;
+        int nx = st->xte.center_x + (int)(deg / 35.0 * st->xte.half_px) - 1;
+        if (nx != st->last_xte_x) {
+            st->last_xte_x = nx;
+            lv_obj_set_x(st->xte.needle, nx);
+        }
+    }
+    if (st->xte.value) {
+        char xbuf[16];
+        if (isnan(d.rudder)) {
+            snprintf(xbuf, sizeof(xbuf), "--");
+        } else {
+            double deg = d.rudder * 180.0 / M_PI;
+            double mag = fabs(deg);
+            if (mag < 0.5)
+                snprintf(xbuf, sizeof(xbuf), "0\xC2\xB0");
+            else
+                snprintf(xbuf, sizeof(xbuf), "%.0f\xC2\xB0 %c", mag, deg > 0 ? 'S' : 'P');
+        }
+        ui::set_text_if_changed(st->xte.value, st->last_xte_txt, sizeof(st->last_xte_txt), xbuf);
+    }
+
+    // Bottom tiles: DEPTH / STW / AWS / AWA.
+    {
+        vfmt::format_scaled(d.depth, config::format().depth, buf, sizeof(buf));
+        ui::set_text_if_changed(st->tile_depth, st->last_depth, sizeof(st->last_depth), buf);
+    }
+    if (!isnan(d.stw)) {
+        snprintf(buf, sizeof(buf), "%.1f", mps_to_kn(d.stw));
+        ui::set_text_if_changed(st->tile_speed, st->last_speed, sizeof(st->last_speed), buf);
+    } else {
+        ui::set_text_if_changed(st->tile_speed, st->last_speed, sizeof(st->last_speed), "--");
+    }
+    if (!isnan(d.aws)) {
+        snprintf(buf, sizeof(buf), "%.1f", mps_to_kn(d.aws));
+        ui::set_text_if_changed(st->tile_aws, st->last_aws, sizeof(st->last_aws), buf);
+    } else {
+        ui::set_text_if_changed(st->tile_aws, st->last_aws, sizeof(st->last_aws), "--");
+    }
+    if (!isnan(d.awa)) {
+        double deg = rad_to_deg_pos(d.awa);
+        bool starboard = deg <= 180.0;
+        double mag = starboard ? deg : 360.0 - deg;
+        snprintf(buf, sizeof(buf), "%.0f%c", mag, starboard ? 'S' : 'P');
+        ui::set_text_if_changed(st->tile_awa, st->last_awa, sizeof(st->last_awa), buf);
+    } else {
+        ui::set_text_if_changed(st->tile_awa, st->last_awa, sizeof(st->last_awa), "--");
+    }
+}
+
+}  // namespace aphud
+
+// ---------------------------------------------------------------------------
+// windsteer:: — semicircular HEADING-UP wind-steering composite.
+//
+// Sibling of aphud:: (same glass-cockpit building blocks: ui::build_compass,
+// ui::build_marker_ring, center HDG hero, tile band, PSRAM state, short-leaf
+// band-drop). DISTINCT from the `wind` screen (winddial:: — a full CIRCULAR
+// rotating dial): this is heading-up and carries the LAYLINE sectors (no-go +
+// target) ported from the legacy src/ui/screen_wind_steer.cpp::refresh, plus a
+// HDG/COG/CTS/TWD marker ring and AWS/AWA/TWS/TWA tiles. It reads boat::View
+// directly (NOT through MetricBinding), like the legacy screen and aphud::.
+//
+// As with aphud::, the SCREEN authors the nudge/tack button row as sibling
+// button leaves (col-split [3,1]); this leaf renders ONLY the dial + readouts +
+// tiles. Geometry derives from the passed tile (w, h), centered locally.
+
+struct WindSteerState {
+    lv_obj_t *root;
+    ui::Compass cp;
+    lv_obj_t *lbl_hdg_value;
+    lv_obj_t *lbl_sub;  // "TWA <mag>°S/P | TWD <ddd>°"
+    // Layline sector arcs on the compass band.
+    lv_obj_t *nogo, *target_a, *target_b;
+    lv_obj_t *tile_aws, *tile_awa, *tile_tws, *tile_twa;
+
+    // Dirty caches.
+    char last_hdg[16];
+    char last_sub[40];
+    char last_aws[12];
+    char last_awa[12];
+    char last_tws[12];
+    char last_twa[12];
+    int16_t last_scale_rot;
+    // Sector last-angle caches (LVGL deci-degrees: start*100 + end packed start/end).
+    int last_nogo_s, last_nogo_e;
+    int last_tgta_s, last_tgta_e;
+    int last_tgtb_s, last_tgtb_e;
+    bool last_sectors_hidden;
+    bool last_target_dim;  // green bands dimmed (estimated beat/gybe) vs crisp
+};
+
+namespace windsteer {
+
+static double norm360(double d) {
+    while (d < 0)
+        d += 360;
+    while (d >= 360)
+        d -= 360;
+    return d;
+}
+
+// A colored sector arc on the compass band (no-go / target). Angles set live in
+// update(). Mirrors screen_wind_steer.cpp::make_sector.
+static lv_obj_t *make_sector(lv_obj_t *parent, int cx, int cy, int radius, int width,
+                             uint32_t color) {
+    lv_obj_t *a = lv_arc_create(parent);
+    lv_obj_remove_style(a, NULL, LV_PART_KNOB);
+    lv_obj_clear_flag(a, LV_OBJ_FLAG_CLICKABLE);
+    int d = radius * 2;
+    lv_obj_set_size(a, d, d);
+    lv_obj_set_pos(a, cx - radius, cy - radius);
+    lv_arc_set_rotation(a, 0);
+    lv_arc_set_bg_angles(a, 250, 290);
+    lv_arc_set_angles(a, 250, 290);
+    lv_obj_set_style_arc_color(a, lv_color_hex(color), LV_PART_MAIN);
+    lv_obj_set_style_arc_color(a, lv_color_hex(color), LV_PART_INDICATOR);
+    lv_obj_set_style_arc_opa(a, LV_OPA_COVER, LV_PART_MAIN);
+    lv_obj_set_style_arc_opa(a, LV_OPA_COVER, LV_PART_INDICATOR);
+    lv_obj_set_style_arc_width(a, width, LV_PART_MAIN);
+    lv_obj_set_style_arc_width(a, width, LV_PART_INDICATOR);
+    return a;
+}
+
+// Place a sector spanning screen angles [t0,t1] (deg from top, +cw) in LVGL.
+// Mirrors screen_wind_steer.cpp::set_sector but caches the last start/end so the
+// arc is only re-stroked on change. Returns true if it changed.
+static bool set_sector(lv_obj_t *a, double t0, double t1, int *last_s, int *last_e) {
+    int s = (int)norm360(270 + t0);
+    int e = (int)norm360(270 + t1);
+    if (s == *last_s && e == *last_e) return false;
+    *last_s = s;
+    *last_e = e;
+    lv_arc_set_bg_angles(a, s, e);
+    lv_arc_set_angles(a, s, e);
+    return true;
+}
+
+// HOME chip handler: post ShowScreen "dashboard" (mirrors aphud::on_home).
+static void on_home(lv_event_t *e) {
+    (void)e;
+    app::Command c;
+    c.type = app::CommandType::ShowScreen;
+    strncpy(c.a, "dashboard", sizeof(c.a) - 1);
+    c.t_post_us = micros();
+    app::post(c, 0);
+}
+
+// Build the wind-steering composite into `parent` (the tile root) filling its
+// w x h content area. Returns a PSRAM WindSteerState* (also attached to the root
+// user_data). Mirrors aphud::build's band budget exactly.
+static WindSteerState *build(lv_obj_t *parent, int w, int h) {
+    WindSteerState *st =
+        (WindSteerState *)heap_caps_calloc(1, sizeof(WindSteerState), MALLOC_CAP_SPIRAM);
+    if (!st) {
+        net::logf("[layout] windsteer alloc failed");
+        return nullptr;
+    }
+    // Sentinel-init the dirty caches (calloc gives 0; force "unset").
+    st->last_hdg[0] = (char)0xFF;
+    st->last_sub[0] = (char)0xFF;
+    st->last_aws[0] = (char)0xFF;
+    st->last_awa[0] = (char)0xFF;
+    st->last_tws[0] = (char)0xFF;
+    st->last_twa[0] = (char)0xFF;
+    st->last_scale_rot = INT16_MIN;
+    st->last_nogo_s = st->last_nogo_e = INT32_MIN;
+    st->last_tgta_s = st->last_tgta_e = INT32_MIN;
+    st->last_tgtb_s = st->last_tgtb_e = INT32_MIN;
+    st->last_sectors_hidden = false;  // force first hide/show to apply
+    st->last_target_dim = false;
+
+    // Composite root: transparent, borderless, no-pad container filling the tile
+    // so its local (0..w / 0..h) coordinates line up with the rect.
+    st->root = lv_obj_create(parent);
+    lv_obj_set_size(st->root, w, h);
+    lv_obj_set_pos(st->root, 0, 0);
+    lv_obj_set_style_bg_opa(st->root, LV_OPA_TRANSP, 0);
+    lv_obj_set_style_border_width(st->root, 0, 0);
+    lv_obj_set_style_radius(st->root, 0, 0);
+    lv_obj_set_style_pad_all(st->root, 0, 0);
+    lv_obj_clear_flag(st->root, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_add_flag(st->root, LV_OBJ_FLAG_EVENT_BUBBLE);
+    lv_obj_t *r = st->root;
+
+    // --- vertical band budget (mirrors aphud::build) --------------------------
+    //   [ top chip row ][ compass region ][ sub-line ][ tile band? ]
+    const int top_bar_h = 44;  // HOME chip row
+    const int sub_h = 28;      // TWA/TWD sub-line strip (own reserved band)
+    const int gap = 8;
+    const int n = 4;
+    const int sq = (w - gap * (n + 1)) / n;  // numeric-tile square side
+    const int tile_band_h = sq + gap;        // tiles + bottom gap
+    // Drop the secondary numeric tiles when the leaf is too short (matches aphud).
+    const bool show_tiles = (h >= 440);
+    const int reserved_below = sub_h + (show_tiles ? tile_band_h : 0);
+
+    // --- HOME chip (top-RIGHT): posts ShowScreen "dashboard" ---
+    lv_obj_t *btn_home = lv_button_create(r);
+    lv_obj_set_size(btn_home, 110, 40);
+    lv_obj_align(btn_home, LV_ALIGN_TOP_RIGHT, -8, 8);
+    lv_obj_set_style_radius(btn_home, ui::chrome::panel_radius, 0);
+    lv_obj_set_style_bg_color(btn_home, lv_color_hex(theme.panel), 0);
+    lv_obj_set_style_border_color(btn_home, lv_color_hex(theme.panel_edge), 0);
+    lv_obj_set_style_border_width(btn_home, ui::chrome::panel_border, 0);
+    lv_obj_set_style_pad_all(btn_home, 0, 0);
+    lv_obj_t *lbl_home = lv_label_create(btn_home);
+    lv_label_set_text(lbl_home, "HOME");
+    lv_obj_set_style_text_font(lbl_home, &lv_font_montserrat_20, 0);
+    lv_obj_set_style_text_color(lbl_home, lv_color_hex(theme.fg), 0);
+    lv_obj_center(lbl_home);
+    lv_obj_add_event_cb(btn_home, on_home, LV_EVENT_SHORT_CLICKED, st);
+
+    // --- semicircular HEADING-UP compass (rotating scale by -heading) ---
+    // Compass region height = h - top - reserved below; derive dial width that
+    // yields that region height (cp.h = r + 24, r = cw/2 - 8 -> cw =
+    // 2*(region_h - 24 + 8)), capped by leaf width. Identical to aphud::build.
+    int coy = top_bar_h;
+    int region_h = h - top_bar_h - reserved_below;
+    if (region_h < 120) region_h = 120;
+    int cw_fit = 2 * (region_h - 24 + 8);
+    int cw = w - 32;
+    if (cw_fit < cw) cw = cw_fit;
+    if (cw < 120) cw = 120;
+    int cox = (w - cw) / 2;
+    st->cp = ui::build_compass(r, cox, coy, cw);
+    int scx = cox + st->cp.cx;
+    int scy = coy + st->cp.cy;
+    int compass_bottom = coy + st->cp.h;
+
+    // --- layline sectors on the compass band (built on the compass ROOT so they
+    // rotate/clip with the dial face). Faint red no-go tint + crisp green target
+    // marks; then raise the scale ticks / degree numbers / lubber back above them
+    // so the band numbers stay legible (mirrors screen_wind_steer.cpp). ---
+    int band_r = st->cp.r - 10;  // outer edge of the white band
+    st->nogo = make_sector(st->cp.root, st->cp.cx, st->cp.cy, band_r, 14, theme.alarm);
+    lv_obj_set_style_arc_opa(st->nogo, LV_OPA_40, LV_PART_MAIN);
+    lv_obj_set_style_arc_opa(st->nogo, LV_OPA_40, LV_PART_INDICATOR);
+    st->target_a = make_sector(st->cp.root, st->cp.cx, st->cp.cy, band_r, 16, theme.good);
+    st->target_b = make_sector(st->cp.root, st->cp.cx, st->cp.cy, band_r, 16, theme.good);
+    lv_obj_move_foreground(st->cp.scale);
+    for (int i = 0; i < 12; ++i)
+        if (st->cp.nums[i]) lv_obj_move_foreground(st->cp.nums[i]);
+    lv_obj_move_foreground(st->cp.lubber);
+
+    // --- center readouts (over the dial face) ---
+    lv_obj_t *cap = lv_label_create(r);
+    lv_label_set_text(cap, "HDG");
+    lv_obj_set_style_text_font(cap, &lv_font_montserrat_20, 0);
+    lv_obj_set_style_text_color(cap, lv_color_hex(theme.fg_dim), 0);
+    lv_obj_set_style_text_align(cap, LV_TEXT_ALIGN_CENTER, 0);
+    lv_obj_set_width(cap, 120);
+    lv_obj_set_pos(cap, scx - 60, scy - st->cp.r / 2 - 30);
+
+    st->lbl_hdg_value = lv_label_create(r);
+    lv_label_set_text(st->lbl_hdg_value, "--\xC2\xB0");
+    lv_obj_set_style_text_font(st->lbl_hdg_value, &font_xl_64, 0);
+    lv_obj_set_style_text_color(st->lbl_hdg_value, lv_color_hex(theme.fg), 0);
+    lv_obj_set_style_text_align(st->lbl_hdg_value, LV_TEXT_ALIGN_CENTER, 0);
+    lv_obj_set_width(st->lbl_hdg_value, 240);
+    lv_obj_set_pos(st->lbl_hdg_value, scx - 120, scy - st->cp.r / 2 + 2);
+
+    // TWA/TWD sub-line: its OWN reserved strip directly under the compass
+    // baseline (not floating over the dial face), so it never overlaps the tile
+    // band below it.
+    int sub_y = compass_bottom + (sub_h - 20) / 2;  // vertically centre the 20px font
+    st->lbl_sub = lv_label_create(r);
+    lv_label_set_text(st->lbl_sub, "TWA --\xC2\xB0 | TWD --\xC2\xB0");
+    lv_obj_set_style_text_font(st->lbl_sub, &lv_font_montserrat_20, 0);
+    lv_obj_set_style_text_color(st->lbl_sub, lv_color_hex(theme.fg_dim), 0);
+    lv_obj_set_style_text_align(st->lbl_sub, LV_TEXT_ALIGN_CENTER, 0);
+    lv_obj_set_width(st->lbl_sub, w);
+    lv_obj_set_pos(st->lbl_sub, 0, sub_y);
+
+    // --- HDG/COG/CTS + amber TWD-bug marker ring ---
+    // Built on the composite root (NOT the compass root, which is sized exactly
+    // to the dial and would clip glyphs orbiting its top/sides), centered at the
+    // compass's local center (scx, scy). Reference is HDG (heading-up), so the HDG
+    // marker rides at offset 0 under the red lubber. occlude_lower hides the
+    // bottom half. Built AFTER the center readouts so it draws on top.
+    ui::MarkerSpec ws_markers[4] = {
+        {NAN, ui::Glyph::Triangle, true, theme.accent},  // HDG (under the red lubber at offset 0)
+        {NAN, ui::Glyph::Triangle, false, theme.good},   // COG
+        {NAN, ui::Glyph::Diamond, true, theme.alarm},    // CTS
+        {NAN, ui::Glyph::Diamond, true, theme.warn},     // TWD wind bug (amber)
+    };
+    st->cp.markers = ui::build_marker_ring(r, scx, scy, st->cp.r - ui::kSemiMarkerInset, ws_markers,
+                                           4, /*occlude_lower=*/true);
+
+    // --- numeric tiles (square, pinned to the bottom) --- AWS/AWA/TWS/TWA ---
+    // Dropped entirely on a short leaf (show_tiles == false), like aphud::build.
+    if (show_tiles) {
+        const lv_font_t *tv = &lv_font_montserrat_38;
+        int ty = h - sq - gap;  // bottom row, below the sub-line band
+        st->tile_aws = ui::numeric_tile(r, gap, ty, sq, sq, "AWS", "kn", tv, theme.warn);
+        st->tile_awa = ui::numeric_tile(r, gap * 2 + sq, ty, sq, sq, "AWA", "", tv, theme.fg);
+        st->tile_tws = ui::numeric_tile(r, gap * 3 + sq * 2, ty, sq, sq, "TWS", "kn", tv, theme.fg);
+        st->tile_twa = ui::numeric_tile(r, gap * 4 + sq * 3, ty, sq, sq, "TWA", "", tv, theme.fg);
+    }
+
+    lv_obj_set_user_data(st->root, st);
+    return st;
+}
+
+static void update(WindSteerState *st, const boat::View &d) {
+    if (!st) return;
+    char buf[64];
+
+    // Heading: big value + rotate the compass tick ring by -heading and reposition
+    // the upright degree labels (north-up when no heading). Same as aphud::update.
+    double hdg = isnan(d.headingTrue) ? NAN : rad_to_deg_pos(d.headingTrue);
+    if (!isnan(hdg)) {
+        snprintf(buf, sizeof(buf), "%.1f\xC2\xB0", hdg);
+        ui::set_text_if_changed(st->lbl_hdg_value, st->last_hdg, sizeof(st->last_hdg), buf);
+    } else {
+        ui::set_text_if_changed(st->lbl_hdg_value, st->last_hdg, sizeof(st->last_hdg),
+                                "--\xC2\xB0");
+    }
+    double label_hdg = isnan(hdg) ? 0.0 : hdg;
+    int16_t scale_rot = winddial::deg_to_lvgl(-label_hdg);
+    if (scale_rot != st->last_scale_rot) {
+        st->last_scale_rot = scale_rot;
+        lv_obj_set_style_transform_rotation(st->cp.scale, scale_rot, 0);
+        ui::compass_layout_labels(st->cp, label_hdg);
+    }
+
+    // Wind angles + TWD (ported from screen_wind_steer.cpp::refresh).
+    double twa_raw = isnan(d.twa) ? NAN : rad_to_deg_pos(d.twa);
+    double twa_mag = NAN;
+    bool stbd = true;
+    if (!isnan(twa_raw)) {
+        stbd = twa_raw <= 180.0;
+        twa_mag = stbd ? twa_raw : 360.0 - twa_raw;
+    }
+    double twd = (!isnan(hdg) && !isnan(twa_raw)) ? norm360(hdg + twa_raw) : NAN;
+
+    // Sub-line: TWA + TWD.
+    char twas[12], twds[12];
+    if (!isnan(twa_mag))
+        snprintf(twas, sizeof(twas), "%.0f\xC2\xB0%c", twa_mag, stbd ? 'S' : 'P');
+    else
+        snprintf(twas, sizeof(twas), "--\xC2\xB0");
+    if (!isnan(twd))
+        snprintf(twds, sizeof(twds), "%03.0f\xC2\xB0", twd);
+    else
+        snprintf(twds, sizeof(twds), "--\xC2\xB0");
+    snprintf(buf, sizeof(buf), "TWA %s  |  TWD %s", twas, twds);
+    ui::set_text_if_changed(st->lbl_sub, st->last_sub, sizeof(st->last_sub), buf);
+
+    // --- layline display: no-go + target sectors, heading-relative ---
+    // (ported from screen_wind_steer.cpp::refresh ~419-447). NaN fallbacks:
+    // beatAngle NaN -> 45°, gybeAngle NaN -> 150°, tws-derived tol NaN -> 10°.
+    // When beat/gybe are DEFAULTED (no real polar data), the green target bands
+    // render DIMMER (OPA_40) to signal "estimated".
+    bool wind_up = isnan(twa_mag) ? true : (twa_mag <= 90.0);
+    double beat = isnan(d.beatAngle) ? NAN : rad_to_deg_pos(d.beatAngle);
+    double gybe = isnan(d.gybeAngle) ? NAN : rad_to_deg_pos(d.gybeAngle);
+    bool beat_estimated = isnan(beat);
+    bool gybe_estimated = isnan(gybe);
+    double opt = wind_up ? (beat_estimated ? 45.0 : beat) : (gybe_estimated ? 150.0 : gybe);
+    bool target_estimated = wind_up ? beat_estimated : gybe_estimated;
+    double tws_kn = isnan(d.tws) ? NAN : mps_to_kn(d.tws);
+    double tol = isnan(tws_kn) ? 10.0 : 16.0 - 0.6 * tws_kn;  // TWS-responsive band
+    if (tol < 4.0) tol = 4.0;
+    if (tol > 16.0) tol = 16.0;
+
+    if (!isnan(twd) && !isnan(hdg)) {
+        double twd_rel = norm360(twd - hdg);                         // wind dir from the bow
+        double badc = wind_up ? twd_rel : norm360(twd_rel + 180.0);  // heading to avoid
+        double half = wind_up ? opt : (180.0 - opt);                 // no-go half width
+        if (half < 4) half = 4;
+        if (half > 88) half = 88;
+        double c = badc > 180.0 ? badc - 360.0 : badc;  // map to -180..180 for the arc helper
+        set_sector(st->nogo, c - half, c + half, &st->last_nogo_s, &st->last_nogo_e);
+        set_sector(st->target_a, c + half, c + half + tol, &st->last_tgta_s, &st->last_tgta_e);
+        set_sector(st->target_b, c - half - tol, c - half, &st->last_tgtb_s, &st->last_tgtb_e);
+        // Dim the green target bands when the laylines are ESTIMATED (no polar
+        // beat/gybe), crisp/full when real. Toggle only on change.
+        if (target_estimated != st->last_target_dim) {
+            st->last_target_dim = target_estimated;
+            lv_opa_t topa = target_estimated ? LV_OPA_40 : LV_OPA_COVER;
+            lv_obj_set_style_arc_opa(st->target_a, topa, LV_PART_MAIN);
+            lv_obj_set_style_arc_opa(st->target_a, topa, LV_PART_INDICATOR);
+            lv_obj_set_style_arc_opa(st->target_b, topa, LV_PART_MAIN);
+            lv_obj_set_style_arc_opa(st->target_b, topa, LV_PART_INDICATOR);
+        }
+        if (st->last_sectors_hidden) {
+            st->last_sectors_hidden = false;
+            lv_obj_clear_flag(st->nogo, LV_OBJ_FLAG_HIDDEN);
+            lv_obj_clear_flag(st->target_a, LV_OBJ_FLAG_HIDDEN);
+            lv_obj_clear_flag(st->target_b, LV_OBJ_FLAG_HIDDEN);
+        }
+    } else if (!st->last_sectors_hidden) {
+        st->last_sectors_hidden = true;
+        lv_obj_add_flag(st->nogo, LV_OBJ_FLAG_HIDDEN);
+        lv_obj_add_flag(st->target_a, LV_OBJ_FLAG_HIDDEN);
+        lv_obj_add_flag(st->target_b, LV_OBJ_FLAG_HIDDEN);
+    }
+
+    // Steering marker ring -> HDG/COG/CTS + amber TWD bug (heading-up). Bearings
+    // match the AP HUD; marker_ring_update hides any NaN marker.
+    double hdg_b = hdg;
+    double cog_b = isnan(d.cogTrue) ? NAN : rad_to_deg_pos(d.cogTrue);
+    double cts_b = isnan(d.cts) ? NAN : rad_to_deg_pos(d.cts);
+    ui::MarkerSpec steer_live[4] = {
+        {hdg_b, ui::Glyph::Triangle, true, theme.accent},
+        {cog_b, ui::Glyph::Triangle, false, theme.good},
+        {cts_b, ui::Glyph::Diamond, true, theme.alarm},
+        {twd, ui::Glyph::Diamond, true, theme.warn},
+    };
+    double wind_ref = isnan(hdg) ? 0.0 : hdg;
+    ui::marker_ring_update(st->cp.markers, steer_live, 4, wind_ref);
+
+    // Tiles: AWS / AWA / TWS / TWA (null-safe — dropped on a short leaf).
+    if (st->tile_aws) {
+        if (!isnan(d.aws)) {
+            snprintf(buf, sizeof(buf), "%.1f", mps_to_kn(d.aws));
+            ui::set_text_if_changed(st->tile_aws, st->last_aws, sizeof(st->last_aws), buf);
+        } else {
+            ui::set_text_if_changed(st->tile_aws, st->last_aws, sizeof(st->last_aws), "--");
+        }
+    }
+    if (st->tile_awa) {
+        if (!isnan(d.awa)) {
+            double a = rad_to_deg_pos(d.awa);
+            bool s = a <= 180.0;
+            snprintf(buf, sizeof(buf), "%.0f%c", s ? a : 360.0 - a, s ? 'S' : 'P');
+            ui::set_text_if_changed(st->tile_awa, st->last_awa, sizeof(st->last_awa), buf);
+        } else {
+            ui::set_text_if_changed(st->tile_awa, st->last_awa, sizeof(st->last_awa), "--");
+        }
+    }
+    if (st->tile_tws) {
+        if (!isnan(d.tws)) {
+            snprintf(buf, sizeof(buf), "%.1f", mps_to_kn(d.tws));
+            ui::set_text_if_changed(st->tile_tws, st->last_tws, sizeof(st->last_tws), buf);
+        } else {
+            ui::set_text_if_changed(st->tile_tws, st->last_tws, sizeof(st->last_tws), "--");
+        }
+    }
+    if (st->tile_twa) {
+        if (!isnan(twa_mag)) {
+            snprintf(buf, sizeof(buf), "%.0f%c", twa_mag, stbd ? 'S' : 'P');
+            ui::set_text_if_changed(st->tile_twa, st->last_twa, sizeof(st->last_twa), buf);
+        } else {
+            ui::set_text_if_changed(st->tile_twa, st->last_twa, sizeof(st->last_twa), "--");
+        }
+    }
+}
+
+}  // namespace windsteer
+
 // Wind rose: dashed warn ring with center AWS value. Mirrors editor
 // .wpreview .rose - small visual stand-in; the fullscreen wind dial
 // (screen_wind.cpp) is the high-fidelity render.
-static void paint_wind_rose_body(QuadGridTile &t, const MetricBinding &m, int w, int h) {
+// Full-screen detection: a single-leaf windrose screen lands a tile rect ≈ the
+// whole 480x480 panel; the wind_steer screen gives the dial a near-full-width
+// region (≈480x360, the rest a button row). Above this threshold we render the
+// high-fidelity rotating dial (winddial::build). Dash (2x2 → ≈236x210) and
+// gallery (3x3 → ≈150x130) tiles fall below it and keep the small stand-in.
+// The height floor (300) is well above any multi-tile cell yet below the
+// wind_steer dial region, so only genuinely large rects get the dial.
+static inline bool windrose_is_fullscreen(int w, int h) {
+    return w >= 400 && h >= 300;
+}
+
+// Full-screen detection for the autopilot HUD: a single autopilot leaf over a
+// nudge-button row (col-split [4,1]) lands ≈ 480x384 for the leaf — the same
+// large-rect threshold as the wind dial. Below this (gallery 3x3 ≈ 150x130) the
+// element keeps its small state-pill + nudge-row stand-in.
+static inline bool autopilot_is_fullscreen(int w, int h) {
+    return w >= 400 && h >= 300;
+}
+
+// Full-screen detection for the wind-steering composite: a single windsteer leaf
+// over a nudge-button row (col-split [3,1]) lands a near-full-width region — same
+// large-rect threshold as the wind dial / autopilot HUD. Below this (gallery 3x3
+// ≈ 150x130) the element falls back to the small windrose stand-in.
+static inline bool windsteer_is_fullscreen(int w, int h) {
+    return w >= 400 && h >= 300;
+}
+
+// Small wind-rose stand-in: a dashed warn ring with the AWS hero number and
+// apparent/true wind chevrons. Shared by the multi-tile windrose tile AND the
+// non-fullscreen windsteer fallback (a windsteer leaf below the dial threshold
+// renders this same compact rose). Drives via the WindRose marker-update branch.
+static void paint_wind_rose_standin(QuadGridTile &t, const MetricBinding &m, int w, int h) {
     int dia = (w < h ? w : h) - 56;
     if (dia < 80) dia = 80;
     lv_obj_t *ring = lv_obj_create(t.root);
@@ -830,8 +2647,44 @@ static void paint_wind_rose_body(QuadGridTile &t, const MetricBinding &m, int w,
     }
 }
 
+static void paint_wind_rose_body(QuadGridTile &t, const MetricBinding &m, int w, int h) {
+    // Full-screen single-leaf windrose → the high-fidelity rotating dial. The
+    // dial reads boat::View directly (no MIDL binding). t.aux holds the dial root,
+    // whose user_data is the WindDialState the update path retrieves; the
+    // last_aux_pct == -2 sentinel marks "full dial" (stand-in leaves it -1).
+    if (windrose_is_fullscreen(w, h)) {
+        WindDialState *st = winddial::build(t.root, w, h);
+        if (st) {
+            t.aux = st->root;
+            t.last_aux_pct = -2;
+            return;
+        }
+        // Fall through to the stand-in if the PSRAM alloc failed.
+    }
+    paint_wind_rose_standin(t, m, w, h);
+}
+
+// Wind-steering composite: full-screen heading-up dial with laylines, else the
+// compact wind-rose stand-in (reused from the windrose tile). The composite
+// reads boat::View directly (no MIDL binding); t.aux holds its root, whose
+// user_data is the WindSteerState the update path retrieves. last_aux_pct == -2
+// marks "full composite" (stand-in leaves it -1, and is driven by the WindRose
+// marker branch in update).
+static void paint_wind_steer_body(QuadGridTile &t, const MetricBinding &m, int w, int h) {
+    if (windsteer_is_fullscreen(w, h)) {
+        WindSteerState *st = windsteer::build(t.root, w, h);
+        if (st) {
+            t.aux = st->root;
+            t.last_aux_pct = -2;
+            return;
+        }
+        // Fall through to the stand-in if the PSRAM alloc failed.
+    }
+    paint_wind_rose_standin(t, m, w, h);
+}
+
 // Text widget: monospace value centered. Mirrors editor .wpreview .text-val.
-static void paint_text_body(QuadGridTile &t, const MetricBinding & /*m*/, int /*w*/, int h) {
+static void paint_text_body(QuadGridTile &t, const MetricBinding &m, int /*w*/, int h) {
     // Text widget covers multi-line values like position (lat / lon on
     // two lines). Pick a font that won't overflow short tiles.
     const lv_font_t *vfont = &lv_font_montserrat_20;
@@ -839,35 +2692,70 @@ static void paint_text_body(QuadGridTile &t, const MetricBinding & /*m*/, int /*
     t.value = lv_label_create(t.root);
     lv_label_set_text(t.value, "--");
     lv_obj_set_style_text_font(t.value, vfont, 0);
-    lv_obj_set_style_text_color(t.value, lv_color_hex(theme.accent), 0);
+    lv_obj_set_style_text_color(t.value, lv_color_hex(value_color(m)), 0);
     lv_obj_set_style_text_align(t.value, LV_TEXT_ALIGN_CENTER, 0);
     lv_obj_align(t.value, LV_ALIGN_CENTER, 0, 6);
     lv_obj_clear_flag(t.value, LV_OBJ_FLAG_CLICKABLE);
 }
 
 // Button widget: rounded accent bubble. Mirrors editor .wpreview .btn-bubble.
-static void paint_button_body(QuadGridTile &t, const MetricBinding &m, int /*w*/, int /*h*/) {
+static void paint_button_body(QuadGridTile &t, const MetricBinding &m, int w, int h) {
+    // Fill MOST of the tile so the bubble is a large finger target (styled like
+    // the autopilot nudge pills, scaled up). Leave a margin so the tile's panel
+    // chrome edge still shows. Height shrinks a bit more on short tiles.
+    int btn_w = w - 24;
+    int btn_h = (h < 150) ? (h - 40) : (h - 56);
+    if (btn_w < 32) btn_w = 32;
+    if (btn_h < 24) btn_h = 24;
+
     lv_obj_t *btn = lv_obj_create(t.root);
-    lv_obj_set_size(btn, LV_SIZE_CONTENT, LV_SIZE_CONTENT);
+    lv_obj_set_size(btn, btn_w, btn_h);
     lv_obj_align(btn, LV_ALIGN_CENTER, 0, 6);
-    lv_obj_set_style_bg_color(btn, lv_color_hex(theme.accent), 0);
+    lv_obj_set_style_bg_color(btn, lv_color_hex(value_color(m)), 0);  // style.color or accent
     lv_obj_set_style_bg_opa(btn, LV_OPA_COVER, 0);
     lv_obj_set_style_border_width(btn, 0, 0);
-    lv_obj_set_style_radius(btn, 16, 0);
-    lv_obj_set_style_pad_hor(btn, 18, 0);
-    lv_obj_set_style_pad_ver(btn, 8, 0);
+    lv_obj_set_style_radius(btn, 14, 0);
+    lv_obj_set_style_pad_all(btn, 0, 0);
+    // Pressed feedback (the tile root receives the click; this is purely visual).
+    lv_obj_set_style_bg_opa(btn, LV_OPA_80, LV_STATE_PRESSED);
     lv_obj_clear_flag(btn, LV_OBJ_FLAG_SCROLLABLE);
+    // Not itself clickable: the action handler lives on the tile root (build_tile),
+    // so the indev hit-test must walk past this bubble to the root. Without this,
+    // the bubble would swallow the tap and the action would never fire.
+    lv_obj_clear_flag(btn, LV_OBJ_FLAG_CLICKABLE);
 
     lv_obj_t *label = lv_label_create(btn);
     lv_label_set_text(label, (m.label && m.label[0]) ? m.label : "TAP");
-    lv_obj_set_style_text_font(label, &lv_font_montserrat_14, 0);
-    lv_obj_set_style_text_color(label, lv_color_hex(0x001218), 0);
+    // Scale the label by bubble height. Must be a Montserrat font — font_xl_64
+    // is digits-only and would drop letters from labels like "HOME".
+    const lv_font_t *lfont = &lv_font_montserrat_20;
+    if (btn_h >= 60) lfont = &lv_font_montserrat_28;
+    if (btn_h < 36) lfont = &lv_font_montserrat_14;
+    lv_obj_set_style_text_font(label, lfont, 0);
+    lv_obj_set_style_text_color(label, lv_color_hex(0x001218), 0);  // dark ink
+    lv_obj_center(label);
     t.aux = btn;
 }
 
 // Autopilot widget: state pill (green) + target text + 4 nudge buttons row.
 // Mirrors editor .wpreview .ap.
-static void paint_autopilot_body(QuadGridTile &t, const MetricBinding & /*m*/, int w, int /*h*/) {
+static void paint_autopilot_body(QuadGridTile &t, const MetricBinding & /*m*/, int w, int h) {
+    // Full-screen autopilot leaf → the high-fidelity HUD (semicircular heading-up
+    // compass, HDG/COG/CTS/AP-target marker ring, XTE strip, numeric tiles). The
+    // HUD reads boat::View directly (no MIDL binding). t.aux holds the HUD root,
+    // whose user_data is the ApHudState the update path retrieves; the
+    // last_aux_pct == -2 sentinel marks "full HUD" (stand-in leaves it -1). Nudge
+    // buttons are authored as sibling button leaves, NOT drawn here.
+    if (autopilot_is_fullscreen(w, h)) {
+        ApHudState *st = aphud::build(t.root, w, h);
+        if (st) {
+            t.aux = st->root;
+            t.last_aux_pct = -2;
+            return;
+        }
+        // Fall through to the stand-in if the PSRAM alloc failed.
+    }
+
     // State pill.
     lv_obj_t *pill = lv_obj_create(t.root);
     lv_obj_set_size(pill, w - 32, 26);
@@ -932,20 +2820,46 @@ static QuadGridTile build_tile(lv_obj_t *parent, int x, int y, int w, int h,
     for (int i = 0; i < 4; ++i)
         strncpy(t.last_extras[i], "\xFF", sizeof(t.last_extras[0]));
 
+    // A full-screen windrose / autopilot leaf renders a high-fidelity composite
+    // that draws its own rim/face/labels and fills the whole rect — the
+    // glass-cockpit panel border + top-left cap would frame it and clip the
+    // rotating bezel/scale. Suppress the chrome: a borderless, padless,
+    // background-only root with no caption, so the composite fills the tile and
+    // its local (0..w / 0..h) coordinates line up with the rect.
+    bool fullscreen_dial = ((m.kind == WidgetKind::WindRose) && windrose_is_fullscreen(w, h)) ||
+                           ((m.kind == WidgetKind::Autopilot) && autopilot_is_fullscreen(w, h)) ||
+                           ((m.kind == WidgetKind::WindSteer) && windsteer_is_fullscreen(w, h));
+
     // --- Chrome: glass-cockpit panel (gradient + border via style_panel) ---
     // No left accent rail (dropped per design feedback); semantic color lives
     // in the value text instead. style_panel applies the consolidated tokens.
     t.root = lv_obj_create(parent);
     lv_obj_set_size(t.root, w, h);
     lv_obj_set_pos(t.root, x, y);
-    style_panel(t.root);
+    if (fullscreen_dial) {
+        lv_obj_set_style_bg_color(t.root, lv_color_hex(theme.bg), 0);
+        lv_obj_set_style_bg_opa(t.root, LV_OPA_COVER, 0);
+        lv_obj_set_style_border_width(t.root, 0, 0);
+        lv_obj_set_style_radius(t.root, 0, 0);
+        lv_obj_set_style_pad_all(t.root, 0, 0);
+        lv_obj_clear_flag(t.root, LV_OBJ_FLAG_SCROLLABLE);
+        lv_obj_add_flag(t.root, LV_OBJ_FLAG_EVENT_BUBBLE);
+    } else {
+        style_panel(t.root);
+    }
 
-    t.cap = lv_label_create(t.root);
-    lv_label_set_text(t.cap, m.label ? m.label : "");
-    lv_obj_set_style_text_font(t.cap, &lv_font_montserrat_20, 0);
-    lv_obj_set_style_text_color(t.cap, lv_color_hex(theme.fg_dim), 0);
-    lv_obj_set_pos(t.cap, 10, 2);
-    lv_obj_clear_flag(t.cap, LV_OBJ_FLAG_CLICKABLE);
+    // Chrome caption (top-left dim label). Buttons render their own label inside
+    // the accent bubble (paint_button_body), so a chrome cap would duplicate it —
+    // skip it for Button tiles. The full-screen dial draws its own labels, so skip
+    // the cap there too. t.cap stays null; update paths never touch it.
+    if (m.kind != WidgetKind::Button && !fullscreen_dial) {
+        t.cap = lv_label_create(t.root);
+        lv_label_set_text(t.cap, m.label ? m.label : "");
+        lv_obj_set_style_text_font(t.cap, &lv_font_montserrat_20, 0);
+        lv_obj_set_style_text_color(t.cap, lv_color_hex(theme.fg_dim), 0);
+        lv_obj_set_pos(t.cap, 10, 2);
+        lv_obj_clear_flag(t.cap, LV_OBJ_FLAG_CLICKABLE);
+    }
 
     // --- Body: dispatched per widget kind ---
     switch (m.kind) {
@@ -961,6 +2875,9 @@ static QuadGridTile build_tile(lv_obj_t *parent, int x, int y, int w, int h,
     case WidgetKind::WindRose:
         paint_wind_rose_body(t, m, w, h);
         break;
+    case WidgetKind::WindSteer:
+        paint_wind_steer_body(t, m, w, h);
+        break;
     case WidgetKind::Text:
         paint_text_body(t, m, w, h);
         break;
@@ -970,14 +2887,26 @@ static QuadGridTile build_tile(lv_obj_t *parent, int x, int y, int w, int h,
     case WidgetKind::Autopilot:
         paint_autopilot_body(t, m, w, h);
         break;
-    case WidgetKind::Trend:  // sparkline not yet implemented; fall back
+    case WidgetKind::Trend:
+        paint_trend_body(t, m, w, h);
+        break;
     case WidgetKind::Numeric:
     default:
         paint_numeric_body(t, m, w, h);
         break;
     }
 
-    if (m.target_screen && m.target_screen[0]) {
+    // Button elements with an action (nav or command) make the WHOLE tile the
+    // tap target via button_action_cb. The inner bubble has CLICKABLE cleared in
+    // paint_button_body so the hit-test walks up to the tile root. Checked before
+    // the generic target_screen nav so a nav-button still routes through the
+    // button handler (identical effect, but keeps the binding-ptr user_data).
+    bool button_action = (m.kind == WidgetKind::Button) &&
+                         ((m.command && m.command[0]) || (m.target_screen && m.target_screen[0]));
+    if (button_action) {
+        lv_obj_add_flag(t.root, LV_OBJ_FLAG_CLICKABLE);
+        lv_obj_add_event_cb(t.root, button_action_cb, LV_EVENT_CLICKED, (void *)&m);
+    } else if (m.target_screen && m.target_screen[0]) {
         lv_obj_add_event_cb(t.root, tile_clicked_cb, LV_EVENT_CLICKED, (void *)m.target_screen);
     } else {
         lv_obj_clear_flag(t.root, LV_OBJ_FLAG_CLICKABLE);
@@ -1059,11 +2988,19 @@ static void update_quad_grid(lv_obj_t *root, const ScreenVariantSpec &spec,
             // (range_min==range_max) fall back to the built-in per-source heuristic.
             double frac = binding_unit_fraction(m, scalar);
             int pct = isnan(frac) ? 0 : (int)(frac * 100.0 + 0.5);
+            bool bipolar = (t.kind == WidgetKind::Gauge) && gauge_is_bipolar(m);
             if (t.aux && pct != t.last_aux_pct) {
-                if (t.kind == WidgetKind::Gauge)
-                    lv_arc_set_value(t.aux, pct);
-                else
+                if (t.kind == WidgetKind::Gauge) {
+                    // Bipolar gauge (range straddles zero, e.g. rudder [-35,35]):
+                    // fill outward from the top-centre zero. Other gauges keep the
+                    // standard left-anchored 0..100 fill.
+                    if (bipolar)
+                        gauge_set_bipolar_fill(t.aux, m, scalar);
+                    else
+                        lv_arc_set_value(t.aux, pct);
+                } else {
                     lv_bar_set_value(t.aux, pct, LV_ANIM_OFF);
+                }
                 t.last_aux_pct = pct;
             }
             // Center label. Legacy tiles (no explicit MIDL format.range) show the
@@ -1077,7 +3014,15 @@ static void update_quad_grid(lv_obj_t *root, const ScreenVariantSpec &spec,
                     snprintf(buf, sizeof(buf), "--");
                 else {
                     int dp = m.precision >= 0 ? m.precision : 0;
-                    snprintf(buf, sizeof(buf), "%.*f", dp, scalar);
+                    // Append the unit when authored. No separator before a
+                    // glued unit ("%", "°"=UTF-8 0xC2 lead byte); a thin space
+                    // before word units ("kn"/"V"/"m"). Keeps BATT reading "77%"
+                    // and rudder "12°", not a bare "77"/"12".
+                    snprintf(buf, sizeof(buf), "%.*f%s%s", dp, scalar,
+                             (m.unit && m.unit[0])
+                                 ? ((m.unit[0] == '%' || m.unit[0] == '\xC2') ? "" : "\xE2\x80\x89")
+                                 : "",
+                             (m.unit && m.unit[0]) ? m.unit : "");
                 }
             } else if (isnan(frac)) {
                 snprintf(buf, sizeof(buf), "--");
@@ -1088,6 +3033,13 @@ static void update_quad_grid(lv_obj_t *root, const ScreenVariantSpec &spec,
             break;
         }
         case WidgetKind::Autopilot:
+            // Full-screen HUD: drives all of its own widgets from boat::View directly
+            // (last_aux_pct == -2 sentinel set by paint_autopilot_body). Skips the
+            // stand-in pill/target text path entirely.
+            if (t.last_aux_pct == -2) {
+                if (t.aux) aphud::update((ApHudState *)lv_obj_get_user_data(t.aux), data);
+                break;
+            }
             ui::set_text_if_changed(t.value, t.last_value, sizeof(t.last_value), pri);
             if (t.secondary) {
                 char tgt[24];
@@ -1119,31 +3071,71 @@ static void update_quad_grid(lv_obj_t *root, const ScreenVariantSpec &spec,
                 ui::set_text_if_changed(t.secondary, t.last_secondary, sizeof(t.last_secondary),
                                         cts);
             }
-            // Markers: HDG/COG/CTS bearings at their true (north-up) bearings.
+            // Markers: HDG/CTS on the inner ring, COG alone on the outer ring, so
+            // an HDG≈COG overlap doesn't merge into one faint glyph. Drive COG
+            // after HDG/CTS so its hollow outline stays readable on top. All at
+            // their true (north-up) bearings (reference=0), matching the static
+            // N/E/S/W cardinals — this fixed-bezel tile is north-up, not heading-up.
             {
                 MetricBinding hdg = {}, cog = {}, cts = {};
                 hdg.source = MetricSource::HDG_deg;
                 cog.source = MetricSource::COG_deg;
                 cts.source = MetricSource::CTS_deg;
-                ui::MarkerSpec live[3] = {
+                ui::MarkerSpec inner[2] = {
                     {metric_scalar(hdg, data), ui::Glyph::Triangle, true, theme.accent},
-                    {metric_scalar(cog, data), ui::Glyph::Triangle, false, theme.good},
                     {metric_scalar(cts, data), ui::Glyph::Diamond, true, theme.alarm},
                 };
-                // Fixed-bezel north-up tile: markers sit at their true bearings (HDG/COG/CTS),
-                // matching the static N/E/S/W cardinals. (The AP HUD, whose scale rotates, is
-                // heading-up; this round tile is not.)
-                ui::marker_ring_update(t.markers, live, 3, /*reference=*/0.0);
+                ui::marker_ring_update(t.markers, inner, 2, /*reference=*/0.0);
+                ui::MarkerSpec outer[1] = {
+                    {metric_scalar(cog, data), ui::Glyph::Triangle, false, theme.good},
+                };
+                ui::marker_ring_update(t.markers_cog, outer, 1, /*reference=*/0.0);
             }
             break;
+        case WidgetKind::Trend: {
+            // Hero number is the live reading; sparkline gets one normalized
+            // sample (0..100, same scale as the gauge/bar fill) on value-change.
+            ui::set_text_if_changed(t.value, t.last_value, sizeof(t.last_value), pri);
+            if (t.aux) {
+                double frac = binding_unit_fraction(m, metric_scalar(m, data));
+                if (!isnan(frac)) {
+                    int v = (int)(frac * 100.0 + 0.5);
+                    if (v != t.last_aux_pct) {
+                        lv_chart_series_t *s = lv_chart_get_series_next(t.aux, NULL);
+                        if (s) {
+                            lv_chart_set_next_value(t.aux, s, v);
+                            lv_chart_refresh(t.aux);
+                        }
+                        t.last_aux_pct = v;
+                    }
+                }
+            }
+            break;
+        }
         default:
-            // Numeric, WindRose, Text, Trend fallback - all use
+            // Full-screen wind dial / steering composite: drive all their own
+            // widgets from boat::View directly (last_aux_pct == -2 sentinel set by
+            // paint_wind_rose_body / paint_wind_steer_body). Skip the stand-in.
+            if (t.kind == WidgetKind::WindRose && t.last_aux_pct == -2) {
+                if (t.aux) winddial::update((WindDialState *)lv_obj_get_user_data(t.aux), data);
+                break;
+            }
+            if (t.kind == WidgetKind::WindSteer && t.last_aux_pct == -2) {
+                if (t.aux) windsteer::update((WindSteerState *)lv_obj_get_user_data(t.aux), data);
+                break;
+            }
+            // Numeric, WindRose, Text fallback - all use
             // the value/secondary text slots populated by format_metric.
-            if (ui::set_text_if_changed(t.value, t.last_value, sizeof(t.last_value), pri) &&
-                t.kind == WidgetKind::Numeric && m.extras_count == 0) {
-                // Shrink the hero value to fit the tile (scaled k/M strings + a
-                // P/S suffix can be wider than the big font allows).
-                fit_value_font(t.value, pri, QG_TILE_W - 56);
+            if (ui::set_text_if_changed(t.value, t.last_value, sizeof(t.last_value), pri)) {
+                if (t.kind == WidgetKind::Numeric && m.extras_count == 0) {
+                    // Shrink the hero value to fit the tile (scaled k/M strings + a
+                    // P/S suffix can be wider than the big font allows).
+                    fit_value_font(t.value, pri, QG_TILE_W - 56);
+                } else if (t.kind == WidgetKind::Text) {
+                    // Text tiles (e.g. POS lat/lon) overflow the 28 px font on a
+                    // 160 px tile; pick the largest Montserrat that fits.
+                    fit_text_font(t.value, pri, QG_TILE_W - 24);
+                }
             }
             // VMG sign tint: red when negative (opening from the mark / losing
             // ground), green when making good toward it. Neutral on NaN so a
@@ -1158,9 +3150,10 @@ static void update_quad_grid(lv_obj_t *root, const ScreenVariantSpec &spec,
                 ui::set_text_if_changed(t.secondary, t.last_secondary, sizeof(t.last_secondary),
                                         sec);
             }
-            // WindRose: apparent + true wind heads, bow-up and bow-relative
-            // (AWA/TWA are angles relative to the bow, 0 = wind from ahead).
-            if (t.kind == WidgetKind::WindRose) {
+            // WindRose / non-fullscreen WindSteer stand-in: apparent + true wind
+            // heads, bow-up and bow-relative (AWA/TWA are angles relative to the
+            // bow, 0 = wind from ahead).
+            if (t.kind == WidgetKind::WindRose || t.kind == WidgetKind::WindSteer) {
                 MetricBinding awa = {}, twa = {};
                 awa.source = MetricSource::AWA_deg;
                 twa.source = MetricSource::TWA_deg;
@@ -2531,8 +4524,10 @@ static void update_setup_form(lv_obj_t *root, const ScreenVariantSpec &spec,
 // lv_obj_set_user_data, matching the QuadGrid pattern.
 
 // Maximum freeform tiles per screen — mirrors the MIDL solver bound so a
-// PlacementSet can be mapped 1:1.
-static constexpr int FREEFORM_MAX_TILES = (int)layout::MAX_TILES_PER_SCREEN;  // 4
+// PlacementSet can be mapped 1:1. Spec-derived (decoupled from the legacy
+// layout::MAX_TILES_PER_SCREEN, which stays 4 to protect the layout::Config
+// size guard); see include/midl_limits.h.
+static constexpr int FREEFORM_MAX_TILES = (int)midl::FirmwareLimits::max_tiles_per_screen;
 
 // Per-tile state extends QuadGridTile with the tile's own pixel width so the
 // update path can correctly call fit_value_font() without relying on the
@@ -2547,6 +4542,13 @@ struct FreeformState {
     FreeformTile tiles[FREEFORM_MAX_TILES];
 };
 
+// Compile-time footprint guard (Part B): a per-screen FreeformState holds
+// tiles[max_tiles_per_screen], so it grows with the spec-derived tile count.
+// Keep it under the budget so a bumped maxTiles fails the BUILD, not the device.
+static_assert(
+    sizeof(FreeformState) <= midl::MIDL_FREEFORM_STATE_BUDGET,
+    "FreeformState exceeds MIDL_FREEFORM_STATE_BUDGET; raise the budget or lower maxTiles");
+
 lv_obj_t *create_freeform(lv_obj_t *parent, const ScreenVariantSpec &spec, const Rect *rects) {
     if (!spec.metrics || spec.metric_count < 1 || !rects) return nullptr;
 
@@ -2560,8 +4562,12 @@ lv_obj_t *create_freeform(lv_obj_t *parent, const ScreenVariantSpec &spec, const
     lv_obj_set_style_pad_all(root, 0, 0);
     lv_obj_clear_flag(root, LV_OBJ_FLAG_SCROLLABLE);
 
+    // PSRAM, not internal SRAM: at the spec-derived tile count (9) this struct is
+    // ~3 KB, and up to ui::MAX_SCREENS are built eagerly — keeping them in scarce
+    // internal SRAM would starve NimBLE/LVGL (the documented starvation trap, in
+    // reverse). It is read at the 5 Hz UI refresh, so PSRAM latency is irrelevant.
     FreeformState *st =
-        (FreeformState *)heap_caps_calloc(1, sizeof(FreeformState), MALLOC_CAP_INTERNAL);
+        (FreeformState *)heap_caps_calloc(1, sizeof(FreeformState), MALLOC_CAP_SPIRAM);
     if (!st) {
         net::logf("[layout] freeform alloc failed");
         return root;  // empty but valid handle
@@ -2615,22 +4621,55 @@ void update_freeform(lv_obj_t *root, const ScreenVariantSpec &spec, const boat::
             // (range_min==range_max) fall back to the built-in per-source heuristic.
             double frac = binding_unit_fraction(m, scalar);
             int pct = isnan(frac) ? 0 : (int)(frac * 100.0 + 0.5);
+            bool bipolar = (t.kind == WidgetKind::Gauge) && gauge_is_bipolar(m);
             if (t.aux && pct != t.last_aux_pct) {
-                if (t.kind == WidgetKind::Gauge)
-                    lv_arc_set_value(t.aux, pct);
-                else
+                if (t.kind == WidgetKind::Gauge) {
+                    // Bipolar gauge (range straddles zero): centre-anchored fill.
+                    if (bipolar)
+                        gauge_set_bipolar_fill(t.aux, m, scalar);
+                    else
+                        lv_arc_set_value(t.aux, pct);
+                } else {
                     lv_bar_set_value(t.aux, pct, LV_ANIM_OFF);
+                }
                 t.last_aux_pct = pct;
             }
-            char buf[8];
-            if (isnan(frac))
+            // Center label. Mirrors update_quad_grid: a ranged element (explicit
+            // MIDL format.range) shows the actual scalar to format.precision so a
+            // real gauge — e.g. rudder on [-35,35] — reads its true magnitude;
+            // legacy/default-range tiles keep the "%d%%" percent of the heuristic
+            // range, matching the editor preview.
+            char buf[24];
+            if (m.range_min != m.range_max) {
+                if (isnan(scalar))
+                    snprintf(buf, sizeof(buf), "--");
+                else {
+                    int dp = m.precision >= 0 ? m.precision : 0;
+                    // Append the unit when authored — mirrors update_quad_grid.
+                    // No separator before a glued unit ("%", "°"=UTF-8 0xC2 lead
+                    // byte); a thin space before word units ("kn"/"V"/"m").
+                    snprintf(buf, sizeof(buf), "%.*f%s%s", dp, scalar,
+                             (m.unit && m.unit[0])
+                                 ? ((m.unit[0] == '%' || m.unit[0] == '\xC2') ? "" : "\xE2\x80\x89")
+                                 : "",
+                             (m.unit && m.unit[0]) ? m.unit : "");
+                }
+            } else if (isnan(frac)) {
                 snprintf(buf, sizeof(buf), "--");
-            else
+            } else {
                 snprintf(buf, sizeof(buf), "%d%%", pct);
+            }
             ui::set_text_if_changed(t.value, t.last_value, sizeof(t.last_value), buf);
             break;
         }
         case WidgetKind::Autopilot:
+            // Full-screen HUD: drives its own widgets from boat::View
+            // (last_aux_pct == -2 sentinel set by paint_autopilot_body). This is
+            // the freeform path that a single autopilot leaf hits.
+            if (t.last_aux_pct == -2) {
+                if (t.aux) aphud::update((ApHudState *)lv_obj_get_user_data(t.aux), data);
+                break;
+            }
             ui::set_text_if_changed(t.value, t.last_value, sizeof(t.last_value), pri);
             if (t.secondary) {
                 char tgt[24];
@@ -2660,26 +4699,67 @@ void update_freeform(lv_obj_t *root, const ScreenVariantSpec &spec, const boat::
                 ui::set_text_if_changed(t.secondary, t.last_secondary, sizeof(t.last_secondary),
                                         cts);
             }
+            // HDG/CTS inner ring + COG outer ring (mirrors update_quad_grid): the
+            // two-ring split keeps an HDG≈COG overlap from merging into one glyph.
             {
                 MetricBinding hdg = {}, cog = {}, cts = {};
                 hdg.source = MetricSource::HDG_deg;
                 cog.source = MetricSource::COG_deg;
                 cts.source = MetricSource::CTS_deg;
-                ui::MarkerSpec live[3] = {
+                ui::MarkerSpec inner[2] = {
                     {metric_scalar(hdg, data), ui::Glyph::Triangle, true, theme.accent},
-                    {metric_scalar(cog, data), ui::Glyph::Triangle, false, theme.good},
                     {metric_scalar(cts, data), ui::Glyph::Diamond, true, theme.alarm},
                 };
-                ui::marker_ring_update(t.markers, live, 3, /*reference=*/0.0);
+                ui::marker_ring_update(t.markers, inner, 2, /*reference=*/0.0);
+                ui::MarkerSpec outer[1] = {
+                    {metric_scalar(cog, data), ui::Glyph::Triangle, false, theme.good},
+                };
+                ui::marker_ring_update(t.markers_cog, outer, 1, /*reference=*/0.0);
             }
             break;
+        case WidgetKind::Trend: {
+            // Mirrors update_quad_grid: hero number is the live reading; the
+            // sparkline gets one normalized 0..100 sample on value-change.
+            ui::set_text_if_changed(t.value, t.last_value, sizeof(t.last_value), pri);
+            if (t.aux) {
+                double frac = binding_unit_fraction(m, metric_scalar(m, data));
+                if (!isnan(frac)) {
+                    int v = (int)(frac * 100.0 + 0.5);
+                    if (v != t.last_aux_pct) {
+                        lv_chart_series_t *s = lv_chart_get_series_next(t.aux, NULL);
+                        if (s) {
+                            lv_chart_set_next_value(t.aux, s, v);
+                            lv_chart_refresh(t.aux);
+                        }
+                        t.last_aux_pct = v;
+                    }
+                }
+            }
+            break;
+        }
         default:
-            // Numeric, WindRose, Text, Trend — value/secondary text slots.
-            if (ui::set_text_if_changed(t.value, t.last_value, sizeof(t.last_value), pri) &&
-                t.kind == WidgetKind::Numeric && m.extras_count == 0) {
-                // Use the tile's own width (solver may pick a rect different
-                // from the fixed QG_TILE_W). -56 matches the QuadGrid margin.
-                fit_value_font(t.value, pri, st->tiles[i].tile_w - 56);
+            // Full-screen wind dial / steering composite: drive their own widgets
+            // from boat::View (last_aux_pct == -2 sentinel). This is the freeform
+            // path that the single-leaf windrose / col-split windsteer screen hits.
+            if (t.kind == WidgetKind::WindRose && t.last_aux_pct == -2) {
+                if (t.aux) winddial::update((WindDialState *)lv_obj_get_user_data(t.aux), data);
+                break;
+            }
+            if (t.kind == WidgetKind::WindSteer && t.last_aux_pct == -2) {
+                if (t.aux) windsteer::update((WindSteerState *)lv_obj_get_user_data(t.aux), data);
+                break;
+            }
+            // Numeric, WindRose, Text — value/secondary text slots.
+            if (ui::set_text_if_changed(t.value, t.last_value, sizeof(t.last_value), pri)) {
+                if (t.kind == WidgetKind::Numeric && m.extras_count == 0) {
+                    // Use the tile's own width (solver may pick a rect different
+                    // from the fixed QG_TILE_W). -56 matches the QuadGrid margin.
+                    fit_value_font(t.value, pri, st->tiles[i].tile_w - 56);
+                } else if (t.kind == WidgetKind::Text) {
+                    // Text tiles overflow on narrow (160 px) freeform tiles; pick
+                    // the largest Montserrat that fits the tile's real width.
+                    fit_text_font(t.value, pri, st->tiles[i].tile_w - 24);
+                }
             }
             if (t.value && m.source == MetricSource::VMG_kn) {
                 double vmg = mps_to_kn(data.vmg);
@@ -2690,7 +4770,7 @@ void update_freeform(lv_obj_t *root, const ScreenVariantSpec &spec, const boat::
                 ui::set_text_if_changed(t.secondary, t.last_secondary, sizeof(t.last_secondary),
                                         sec);
             }
-            if (t.kind == WidgetKind::WindRose) {
+            if (t.kind == WidgetKind::WindRose || t.kind == WidgetKind::WindSteer) {
                 MetricBinding awa = {}, twa = {};
                 awa.source = MetricSource::AWA_deg;
                 twa.source = MetricSource::TWA_deg;

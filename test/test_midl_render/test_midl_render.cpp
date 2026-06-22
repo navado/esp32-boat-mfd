@@ -14,15 +14,16 @@ using ui::layouts::WidgetKind;
 static MetricBinding mapOne(const char *json, const char *id) {
     JsonDocument doc;
     deserializeJson(doc, json);
-    static char idb[32], lab[32], unit[32];
+    static char idb[32], lab[32], unit[32], act[32];
     MetricBinding mb{};
-    midl::render::map_element(doc.as<JsonVariantConst>(), id, mb, idb, lab, unit);
+    midl::render::map_element(doc.as<JsonVariantConst>(), id, mb, idb, lab, unit, act);
     return mb;
 }
 
 void test_token_to_kind() {
     TEST_ASSERT_EQUAL(WidgetKind::Numeric, midl::render::token_to_kind("single-value"));
     TEST_ASSERT_EQUAL(WidgetKind::WindRose, midl::render::token_to_kind("windrose"));
+    TEST_ASSERT_EQUAL(WidgetKind::WindSteer, midl::render::token_to_kind("windsteer"));
     TEST_ASSERT_EQUAL(WidgetKind::Compass, midl::render::token_to_kind("compass"));
     TEST_ASSERT_EQUAL(WidgetKind::Gauge, midl::render::token_to_kind("gauge"));
     TEST_ASSERT_EQUAL(WidgetKind::Numeric, midl::render::token_to_kind("frobnicate"));
@@ -98,6 +99,37 @@ void test_format_absent_defaults() {
     TEST_ASSERT_EQUAL_INT8(-1, m.precision);
 }
 
+void test_action_nav_sets_target_screen() {
+    MetricBinding m = mapOne(
+        R"({"type":"button","name":"NAV","action":{"kind":"nav","target":"steering"}})", "go");
+    TEST_ASSERT_EQUAL(WidgetKind::Button, m.kind);
+    TEST_ASSERT_NOT_NULL(m.target_screen);
+    TEST_ASSERT_EQUAL_STRING("steering", m.target_screen);
+    TEST_ASSERT_NULL(m.command);
+}
+
+void test_action_command_sets_command() {
+    MetricBinding m = mapOne(
+        R"({"type":"button","name":"TACK","action":{"kind":"command","target":"tack"}})", "tk");
+    TEST_ASSERT_EQUAL(WidgetKind::Button, m.kind);
+    TEST_ASSERT_NOT_NULL(m.command);
+    TEST_ASSERT_EQUAL_STRING("tack", m.command);
+    TEST_ASSERT_NULL(m.target_screen);
+}
+
+void test_action_absent_leaves_both_null() {
+    MetricBinding m = mapOne(R"({"type":"button","name":"PLAIN"})", "p");
+    TEST_ASSERT_NULL(m.command);
+    TEST_ASSERT_NULL(m.target_screen);
+}
+
+void test_action_unknown_kind_ignored() {
+    MetricBinding m =
+        mapOne(R"({"type":"button","action":{"kind":"frobnicate","target":"whatever"}})", "x");
+    TEST_ASSERT_NULL(m.command);
+    TEST_ASSERT_NULL(m.target_screen);
+}
+
 void setUp() {
 }
 void tearDown() {
@@ -113,5 +145,9 @@ int main(int, char **) {
     RUN_TEST(test_accent_integer);
     RUN_TEST(test_format_range_and_precision);
     RUN_TEST(test_format_absent_defaults);
+    RUN_TEST(test_action_nav_sets_target_screen);
+    RUN_TEST(test_action_command_sets_command);
+    RUN_TEST(test_action_absent_leaves_both_null);
+    RUN_TEST(test_action_unknown_kind_ignored);
     return UNITY_END();
 }

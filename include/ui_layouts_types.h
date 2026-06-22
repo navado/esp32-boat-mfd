@@ -51,6 +51,7 @@ enum class MetricSource : uint8_t {
     Rudder_deg,  // rad_to_deg of d.rudder, signed with port/stbd helm suffix
     Position,    // formatted to current pos_format
     APState,
+    STW_kn,  // mps_to_kn(d.stw) — appended (keep ordinals stable for any persisted configs)
 };
 
 // Optional extra row beneath the primary value (multi-value tiles).
@@ -75,6 +76,9 @@ enum class WidgetKind : uint8_t {
     Text,         // monospace value text (position, AP state strings)
     Button,       // rounded accent bubble label
     Trend,        // sparkline chart
+    // APPEND-ONLY (0-based enum values are load-bearing for persisted configs and
+    // the gnu++11 aggregate value-init of MetricBinding.kind). New kinds go last.
+    WindSteer,  // semicircular heading-up steering dial with no-go + target laylines
 };
 
 struct MetricBinding {
@@ -112,6 +116,12 @@ struct MetricBinding {
     float range_min;   // gauge/bar lower bound (0 with range_max==0 -> default)
     float range_max;   // gauge/bar upper bound
     int8_t precision;  // value decimal places; -1 = painter default (set by mapper)
+    // Button command target (MIDL action.kind == "command"). ADDITIVE trailing
+    // field, no default member initializer (keeps MetricBinding an aggregate under
+    // gnu++11 — see the range_* note above). NULL on every legacy/non-button tile.
+    // nav-kind actions reuse `target_screen`; command-kind populates this and the
+    // button_action_cb routes it through net::dispatchCommand.
+    const char *command;
 };
 
 struct ScreenVariantSpec {
