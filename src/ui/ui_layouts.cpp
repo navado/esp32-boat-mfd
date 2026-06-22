@@ -717,8 +717,21 @@ static void paint_compass_body(QuadGridTile &t, const MetricBinding &m, int w, i
     lv_label_set_text(t.value, "--");
     lv_obj_set_style_text_font(t.value, vfont, 0);
     lv_obj_set_style_text_color(t.value, lv_color_hex(value_color(m)), 0);
-    lv_obj_align(t.value, LV_ALIGN_CENTER, 0, 0);
+    // Nudge the number down a touch so the "HDG" caption rides above it (web ref).
+    lv_obj_align(t.value, LV_ALIGN_CENTER, 0, 6);
     lv_obj_clear_flag(t.value, LV_OBJ_FLAG_CLICKABLE);
+
+    // Small dim "HDG" caption directly above the big heading number, matching the
+    // web compass. Positioned at a fixed offset above the ring centre (the value
+    // is centre-anchored, so the gap is stable regardless of the live digits'
+    // width). The offset scales with the value font's height.
+    int vh = lv_font_get_line_height(vfont);
+    lv_obj_t *hcap = lv_label_create(ring);
+    lv_label_set_text(hcap, "HDG");
+    lv_obj_set_style_text_font(hcap, &lv_font_montserrat_14, 0);
+    lv_obj_set_style_text_color(hcap, lv_color_hex(theme.fg_dim), 0);
+    lv_obj_align(hcap, LV_ALIGN_CENTER, 0, 6 - vh / 2 - 8);
+    lv_obj_clear_flag(hcap, LV_OBJ_FLAG_CLICKABLE);
 
     // CTS line tracks the ring's bottom (label-tracks-number geometry).
     t.secondary = lv_label_create(t.root);
@@ -806,6 +819,40 @@ static void paint_gauge_body(QuadGridTile &t, const MetricBinding &m, int w, int
     lv_obj_set_style_text_color(t.value, lv_color_hex(value_color(m)), 0);
     lv_obj_align(t.value, LV_ALIGN_CENTER, 0, 4);
     lv_obj_clear_flag(t.value, LV_OBJ_FLAG_CLICKABLE);
+}
+
+// True when a gauge's range straddles zero (e.g. rudder [-35,35]) — its fill
+// must be centre-anchored at the zero position, not left-anchored.
+static inline bool gauge_is_bipolar(const MetricBinding &m) {
+    return m.range_min < 0.0 && m.range_max > 0.0;
+}
+
+// Center-anchored arc fill for a bipolar gauge. The 270° background sweeps
+// 135°(lower-left) → 180 → 270(top) → 0 → 45°(lower-right) clockwise; zero sits
+// at the top centre (270°). A positive value fills clockwise from 270° toward
+// 45° (right half); a negative value fills counter-clockwise from 270° toward
+// 135° (left half). Each half spans 135° of arc, so |v| at the range endpoint
+// fills its whole half. Drives the indicator angles directly (NOT
+// lv_arc_set_value, which always fills from the background start).
+static void gauge_set_bipolar_fill(lv_obj_t *arc, const MetricBinding &m, double v) {
+    if (!arc) return;
+    const double kZero = 270.0;       // top centre, in LVGL arc degrees
+    const double kHalfSweep = 135.0;  // each polarity owns half of the 270° band
+    if (isnan(v)) {
+        lv_arc_set_angles(arc, (uint16_t)kZero, (uint16_t)kZero);  // empty
+        return;
+    }
+    if (v >= 0.0) {
+        double frac = m.range_max > 0.0 ? v / m.range_max : 0.0;
+        if (frac > 1.0) frac = 1.0;
+        double end = kZero + frac * kHalfSweep;  // 270 → up to 405 (==45)
+        lv_arc_set_angles(arc, (uint16_t)lround(kZero), (uint16_t)lround(end));
+    } else {
+        double frac = m.range_min < 0.0 ? v / m.range_min : 0.0;  // v,min both <0 → positive
+        if (frac > 1.0) frac = 1.0;
+        double start = kZero - frac * kHalfSweep;  // 270 → down to 135
+        lv_arc_set_angles(arc, (uint16_t)lround(start), (uint16_t)lround(kZero));
+    }
 }
 
 // Bar widget: title row (label left, percent right) + LVGL bar fill.
@@ -922,8 +969,13 @@ struct WindDialState {
     lv_obj_t *tide_zero;
     lv_obj_t *waypoint_marker;
     lv_obj_t *card_lbl[8];
+    // Bottom band tiles (AWA / TWS / TWA — AWS is now the centre hero, web ref).
+    // tile_aws stays declared for the (now-removed) AWS band tile but is null on
+    // the dial; the live AWS readout is lbl_aws_value at the dial centre.
     lv_obj_t *tile_aws, *tile_awa, *tile_tws, *tile_twa;
+    lv_obj_t *lbl_aws_value;  // centre hero (apparent wind speed, kn, amber)
     lv_obj_t *lbl_hdg_value, *lbl_tide_speed, *lbl_drift_cap;
+    bool show_band;  // false on a short (wind_steer) rect: drop the bottom band
 
     // Dirty caches (mirror screen_wind.cpp's file-statics)
     char last_aws[16];
@@ -1220,21 +1272,21 @@ static void build_waypoint(WindDialState *st, lv_obj_t *parent) {
     lv_obj_add_flag(st->waypoint_marker, LV_OBJ_FLAG_HIDDEN);
 }
 
-// Bottom tile band (AWS / AWA / TWS / TWA), pinned to the bottom of the dial
-// root and spanning its width — the legacy square-panel layout (TILE_BAND=132,
-// tile height = band - 16). `band_h` is the full band height (TILE_BAND).
+// Bottom tile band (AWA / TWS / TWA), pinned to the bottom of the dial root and
+// spanning its width — matches the web design (AWS is the centre hero, so it is
+// NOT duplicated in the band). Three tiles evenly spaced across the width.
+// `band_h` is the full band height (TILE_BAND).
 static void build_tiles(WindDialState *st, lv_obj_t *parent, int w, int h, int band_h) {
     const lv_font_t *tv = &lv_font_montserrat_38;
-    int gap = 8, n = 4;
+    int gap = 8, n = 3;
     int tw = (w - gap * (n + 1)) / n;
     int th = band_h - 16;
     if (th < 40) th = 40;
     int ty = h - th - 8;
-    st->tile_aws = ui::numeric_tile(parent, gap, ty, tw, th, "AWS", "kn", tv, theme.warn);
-    st->tile_awa = ui::numeric_tile(parent, gap * 2 + tw, ty, tw, th, "AWA", "", tv, theme.fg);
-    st->tile_tws =
-        ui::numeric_tile(parent, gap * 3 + tw * 2, ty, tw, th, "TWS", "kn", tv, theme.fg);
-    st->tile_twa = ui::numeric_tile(parent, gap * 4 + tw * 3, ty, tw, th, "TWA", "", tv, theme.fg);
+    st->tile_aws = nullptr;  // AWS now lives at the dial centre, not in the band
+    st->tile_awa = ui::numeric_tile(parent, gap, ty, tw, th, "AWA", "", tv, theme.fg);
+    st->tile_tws = ui::numeric_tile(parent, gap * 2 + tw, ty, tw, th, "TWS", "kn", tv, theme.fg);
+    st->tile_twa = ui::numeric_tile(parent, gap * 3 + tw * 2, ty, tw, th, "TWA", "", tv, theme.fg);
 }
 
 static int16_t deg_to_lvgl(double deg) {
@@ -1279,7 +1331,13 @@ static WindDialState *build(lv_obj_t *parent, int w, int h) {
     // tile-relative and the offset is implicit (children are positioned in the
     // parent's content coordinates).
     const int TILE_BAND = 132;
-    int rose_h = h - TILE_BAND;
+    // On a short rect (wind_steer: dial shares the screen with a button row, so
+    // the dial cell is well under full height) the bottom AWA/TWS/TWA band would
+    // squeeze the rose into stacked rows. Mirror the AP-HUD fix: drop the band so
+    // the dial gets the full height — its own centre AWS + markers carry the wind
+    // info, and the band is redundant on a cramped steering layout.
+    st->show_band = (h >= 440);
+    int rose_h = st->show_band ? h - TILE_BAND : h;
     if (rose_h < 120) rose_h = h;  // degenerate guard: skip band on tiny rects
     st->cx = w / 2;
     st->cy = rose_h / 2;
@@ -1331,7 +1389,7 @@ static WindDialState *build(lv_obj_t *parent, int w, int h) {
     lv_obj_set_style_text_color(st->lbl_drift_cap, lv_color_hex(theme.fg_dim), 0);
     lv_obj_set_style_text_align(st->lbl_drift_cap, LV_TEXT_ALIGN_CENTER, 0);
     lv_obj_set_width(st->lbl_drift_cap, 60);
-    lv_obj_set_pos(st->lbl_drift_cap, CX - 30, CY + 8);
+    lv_obj_set_pos(st->lbl_drift_cap, CX - 30, CY + 60);
     lv_obj_add_flag(st->lbl_drift_cap, LV_OBJ_FLAG_HIDDEN);
 
     st->lbl_tide_speed = lv_label_create(r);
@@ -1340,7 +1398,7 @@ static WindDialState *build(lv_obj_t *parent, int w, int h) {
     lv_obj_set_style_text_color(st->lbl_tide_speed, lv_color_hex(theme.fg), 0);
     lv_obj_set_style_text_align(st->lbl_tide_speed, LV_TEXT_ALIGN_CENTER, 0);
     lv_obj_set_width(st->lbl_tide_speed, 60);
-    lv_obj_set_pos(st->lbl_tide_speed, CX - 30, CY + 24);
+    lv_obj_set_pos(st->lbl_tide_speed, CX - 30, CY + 76);
 
     // Wind indices: T (true) cyan below A (apparent) amber in z-order.
     st->twa_marker = make_wind_marker(st, r, "T", 0x2bd4e8);
@@ -1350,25 +1408,39 @@ static WindDialState *build(lv_obj_t *parent, int w, int h) {
     build_cardinals(st, r);
     build_waypoint(st, r);
 
-    lv_obj_t *hcap = lv_label_create(r);
-    lv_label_set_text(hcap, "HDG");
-    lv_obj_set_style_text_font(hcap, &lv_font_montserrat_14, 0);
-    lv_obj_set_style_text_color(hcap, lv_color_hex(theme.fg_dim), 0);
-    lv_obj_set_style_text_align(hcap, LV_TEXT_ALIGN_CENTER, 0);
-    lv_obj_set_width(hcap, 80);
-    lv_obj_set_pos(hcap, CX - 40, CY - R_FACE + 30);
+    // Centre hero = AWS (apparent wind speed), web-design layout: a small dim
+    // "AWS" caption directly above the big amber/theme.warn number. Heading is
+    // already shown by the rotated bezel + red bow lubber, so HDG is demoted to a
+    // tiny dim readout below the AWS number (kept for at-a-glance reference).
+    lv_obj_t *awscap = lv_label_create(r);
+    lv_label_set_text(awscap, "AWS");
+    lv_obj_set_style_text_font(awscap, &lv_font_montserrat_14, 0);
+    lv_obj_set_style_text_color(awscap, lv_color_hex(theme.fg_dim), 0);
+    lv_obj_set_style_text_align(awscap, LV_TEXT_ALIGN_CENTER, 0);
+    lv_obj_set_width(awscap, 80);
+    lv_obj_set_pos(awscap, CX - 40, CY - 44);
 
+    st->lbl_aws_value = lv_label_create(r);
+    lv_label_set_text(st->lbl_aws_value, "--");
+    lv_obj_set_style_text_font(st->lbl_aws_value, &font_xl_64, 0);
+    lv_obj_set_style_text_color(st->lbl_aws_value, lv_color_hex(theme.warn), 0);
+    lv_obj_set_style_text_align(st->lbl_aws_value, LV_TEXT_ALIGN_CENTER, 0);
+    lv_obj_set_width(st->lbl_aws_value, 200);
+    lv_obj_set_pos(st->lbl_aws_value, CX - 100, CY - 30);
+
+    // Tiny dim HDG readout under the AWS hero (heading is primarily the bezel).
     st->lbl_hdg_value = lv_label_create(r);
     lv_label_set_text(st->lbl_hdg_value, "--\xC2\xB0");
-    lv_obj_set_style_text_font(st->lbl_hdg_value, &lv_font_montserrat_28, 0);
-    lv_obj_set_style_text_color(st->lbl_hdg_value, lv_color_hex(theme.accent), 0);
+    lv_obj_set_style_text_font(st->lbl_hdg_value, &lv_font_montserrat_14, 0);
+    lv_obj_set_style_text_color(st->lbl_hdg_value, lv_color_hex(theme.fg_dim), 0);
     lv_obj_set_style_text_align(st->lbl_hdg_value, LV_TEXT_ALIGN_CENTER, 0);
-    lv_obj_set_width(st->lbl_hdg_value, 120);
-    lv_obj_set_pos(st->lbl_hdg_value, CX - 60, CY - R_FACE + 50);
+    lv_obj_set_width(st->lbl_hdg_value, 100);
+    lv_obj_set_pos(st->lbl_hdg_value, CX - 50, CY + 40);
 
     // Bottom numeric tiles: fixed band pinned to the bottom (TILE_BAND tall),
-    // matching the rose area reserved above (cy is centred in h - TILE_BAND).
-    build_tiles(st, r, w, h, TILE_BAND);
+    // matching the rose area reserved above. Dropped on a short steering rect
+    // (show_band == false) so the dial gets the full height.
+    if (st->show_band) build_tiles(st, r, w, h, TILE_BAND);
 
     lv_obj_set_user_data(st->root, st);
     return st;
@@ -1378,13 +1450,14 @@ static void update(WindDialState *st, const sk::Data &d) {
     if (!st) return;
     char buf[64];
 
-    // --- speed tiles ---
+    // --- AWS centre hero (apparent wind speed, the dominant number) ---
     if (!isnan(d.aws)) {
         snprintf(buf, sizeof(buf), "%.1f", mps_to_kn(d.aws));
-        ui::set_text_if_changed(st->tile_aws, st->last_aws, sizeof(st->last_aws), buf);
+        ui::set_text_if_changed(st->lbl_aws_value, st->last_aws, sizeof(st->last_aws), buf);
     } else {
-        ui::set_text_if_changed(st->tile_aws, st->last_aws, sizeof(st->last_aws), "--");
+        ui::set_text_if_changed(st->lbl_aws_value, st->last_aws, sizeof(st->last_aws), "--");
     }
+    // --- TWS band tile (null-safe: dropped on a short steering rect) ---
     if (!isnan(d.tws)) {
         snprintf(buf, sizeof(buf), "%.1f", mps_to_kn(d.tws));
         ui::set_text_if_changed(st->tile_tws, st->last_tws, sizeof(st->last_tws), buf);
@@ -2158,11 +2231,19 @@ static void update_quad_grid(lv_obj_t *root, const ScreenVariantSpec &spec, cons
             // (range_min==range_max) fall back to the built-in per-source heuristic.
             double frac = binding_unit_fraction(m, scalar);
             int pct = isnan(frac) ? 0 : (int)(frac * 100.0 + 0.5);
+            bool bipolar = (t.kind == WidgetKind::Gauge) && gauge_is_bipolar(m);
             if (t.aux && pct != t.last_aux_pct) {
-                if (t.kind == WidgetKind::Gauge)
-                    lv_arc_set_value(t.aux, pct);
-                else
+                if (t.kind == WidgetKind::Gauge) {
+                    // Bipolar gauge (range straddles zero, e.g. rudder [-35,35]):
+                    // fill outward from the top-centre zero. Other gauges keep the
+                    // standard left-anchored 0..100 fill.
+                    if (bipolar)
+                        gauge_set_bipolar_fill(t.aux, m, scalar);
+                    else
+                        lv_arc_set_value(t.aux, pct);
+                } else {
                     lv_bar_set_value(t.aux, pct, LV_ANIM_OFF);
+                }
                 t.last_aux_pct = pct;
             }
             // Center label. Legacy tiles (no explicit MIDL format.range) show the
@@ -3758,11 +3839,17 @@ void update_freeform(lv_obj_t *root, const ScreenVariantSpec &spec, const sk::Da
             // (range_min==range_max) fall back to the built-in per-source heuristic.
             double frac = binding_unit_fraction(m, scalar);
             int pct = isnan(frac) ? 0 : (int)(frac * 100.0 + 0.5);
+            bool bipolar = (t.kind == WidgetKind::Gauge) && gauge_is_bipolar(m);
             if (t.aux && pct != t.last_aux_pct) {
-                if (t.kind == WidgetKind::Gauge)
-                    lv_arc_set_value(t.aux, pct);
-                else
+                if (t.kind == WidgetKind::Gauge) {
+                    // Bipolar gauge (range straddles zero): centre-anchored fill.
+                    if (bipolar)
+                        gauge_set_bipolar_fill(t.aux, m, scalar);
+                    else
+                        lv_arc_set_value(t.aux, pct);
+                } else {
                     lv_bar_set_value(t.aux, pct, LV_ANIM_OFF);
+                }
                 t.last_aux_pct = pct;
             }
             // Center label. Mirrors update_quad_grid: a ranged element (explicit
