@@ -1212,8 +1212,18 @@ void sha256_to_hex(const uint8_t *digest, char out[65]) {
 void ota_task(void *) {
     esp_task_wdt_delete(NULL);
     s_ota_in_flight = true;
+    // Quiesce the LVGL pump for the whole OTA: the sustained 2 MB Update.write
+    // erases/writes flash, and the UI task running flash-resident code +
+    // churning the PSRAM framebuffer in that window intermittently hangs the
+    // device (precompiled arduino-esp32 flash-cache hazard). Resumed only on
+    // failure below; the success path reboots.
+    app_pause_ui(true);
     String job_id = s_ota_job_id;
     String url = s_ota_url;
+    // A manager-relative URL ("/firmware/download/<job>") means pull the binary
+    // from the manager over plain HTTP (it proxies the GitHub asset host-side),
+    // avoiding device-side HTTPS. Resolve it against the plugin base.
+    if (url.startsWith("/")) url = build_url(url.c_str());
     String want_sha = s_ota_sha256;
     size_t want_size = s_ota_size;
     const char *failure_detail = nullptr;
@@ -1228,8 +1238,16 @@ void ota_task(void *) {
         failure_detail = "http begin failed";
         goto fail;
     }
+    // Send the device token so the manager's download route authorizes this
+    // job's device (same auth the device uses for /commands).
+    prepare_http(http);
     http.setConnectTimeout(5000);
     http.setTimeout(15000);  // longer for big binaries
+    // GitHub release-asset URLs 302-redirect to objects.githubusercontent.com;
+    // a SignalK-manager catalog points the job at that public URL. Follow the
+    // redirect chain (and re-resolve to the signed asset host) instead of
+    // failing on the 302 ("GET non-200"). STRICT follows GET/HEAD only.
+    http.setFollowRedirects(HTTPC_STRICT_FOLLOW_REDIRECTS);
     {
         int code = http.GET();
         if (code != 200) {
@@ -1336,6 +1354,7 @@ fail:
                  failure_detail ? failure_detail : "?", outcome_code);
     post_ota_progress(job_id, "failed", -1, failure_detail ? failure_detail : "unknown");
     s_ota_in_flight = false;
+    app_pause_ui(false);  // OTA aborted; bring the UI back
     s_ota_task = nullptr;
     vTaskDelete(NULL);
 }
