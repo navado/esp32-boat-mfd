@@ -1998,7 +1998,14 @@ static ApHudState *build(lv_obj_t *parent, int w, int h) {
 
     st->lbl_hdg_value = lv_label_create(r);
     lv_label_set_text(st->lbl_hdg_value, "--\xC2\xB0");
-    lv_obj_set_style_text_font(st->lbl_hdg_value, &font_xl_64, 0);
+    // Scale the HDG hero to the dial radius so it never overlaps the rotating scale
+    // on a compressed leaf (e.g. wind_steer, where the field band shrinks the dial).
+    // A full-size dial keeps font_xl_64 (the <140 guard is false for aphud's region).
+    const lv_font_t *hf = &font_xl_64;
+    if (st->cp.r < 140) hf = &lv_font_montserrat_48;
+    if (st->cp.r < 110) hf = &lv_font_montserrat_38;
+    if (st->cp.r < 85) hf = &lv_font_montserrat_28;
+    lv_obj_set_style_text_font(st->lbl_hdg_value, hf, 0);
     lv_obj_set_style_text_color(st->lbl_hdg_value, lv_color_hex(theme.fg), 0);
     lv_obj_set_style_text_align(st->lbl_hdg_value, LV_TEXT_ALIGN_CENTER, 0);
     lv_obj_set_width(st->lbl_hdg_value, 240);
@@ -2532,7 +2539,14 @@ static WindSteerState *build(lv_obj_t *parent, int w, int h) {
 
     st->lbl_hdg_value = lv_label_create(r);
     lv_label_set_text(st->lbl_hdg_value, "--\xC2\xB0");
-    lv_obj_set_style_text_font(st->lbl_hdg_value, &font_xl_64, 0);
+    // Scale the HDG hero to the dial radius so it never overlaps the rotating scale
+    // on a compressed leaf (e.g. wind_steer, where the field band shrinks the dial).
+    // A full-size dial keeps font_xl_64 (the <140 guard is false for aphud's region).
+    const lv_font_t *hf = &font_xl_64;
+    if (st->cp.r < 140) hf = &lv_font_montserrat_48;
+    if (st->cp.r < 110) hf = &lv_font_montserrat_38;
+    if (st->cp.r < 85) hf = &lv_font_montserrat_28;
+    lv_obj_set_style_text_font(st->lbl_hdg_value, hf, 0);
     lv_obj_set_style_text_color(st->lbl_hdg_value, lv_color_hex(theme.fg), 0);
     lv_obj_set_style_text_align(st->lbl_hdg_value, LV_TEXT_ALIGN_CENTER, 0);
     lv_obj_set_width(st->lbl_hdg_value, 240);
