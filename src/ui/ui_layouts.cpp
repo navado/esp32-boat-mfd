@@ -686,14 +686,23 @@ static void paint_compass_body(QuadGridTile &t, const MetricBinding &m, int w, i
 
 // Gauge widget: LVGL arc spanning 270° with the value fill in accent
 // and a center percent label. Mirrors editor .wpreview .gauge.
-static void paint_gauge_body(QuadGridTile &t, const MetricBinding & /*m*/, int w, int h) {
+//
+// Tick scale: a ranged element (MIDL format.range, i.e. range_min != range_max)
+// drives the surrounding lv_scale with the binding's real [min,max] and turns on
+// numeric labels, so e.g. a rudder gauge on [-35,35] shows -35 … 0 … 35 around
+// the arc. The arc *fill* keeps its 0..100 internal range (the update path feeds
+// it a percent via binding_unit_fraction), so only the decorative tick ring
+// follows the real scale. Legacy/default tiles (range_min==range_max) keep the
+// label-less 0–100 tick ring byte-for-byte.
+static void paint_gauge_body(QuadGridTile &t, const MetricBinding &m, int w, int h) {
+    const bool ranged = (m.range_min != m.range_max);
     int dia = (w < h ? w : h) - 56;
     if (dia < 88) dia = 88;
     lv_obj_t *arc = lv_arc_create(t.root);
     lv_obj_set_size(arc, dia, dia);
     lv_obj_align(arc, LV_ALIGN_CENTER, 0, 4);
     lv_arc_set_bg_angles(arc, 135, 45);  // 270 degree sweep, bottom open
-    lv_arc_set_range(arc, 0, 100);
+    lv_arc_set_range(arc, 0, 100);       // fill is percent-driven; see header note
     lv_arc_set_value(arc, 0);
     lv_obj_remove_style(arc, NULL, LV_PART_KNOB);
     lv_obj_clear_flag(arc, LV_OBJ_FLAG_CLICKABLE);
@@ -705,7 +714,10 @@ static void paint_gauge_body(QuadGridTile &t, const MetricBinding & /*m*/, int w
     lv_obj_set_style_arc_rounded(arc, true, LV_PART_INDICATOR);
     t.aux = arc;
 
-    // Tick marks at 0/25/50/75/100% (LVGL 9 lv_scale).
+    // Tick ring (LVGL 9 lv_scale). Default tiles: 5 unlabeled ticks over 0–100,
+    // matching the editor preview. Ranged tiles: span the binding's real
+    // [range_min,range_max] and show numeric labels at the 5 major ticks (rounded
+    // to whole units) so the operator reads the true scale endpoints.
     lv_obj_t *scale = lv_scale_create(t.root);
     lv_obj_set_size(scale, dia, dia);
     lv_obj_align(scale, LV_ALIGN_CENTER, 0, 4);
@@ -714,7 +726,20 @@ static void paint_gauge_body(QuadGridTile &t, const MetricBinding & /*m*/, int w
     lv_scale_set_rotation(scale, 135);
     lv_scale_set_total_tick_count(scale, 5);
     lv_scale_set_major_tick_every(scale, 1);
-    lv_scale_set_range(scale, 0, 100);
+    if (ranged) {
+        // lv_scale range is integer; round the binding's float window to the
+        // nearest whole unit. lo<hi is guaranteed by ranged && the painter only
+        // labels endpoints, so an inverted/degenerate pair just shows lo..lo.
+        int lo = (int)lroundf(m.range_min);
+        int hi = (int)lroundf(m.range_max);
+        if (hi <= lo) hi = lo + 1;  // defensive: keep a valid increasing range
+        lv_scale_set_range(scale, lo, hi);
+        lv_scale_set_label_show(scale, true);
+        lv_obj_set_style_text_font(scale, &lv_font_montserrat_14, LV_PART_MAIN);
+        lv_obj_set_style_text_color(scale, lv_color_hex(theme.fg_dim), LV_PART_MAIN);
+    } else {
+        lv_scale_set_range(scale, 0, 100);
+    }
     lv_obj_set_style_length(scale, 6, LV_PART_INDICATOR);
     lv_obj_set_style_line_color(scale, lv_color_hex(theme.fg_dim), LV_PART_INDICATOR);
     lv_obj_set_style_line_width(scale, 1, LV_PART_INDICATOR);
@@ -2618,11 +2643,24 @@ void update_freeform(lv_obj_t *root, const ScreenVariantSpec &spec, const sk::Da
                     lv_bar_set_value(t.aux, pct, LV_ANIM_OFF);
                 t.last_aux_pct = pct;
             }
-            char buf[8];
-            if (isnan(frac))
+            // Center label. Mirrors update_quad_grid: a ranged element (explicit
+            // MIDL format.range) shows the actual scalar to format.precision so a
+            // real gauge — e.g. rudder on [-35,35] — reads its true magnitude;
+            // legacy/default-range tiles keep the "%d%%" percent of the heuristic
+            // range, matching the editor preview.
+            char buf[24];
+            if (m.range_min != m.range_max) {
+                if (isnan(scalar))
+                    snprintf(buf, sizeof(buf), "--");
+                else {
+                    int dp = m.precision >= 0 ? m.precision : 0;
+                    snprintf(buf, sizeof(buf), "%.*f", dp, scalar);
+                }
+            } else if (isnan(frac)) {
                 snprintf(buf, sizeof(buf), "--");
-            else
+            } else {
                 snprintf(buf, sizeof(buf), "%d%%", pct);
+            }
             ui::set_text_if_changed(t.value, t.last_value, sizeof(t.last_value), buf);
             break;
         }
