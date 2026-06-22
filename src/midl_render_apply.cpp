@@ -268,14 +268,46 @@ static bool build_screen_into(JsonVariantConst screen_obj, const char *id, MidlS
 }
 
 // ---------------------------------------------------------------------------
-// apply_all: register EVERY screen in doc["screens"]. Runs ON THE UI TASK.
+// count_buildable_screens: dry pre-validation pass for apply_all. Counts how
+// many `screens[]` entries are object screens whose layout solves to >=1
+// placement — i.e. would yield a usable screen if built. Touches NO arena and
+// NO LVGL state, so it is safe to run BEFORE reset_screens() (which tears down
+// the old screen set). Used to guarantee we never reset_screens() unless the
+// new doc has at least one buildable screen — a bad push must not blank the
+// device. Runs ON THE UI TASK (no LVGL calls, but keep it there for consistency).
+// ---------------------------------------------------------------------------
+static size_t count_buildable_screens(JsonArrayConst screens) {
+    size_t usable = 0;
+    for (JsonVariantConst sv : screens) {
+        if (usable >= ui::MAX_SCREENS) break;
+        if (!sv.is<JsonObjectConst>()) continue;
+        midl::PlacementSet placements;
+        midl::SolveStatus st = midl::solve_screen(sv["layout"], {0, 0, 480, 480}, placements);
+        if (st == midl::SOLVE_OK && placements.count > 0) ++usable;
+    }
+    return usable;
+}
+
+// ---------------------------------------------------------------------------
+// apply_all: install EXACTLY the doc's screens, atomically replacing any
+// previous MIDL screen set. Runs ON THE UI TASK.
 //
-// Iterates the `screens` JSON array (up to ui::MAX_SCREENS), building each into
-// its own arena slot with slot-N trampolines, then shows the default screen
-// (settings.defaultScreen if present, else the first registered screen —
-// register_screen already auto-shows the first registered screen, so the
-// explicit show only matters when defaultScreen names a later screen or when a
-// hot-reload re-applies over an existing screen set).
+// Ordering (CLAUDE.md screen-lifecycle fix):
+//   1. PRE-VALIDATE: dry-count buildable object screens WITHOUT touching arenas
+//      or LVGL. If zero, bail BEFORE any teardown so a bad push can't blank the
+//      device (the current screen set stays live).
+//   2. reset_screens(): tear down the previous MIDL screen set FIRST. This is
+//      mandatory before rebuilding arenas: building writes into s_arenas[],
+//      which the OLD screens' refresh trampolines (midl_refresh_n<N>) alias —
+//      reset removes those screens so their trampolines never fire on the new,
+//      half-built arena data. reset_screens() parks LVGL on a blank screen so
+//      the invariant "always one active screen" holds during teardown.
+//   3. Rebuild arenas[0..n-1] fresh and register each screen.
+//   4. Show the default screen.
+//
+// Net effect: after apply_all the screen manager contains EXACTLY this doc's
+// screens, in order, each with a correct arena + trampoline. A subsequent
+// apply_all fully replaces them.
 //
 // Returns the number of screens successfully built.
 // ---------------------------------------------------------------------------
@@ -288,6 +320,23 @@ size_t apply_all(JsonVariantConst doc) {
         return 0;
     }
 
+    // --- (1) PRE-VALIDATE before any teardown. A doc that yields 0 buildable
+    // screens must NOT reset_screens() — that would blank the device. Bail and
+    // keep the current screen set live. ---
+    size_t usable = count_buildable_screens(screens);
+    if (usable == 0) {
+        net::logf("[midl-render] apply_all: 0 buildable screens; keeping current set");
+        return 0;
+    }
+
+    // --- (2) Tear down the previous MIDL screen set FIRST. Must precede arena
+    // rebuild: the old trampolines alias s_arenas[] and would fire on the
+    // half-built new data otherwise. reset_screens() parks on a blank screen so
+    // LVGL always has an active root during the teardown. ---
+    ui::reset_screens();
+    s_arena_count = 0;
+
+    // --- (3) Build the doc's screens fresh into arena slots 0..n-1. ---
     size_t built = 0;
     for (JsonVariantConst sv : screens) {
         if (built >= ui::MAX_SCREENS) {
@@ -312,7 +361,11 @@ size_t apply_all(JsonVariantConst doc) {
 
     s_arena_count = built;
     if (built == 0) {
-        net::logf("[midl-render] apply_all: no screens built");
+        // Should not happen: pre-validation found >=1 buildable screen, but a
+        // solve/build raced or failed. The old set is already gone (reset above)
+        // and LVGL is parked on the blank screen — log and return.
+        net::logf("[midl-render] apply_all: no screens built after reset (pre-validate said %u)",
+                  (unsigned)usable);
         return 0;
     }
 

@@ -112,6 +112,39 @@ bool replace_screen(const char *id, const Screen &s) {
     return false;
 }
 
+// Tiny persistent blank screen used as a "parking" root during reset_screens()
+// so LVGL always has a live active screen while we delete the dynamic roots.
+// Built once on first reset, never deleted. lv_obj_create(NULL) -> parentless
+// fullscreen object, exactly like a registered screen root.
+static lv_obj_t *s_parking_root = nullptr;
+
+void reset_screens() {
+    // Park on a persistent blank screen FIRST so the root we're about to delete
+    // is never the active screen (LVGL must always have one loaded).
+    if (!s_parking_root) {
+        s_parking_root = lv_obj_create(nullptr);
+    }
+    if (s_parking_root) {
+        lv_screen_load(s_parking_root);
+    }
+
+    // Free every eager-built root. Lazy screens (build_fn != NULL) that were
+    // never shown have root == NULL and need no free; lazy screens that WERE
+    // built cached their root and must be freed too. Guard against deleting the
+    // parking root (a registered screen could never alias it, but be defensive).
+    for (size_t i = 0; i < s_count; ++i) {
+        lv_obj_t *root = s_screens[i].root;
+        if (root && root != s_parking_root) {
+            lv_obj_delete(root);
+        }
+        s_screens[i] = Screen{};
+    }
+
+    s_count = 0;
+    s_index = 0;
+    net::logf("[ui] screens reset (parked on blank)");
+}
+
 bool set_screen_hidden(const char *id, bool hidden) {
     if (!id) return false;
     for (size_t i = 0; i < s_count; ++i) {
