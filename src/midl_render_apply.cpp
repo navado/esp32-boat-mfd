@@ -94,6 +94,14 @@ struct MidlScreenArena {
     bool live;
 };
 
+// Compile-time footprint guard (Part B): the whole arena pool is
+// ui::MAX_SCREENS * sizeof(MidlScreenArena), PSRAM-allocated. Each arena grows
+// with the spec-derived tile count, so hold the pool under the budget — a bumped
+// maxTiles that would overrun fails the BUILD, not the device.
+static_assert(
+    ui::MAX_SCREENS * sizeof(MidlScreenArena) <= midl::MIDL_ARENA_PSRAM_BUDGET,
+    "MIDL arena pool exceeds MIDL_ARENA_PSRAM_BUDGET; raise the budget or lower maxTiles");
+
 // ---------------------------------------------------------------------------
 // Per-screen arena pool. PSRAM-allocated array of ui::MAX_SCREENS (16) arenas.
 //

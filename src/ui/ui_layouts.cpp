@@ -1,6 +1,7 @@
 #include "ui_layouts.h"
 
 #include "layout.h"
+#include "midl_limits.h"  // midl::FirmwareLimits (spec-derived tile bound), budget caps
 #include "subscription_set.h"
 #include "ui_theme.h"
 #include "config_runtime.h"
@@ -2665,8 +2666,10 @@ static void update_setup_form(lv_obj_t *root, const ScreenVariantSpec &spec, con
 // lv_obj_set_user_data, matching the QuadGrid pattern.
 
 // Maximum freeform tiles per screen — mirrors the MIDL solver bound so a
-// PlacementSet can be mapped 1:1.
-static constexpr int FREEFORM_MAX_TILES = (int)layout::MAX_TILES_PER_SCREEN;  // 4
+// PlacementSet can be mapped 1:1. Spec-derived (decoupled from the legacy
+// layout::MAX_TILES_PER_SCREEN, which stays 4 to protect the layout::Config
+// size guard); see include/midl_limits.h.
+static constexpr int FREEFORM_MAX_TILES = (int)midl::FirmwareLimits::max_tiles_per_screen;
 
 // Per-tile state extends QuadGridTile with the tile's own pixel width so the
 // update path can correctly call fit_value_font() without relying on the
@@ -2681,6 +2684,13 @@ struct FreeformState {
     FreeformTile tiles[FREEFORM_MAX_TILES];
 };
 
+// Compile-time footprint guard (Part B): a per-screen FreeformState holds
+// tiles[max_tiles_per_screen], so it grows with the spec-derived tile count.
+// Keep it under the budget so a bumped maxTiles fails the BUILD, not the device.
+static_assert(
+    sizeof(FreeformState) <= midl::MIDL_FREEFORM_STATE_BUDGET,
+    "FreeformState exceeds MIDL_FREEFORM_STATE_BUDGET; raise the budget or lower maxTiles");
+
 lv_obj_t *create_freeform(lv_obj_t *parent, const ScreenVariantSpec &spec, const Rect *rects) {
     if (!spec.metrics || spec.metric_count < 1 || !rects) return nullptr;
 
@@ -2694,8 +2704,12 @@ lv_obj_t *create_freeform(lv_obj_t *parent, const ScreenVariantSpec &spec, const
     lv_obj_set_style_pad_all(root, 0, 0);
     lv_obj_clear_flag(root, LV_OBJ_FLAG_SCROLLABLE);
 
+    // PSRAM, not internal SRAM: at the spec-derived tile count (9) this struct is
+    // ~3 KB, and up to ui::MAX_SCREENS are built eagerly — keeping them in scarce
+    // internal SRAM would starve NimBLE/LVGL (the documented starvation trap, in
+    // reverse). It is read at the 5 Hz UI refresh, so PSRAM latency is irrelevant.
     FreeformState *st =
-        (FreeformState *)heap_caps_calloc(1, sizeof(FreeformState), MALLOC_CAP_INTERNAL);
+        (FreeformState *)heap_caps_calloc(1, sizeof(FreeformState), MALLOC_CAP_SPIRAM);
     if (!st) {
         net::logf("[layout] freeform alloc failed");
         return root;  // empty but valid handle
