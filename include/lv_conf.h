@@ -19,6 +19,22 @@
 #define LV_DEF_REFR_PERIOD  16
 #define LV_DPI_DEF 130
 
+// Parallel software rendering. The ST7701 panel has no 2D accelerator, so
+// every dirty area is rasterized in software; by default that runs single-
+// threaded on the lvgl_task core. Enabling the FreeRTOS OS integration lets
+// LVGL split large dirty areas across N draw units (worker tasks), using the
+// otherwise-idle second core.
+//   LV_USE_OS=FREERTOS spawns the draw-unit worker tasks; lv_timer_handler
+//   still runs on the single lvgl_task, so the "all lv_* on one task" rule is
+//   unchanged (the workers only touch draw buffers, coordinated internally).
+// HARDWARE-RISK / MUST MEASURE: each extra draw unit is a FreeRTOS task whose
+// stack is INTERNAL SRAM. The idf5+BLE build already sits at ~1 KB internal
+// low-water (see project memory) - a 2nd draw thread can tip it into the
+// WiFi/BLE-starvation reboot zone. Also competes with the core-0 touch task.
+// To revert: delete these two #defines (falls back to OS_NONE / 1 draw unit).
+#define LV_USE_OS LV_OS_FREERTOS
+#define LV_DRAW_SW_DRAW_UNIT_CNT 2
+
 #define LV_TICK_CUSTOM 0
 
 #define LV_USE_PERF_MONITOR 0
