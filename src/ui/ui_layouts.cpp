@@ -21,6 +21,7 @@
 
 #include "storage.h"
 
+#include <ctype.h>
 #include <math.h>
 #include <stdio.h>
 #include <string.h>
@@ -1472,6 +1473,317 @@ static void update(WindDialState *st, const sk::Data &d) {
 
 }  // namespace winddial
 
+// ---------------------------------------------------------------------------
+// Full-screen autopilot HUD (autopilot element on a large/full-screen leaf).
+//
+// Ported from src/ui/screen_autopilot.cpp. The legacy screen uses ~10 file-static
+// lv_obj_t* handles + a mode modal + touch/nudge wiring; here all HUD state lives
+// in a PSRAM-allocated ApHudState attached to the HUD root's user_data, so the
+// element can be instantiated more than once without file-scope state. The HUD
+// reads sk::Data directly (NOT through MetricBinding), like the legacy screen.
+//
+// Crucially this composite renders ONLY the dial + readouts + mode badge — NOT
+// the nudge buttons. A composite element can't carry per-button actions, so the
+// autopilot SCREEN is authored as a col-split: this leaf over a row of `button`
+// leaves whose action.kind=command dispatches "autopilot heading ±N" (exactly
+// like the steering / wind_steer screens). The reusable glass-cockpit parts
+// (semicircular HEADING-UP ui::build_compass, HDG/COG/CTS/AP-target
+// ui::build_marker_ring, ui::build_xte_strip, ui::numeric_tile) are shared with
+// the legacy screen; only the refresh logic is ported here. Geometry is derived
+// from the passed (w, h) of the tile rect (≈ 480x480), centered locally — NOT
+// LCD_W/LCD_H — so positions stay tile-relative.
+
+struct ApHudState {
+    lv_obj_t *root;
+    ui::Compass cp;
+    ui::XteStrip xte;
+    lv_obj_t *lbl_mode;
+    lv_obj_t *lbl_hdg_value;
+    lv_obj_t *lbl_cogsog;
+    lv_obj_t *tile_depth, *tile_speed, *tile_aws, *tile_awa;
+
+    // Dirty caches (mirror screen_autopilot.cpp's file-statics).
+    char last_mode[16];
+    uint32_t last_mode_color;
+    char last_hdg[16];
+    char last_cogsog[48];
+    char last_depth[12];
+    char last_speed[12];
+    char last_aws[12];
+    char last_awa[12];
+    int16_t last_scale_rot;
+    int last_xte_x;
+    char last_xte_txt[16];
+};
+
+namespace aphud {
+
+// Build the HUD into `parent` (the tile root) filling its w x h content area.
+// Returns a PSRAM ApHudState* (also attached to the HUD root's user_data).
+static ApHudState *build(lv_obj_t *parent, int w, int h) {
+    ApHudState *st = (ApHudState *)heap_caps_calloc(1, sizeof(ApHudState), MALLOC_CAP_SPIRAM);
+    if (!st) {
+        net::logf("[layout] ap hud alloc failed");
+        return nullptr;
+    }
+    // Sentinel-init the dirty caches (calloc gives 0; force "unset").
+    st->last_mode[0] = (char)0xFF;
+    st->last_mode_color = 0xFFFFFFFF;
+    st->last_hdg[0] = (char)0xFF;
+    st->last_cogsog[0] = (char)0xFF;
+    st->last_depth[0] = (char)0xFF;
+    st->last_speed[0] = (char)0xFF;
+    st->last_aws[0] = (char)0xFF;
+    st->last_awa[0] = (char)0xFF;
+    st->last_scale_rot = INT16_MIN;
+    st->last_xte_x = INT16_MIN;
+    st->last_xte_txt[0] = (char)0xFF;
+
+    // HUD root: transparent, borderless, no-pad container filling the tile so its
+    // local (0..w / 0..h) coordinates line up with the rect and update_* can find
+    // it by user_data. (Tile chrome is already suppressed by the caller.)
+    st->root = lv_obj_create(parent);
+    lv_obj_set_size(st->root, w, h);
+    lv_obj_set_pos(st->root, 0, 0);
+    lv_obj_set_style_bg_opa(st->root, LV_OPA_TRANSP, 0);
+    lv_obj_set_style_border_width(st->root, 0, 0);
+    lv_obj_set_style_radius(st->root, 0, 0);
+    lv_obj_set_style_pad_all(st->root, 0, 0);
+    lv_obj_clear_flag(st->root, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_add_flag(st->root, LV_OBJ_FLAG_EVENT_BUBBLE);
+    lv_obj_t *r = st->root;
+
+    // --- vertical band budget -------------------------------------------------
+    // This HUD can land in a SHORT leaf (e.g. a [4,1] col-split gives the
+    // autopilot leaf ~480x384, NOT 480x480). Lay out from the REAL `h`, never an
+    // assumed 480, and reserve explicit non-overlapping bands so nothing
+    // collides:
+    //   [ badge ][ compass region ][ COG/SOG ][ XTE ][ tile band? ]
+    // The compass radius is the slack: it gets whatever vertical space is left
+    // after the fixed bands, capped by width. On a short leaf the secondary
+    // numeric tiles are dropped so the dial + HDG + COG/SOG + XTE stay legible.
+    const int top_bar_h = 44;  // top mode badge
+    const int cogsog_h = 28;   // COG/SOG sub-line strip (own reserved band)
+    const int xte_h = 44;      // cross-track-error strip
+    const int gap = 8;
+    const int n = 4;
+    const int sq = (w - gap * (n + 1)) / n;  // numeric-tile square side
+    const int tile_band_h = sq + gap;        // tiles + bottom gap
+    // Drop the secondary numeric tiles when the leaf is too short to fit them
+    // under the dial+COG/SOG+XTE without squeezing. The steering essentials
+    // (compass, HDG, COG/SOG, XTE) take priority on a short autopilot leaf.
+    const bool show_tiles = (h >= 440);
+    const int reserved_below = cogsog_h + xte_h + (show_tiles ? tile_band_h : 0);
+
+    // --- mode badge (top-mid) ---
+    st->lbl_mode = lv_label_create(r);
+    lv_label_set_text(st->lbl_mode, "STANDBY");
+    lv_obj_set_style_text_font(st->lbl_mode, &lv_font_montserrat_20, 0);
+    lv_obj_set_style_text_color(st->lbl_mode, lv_color_hex(theme.fg_dim), 0);
+    lv_obj_align(st->lbl_mode, LV_ALIGN_TOP_MID, 0, 8);
+
+    // --- semicircular HEADING-UP compass (rotating scale by -heading) ---
+    // Compass region height = h - badge - everything reserved below it. Then
+    // derive the dial WIDTH that yields that region height: build_compass gives
+    // cp.h = r + 24 and r = cw/2 - 8, so cw = 2*(region_h - 24 + 8). Cap cw by
+    // the leaf width (never exceed w - 32) so wide-but-short leaves stay
+    // width-bound, and floor the region so a tiny leaf still draws a usable arc.
+    int coy = top_bar_h;
+    int region_h = h - top_bar_h - reserved_below;
+    if (region_h < 120) region_h = 120;
+    int cw_fit = 2 * (region_h - 24 + 8);  // width that makes cp.h == region_h
+    int cw = w - 32;
+    if (cw_fit < cw) cw = cw_fit;
+    if (cw < 120) cw = 120;
+    int cox = (w - cw) / 2;
+    st->cp = ui::build_compass(r, cox, coy, cw);
+    int scx = cox + st->cp.cx;
+    int scy = coy + st->cp.cy;
+    int compass_bottom = coy + st->cp.h;  // baseline of the compass region
+
+    // --- center readouts (over the dial face) ---
+    lv_obj_t *cap = lv_label_create(r);
+    lv_label_set_text(cap, "HDG");
+    lv_obj_set_style_text_font(cap, &lv_font_montserrat_20, 0);
+    lv_obj_set_style_text_color(cap, lv_color_hex(theme.fg_dim), 0);
+    lv_obj_set_style_text_align(cap, LV_TEXT_ALIGN_CENTER, 0);
+    lv_obj_set_width(cap, 120);
+    lv_obj_set_pos(cap, scx - 60, scy - st->cp.r / 2 - 30);
+
+    st->lbl_hdg_value = lv_label_create(r);
+    lv_label_set_text(st->lbl_hdg_value, "--\xC2\xB0");
+    lv_obj_set_style_text_font(st->lbl_hdg_value, &font_xl_64, 0);
+    lv_obj_set_style_text_color(st->lbl_hdg_value, lv_color_hex(theme.fg), 0);
+    lv_obj_set_style_text_align(st->lbl_hdg_value, LV_TEXT_ALIGN_CENTER, 0);
+    lv_obj_set_width(st->lbl_hdg_value, 240);
+    lv_obj_set_pos(st->lbl_hdg_value, scx - 120, scy - st->cp.r / 2 + 2);
+
+    // COG/SOG sub-line: its OWN reserved strip directly under the compass
+    // baseline (not floating over the dial face at scy), so it never overlaps the
+    // XTE strip or the tile band below it.
+    int cogsog_y = compass_bottom + (cogsog_h - 20) / 2;  // vertically centre the 20px font
+    st->lbl_cogsog = lv_label_create(r);
+    lv_label_set_text(st->lbl_cogsog, "COG --\xC2\xB0  |  SOG -- kn");
+    lv_obj_set_style_text_font(st->lbl_cogsog, &lv_font_montserrat_20, 0);
+    lv_obj_set_style_text_color(st->lbl_cogsog, lv_color_hex(theme.fg_dim), 0);
+    lv_obj_set_style_text_align(st->lbl_cogsog, LV_TEXT_ALIGN_CENTER, 0);
+    lv_obj_set_width(st->lbl_cogsog, w);
+    lv_obj_set_pos(st->lbl_cogsog, 0, cogsog_y);
+
+    // --- HDG/COG/CTS + AP-target marker ring ---
+    // Built on the HUD root (NOT the compass root, which is sized exactly to the
+    // dial and would clip glyphs orbiting its top/sides), centered at the
+    // compass's HUD-local center (scx, scy). The reference is HDG (heading-up),
+    // so the HDG marker rides at offset 0 under the red lubber. occlude_lower
+    // hides the bottom half (it would overlap the XTE strip / tiles). Built AFTER
+    // the center readouts so it draws on top. glyph/filled/color are baked here;
+    // bearings fill in update.
+    ui::MarkerSpec ap_markers[4] = {
+        {NAN, ui::Glyph::Triangle, true, theme.accent},  // HDG (under the red lubber at offset 0)
+        {NAN, ui::Glyph::Triangle, false, theme.good},   // COG
+        {NAN, ui::Glyph::Diamond, true, theme.alarm},    // CTS
+        {NAN, ui::Glyph::Diamond, true, theme.warn},     // AP target (amber bug), hidden until set
+    };
+    st->cp.markers = ui::build_marker_ring(r, scx, scy, st->cp.r - ui::kSemiMarkerInset, ap_markers,
+                                           4, /*occlude_lower=*/true);
+
+    // --- XTE strip: its own band directly under the COG/SOG strip ---
+    int xte_y = compass_bottom + cogsog_h;
+    st->xte = ui::build_xte_strip(r, 16, xte_y, w - 32, xte_h);
+
+    // --- numeric tiles (square, pinned to the bottom) ---
+    // Dropped entirely on a short leaf (show_tiles == false): the compass + HDG +
+    // COG/SOG + XTE are the steering priority, and squeezing 4 tiles under them
+    // would collide. The pointers stay NULL (calloc) and update() is null-safe.
+    if (show_tiles) {
+        const lv_font_t *tv = &lv_font_montserrat_38;
+        int ty = h - sq - gap;  // bottom row, below the XTE band
+        st->tile_depth = ui::numeric_tile(r, gap, ty, sq, sq, "DEPTH", "m", tv, theme.fg);
+        st->tile_speed = ui::numeric_tile(r, gap * 2 + sq, ty, sq, sq, "STW", "kn", tv, theme.fg);
+        st->tile_aws =
+            ui::numeric_tile(r, gap * 3 + sq * 2, ty, sq, sq, "AWS", "kn", tv, theme.warn);
+        st->tile_awa = ui::numeric_tile(r, gap * 4 + sq * 3, ty, sq, sq, "AWA", "", tv, theme.fg);
+    }
+
+    lv_obj_set_user_data(st->root, st);
+    return st;
+}
+
+static void update(ApHudState *st, const sk::Data &d) {
+    if (!st) return;
+    char buf[64];
+
+    bool engaged = d.apState[0] && strcmp(d.apState, "standby") != 0;
+
+    // Mode badge: uppercased apState; theme.good when engaged else fg_dim.
+    if (d.apState[0]) {
+        char up[16];
+        size_t i = 0;
+        for (; d.apState[i] && i < sizeof(up) - 1; ++i)
+            up[i] = toupper((unsigned char)d.apState[i]);
+        up[i] = 0;
+        ui::set_text_if_changed(st->lbl_mode, st->last_mode, sizeof(st->last_mode), up);
+    } else {
+        ui::set_text_if_changed(st->lbl_mode, st->last_mode, sizeof(st->last_mode), "OFFLINE");
+    }
+    ui::set_text_color_if_changed(st->lbl_mode, &st->last_mode_color,
+                                  engaged ? theme.good : theme.fg_dim);
+
+    // Heading: big value + rotate the compass tick ring by -heading and
+    // reposition the upright degree labels to match (north-up when no heading).
+    double hdg_deg = NAN;
+    if (!isnan(d.headingTrue)) {
+        hdg_deg = rad_to_deg_pos(d.headingTrue);
+        snprintf(buf, sizeof(buf), "%.1f\xC2\xB0", hdg_deg);
+        ui::set_text_if_changed(st->lbl_hdg_value, st->last_hdg, sizeof(st->last_hdg), buf);
+    } else {
+        ui::set_text_if_changed(st->lbl_hdg_value, st->last_hdg, sizeof(st->last_hdg),
+                                "--\xC2\xB0");
+    }
+    double label_hdg = isnan(hdg_deg) ? 0.0 : hdg_deg;
+    int16_t scale_rot = winddial::deg_to_lvgl(-label_hdg);
+    if (scale_rot != st->last_scale_rot) {
+        st->last_scale_rot = scale_rot;
+        lv_obj_set_style_transform_rotation(st->cp.scale, scale_rot, 0);
+        ui::compass_layout_labels(st->cp, label_hdg);
+    }
+
+    // Marker ring: HDG/COG/CTS + AP target. Reference is HDG (heading-up, matching
+    // the rotating scale), so the HDG marker rides at offset 0 under the lubber.
+    // The target uses the AP's reported target heading; NaN hides any marker.
+    double hdg_b = hdg_deg;
+    double cog_b = isnan(d.cogTrue) ? NAN : rad_to_deg_pos(d.cogTrue);
+    double cts_b = isnan(d.cts) ? NAN : rad_to_deg_pos(d.cts);
+    double tgt_b = isnan(d.apTargetHdg) ? NAN : rad_to_deg_pos(d.apTargetHdg);
+    ui::MarkerSpec live[4] = {
+        {hdg_b, ui::Glyph::Triangle, true, theme.accent},
+        {cog_b, ui::Glyph::Triangle, false, theme.good},
+        {cts_b, ui::Glyph::Diamond, true, theme.alarm},
+        {tgt_b, ui::Glyph::Diamond, true, theme.warn},
+    };
+    double ref = isnan(hdg_b) ? 0.0 : hdg_b;
+    ui::marker_ring_update(st->cp.markers, live, 4, ref);
+
+    // COG / SOG sub-line.
+    char cogs[16], sogs[16];
+    if (!isnan(d.cogTrue))
+        snprintf(cogs, sizeof(cogs), "%03.0f\xC2\xB0", rad_to_deg_pos(d.cogTrue));
+    else
+        snprintf(cogs, sizeof(cogs), "--\xC2\xB0");
+    if (!isnan(d.sog))
+        snprintf(sogs, sizeof(sogs), "%.1f kn", mps_to_kn(d.sog));
+    else
+        snprintf(sogs, sizeof(sogs), "-- kn");
+    snprintf(buf, sizeof(buf), "COG %s  |  SOG %s", cogs, sogs);
+    ui::set_text_if_changed(st->lbl_cogsog, st->last_cogsog, sizeof(st->last_cogsog), buf);
+
+    // XTE needle (cross-track error). Clamp to +/-1.0 nm full-scale.
+    if (!isnan(d.xte)) {
+        double nm = d.xte / 1852.0;
+        if (nm > 1.0) nm = 1.0;
+        if (nm < -1.0) nm = -1.0;
+        int nx = st->xte.center_x + (int)(nm * st->xte.half_px) - 1;
+        if (nx != st->last_xte_x) {
+            st->last_xte_x = nx;
+            lv_obj_set_x(st->xte.needle, nx);
+        }
+    }
+    if (st->xte.value) {
+        char xbuf[16];
+        ui::format_xte(d.xte, xbuf, sizeof(xbuf));
+        ui::set_text_if_changed(st->xte.value, st->last_xte_txt, sizeof(st->last_xte_txt), xbuf);
+    }
+
+    // Bottom tiles: DEPTH / STW / AWS / AWA.
+    {
+        vfmt::format_scaled(d.depth, config::format().depth, buf, sizeof(buf));
+        ui::set_text_if_changed(st->tile_depth, st->last_depth, sizeof(st->last_depth), buf);
+    }
+    if (!isnan(d.stw)) {
+        snprintf(buf, sizeof(buf), "%.1f", mps_to_kn(d.stw));
+        ui::set_text_if_changed(st->tile_speed, st->last_speed, sizeof(st->last_speed), buf);
+    } else {
+        ui::set_text_if_changed(st->tile_speed, st->last_speed, sizeof(st->last_speed), "--");
+    }
+    if (!isnan(d.aws)) {
+        snprintf(buf, sizeof(buf), "%.1f", mps_to_kn(d.aws));
+        ui::set_text_if_changed(st->tile_aws, st->last_aws, sizeof(st->last_aws), buf);
+    } else {
+        ui::set_text_if_changed(st->tile_aws, st->last_aws, sizeof(st->last_aws), "--");
+    }
+    if (!isnan(d.awa)) {
+        double deg = rad_to_deg_pos(d.awa);
+        bool starboard = deg <= 180.0;
+        double mag = starboard ? deg : 360.0 - deg;
+        snprintf(buf, sizeof(buf), "%.0f%c", mag, starboard ? 'S' : 'P');
+        ui::set_text_if_changed(st->tile_awa, st->last_awa, sizeof(st->last_awa), buf);
+    } else {
+        ui::set_text_if_changed(st->tile_awa, st->last_awa, sizeof(st->last_awa), "--");
+    }
+}
+
+}  // namespace aphud
+
 // Wind rose: dashed warn ring with center AWS value. Mirrors editor
 // .wpreview .rose - small visual stand-in; the fullscreen wind dial
 // (screen_wind.cpp) is the high-fidelity render.
@@ -1483,6 +1795,14 @@ static void update(WindDialState *st, const sk::Data &d) {
 // The height floor (300) is well above any multi-tile cell yet below the
 // wind_steer dial region, so only genuinely large rects get the dial.
 static inline bool windrose_is_fullscreen(int w, int h) {
+    return w >= 400 && h >= 300;
+}
+
+// Full-screen detection for the autopilot HUD: a single autopilot leaf over a
+// nudge-button row (col-split [4,1]) lands ≈ 480x384 for the leaf — the same
+// large-rect threshold as the wind dial. Below this (gallery 3x3 ≈ 150x130) the
+// element keeps its small state-pill + nudge-row stand-in.
+static inline bool autopilot_is_fullscreen(int w, int h) {
     return w >= 400 && h >= 300;
 }
 
@@ -1594,7 +1914,23 @@ static void paint_button_body(QuadGridTile &t, const MetricBinding &m, int /*w*/
 
 // Autopilot widget: state pill (green) + target text + 4 nudge buttons row.
 // Mirrors editor .wpreview .ap.
-static void paint_autopilot_body(QuadGridTile &t, const MetricBinding & /*m*/, int w, int /*h*/) {
+static void paint_autopilot_body(QuadGridTile &t, const MetricBinding & /*m*/, int w, int h) {
+    // Full-screen autopilot leaf → the high-fidelity HUD (semicircular heading-up
+    // compass, HDG/COG/CTS/AP-target marker ring, XTE strip, numeric tiles). The
+    // HUD reads sk::Data directly (no MIDL binding). t.aux holds the HUD root,
+    // whose user_data is the ApHudState the update path retrieves; the
+    // last_aux_pct == -2 sentinel marks "full HUD" (stand-in leaves it -1). Nudge
+    // buttons are authored as sibling button leaves, NOT drawn here.
+    if (autopilot_is_fullscreen(w, h)) {
+        ApHudState *st = aphud::build(t.root, w, h);
+        if (st) {
+            t.aux = st->root;
+            t.last_aux_pct = -2;
+            return;
+        }
+        // Fall through to the stand-in if the PSRAM alloc failed.
+    }
+
     // State pill.
     lv_obj_t *pill = lv_obj_create(t.root);
     lv_obj_set_size(pill, w - 32, 26);
@@ -1659,12 +1995,14 @@ static QuadGridTile build_tile(lv_obj_t *parent, int x, int y, int w, int h,
     for (int i = 0; i < 4; ++i)
         strncpy(t.last_extras[i], "\xFF", sizeof(t.last_extras[0]));
 
-    // A full-screen windrose renders the high-fidelity dial, which draws its own
-    // rim/face and fills the whole rect — the glass-cockpit panel border + top-left
-    // cap would frame it and clip the rotating bezel. Suppress the chrome: a
-    // borderless, padless, background-only root with no caption, so the dial fills
-    // the tile and its local (0..w / 0..h) coordinates line up with the rect.
-    bool fullscreen_dial = (m.kind == WidgetKind::WindRose) && windrose_is_fullscreen(w, h);
+    // A full-screen windrose / autopilot leaf renders a high-fidelity composite
+    // that draws its own rim/face/labels and fills the whole rect — the
+    // glass-cockpit panel border + top-left cap would frame it and clip the
+    // rotating bezel/scale. Suppress the chrome: a borderless, padless,
+    // background-only root with no caption, so the composite fills the tile and
+    // its local (0..w / 0..h) coordinates line up with the rect.
+    bool fullscreen_dial = ((m.kind == WidgetKind::WindRose) && windrose_is_fullscreen(w, h)) ||
+                           ((m.kind == WidgetKind::Autopilot) && autopilot_is_fullscreen(w, h));
 
     // --- Chrome: glass-cockpit panel (gradient + border via style_panel) ---
     // No left accent rail (dropped per design feedback); semantic color lives
@@ -1849,6 +2187,13 @@ static void update_quad_grid(lv_obj_t *root, const ScreenVariantSpec &spec, cons
             break;
         }
         case WidgetKind::Autopilot:
+            // Full-screen HUD: drives all of its own widgets from sk::Data directly
+            // (last_aux_pct == -2 sentinel set by paint_autopilot_body). Skips the
+            // stand-in pill/target text path entirely.
+            if (t.last_aux_pct == -2) {
+                if (t.aux) aphud::update((ApHudState *)lv_obj_get_user_data(t.aux), data);
+                break;
+            }
             ui::set_text_if_changed(t.value, t.last_value, sizeof(t.last_value), pri);
             if (t.secondary) {
                 char tgt[24];
@@ -3442,6 +3787,13 @@ void update_freeform(lv_obj_t *root, const ScreenVariantSpec &spec, const sk::Da
             break;
         }
         case WidgetKind::Autopilot:
+            // Full-screen HUD: drives its own widgets from sk::Data
+            // (last_aux_pct == -2 sentinel set by paint_autopilot_body). This is
+            // the freeform path that a single autopilot leaf hits.
+            if (t.last_aux_pct == -2) {
+                if (t.aux) aphud::update((ApHudState *)lv_obj_get_user_data(t.aux), data);
+                break;
+            }
             ui::set_text_if_changed(t.value, t.last_value, sizeof(t.last_value), pri);
             if (t.secondary) {
                 char tgt[24];

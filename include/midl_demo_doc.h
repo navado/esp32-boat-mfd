@@ -55,6 +55,15 @@ inline constexpr const char *SQUARE_480_JSON = R"midl({
       "layout":{"flow":"col","weights":[3,1],"children":[
         {"element":"wind"},
         {"flow":"row","children":[{"element":"n10"},{"element":"n1"},{"element":"p1"},{"element":"p10"}]}]}},
+    {"id":"autopilot","title":"Autopilot","elements":{
+      "ap":{"type":"autopilot","name":"PILOT","bindings":{"value":{"kind":"signalk","path":"steering.autopilot.state"}}},
+      "n10":{"type":"button","name":"-10","action":{"kind":"command","target":"autopilot heading -10"}},
+      "n1":{"type":"button","name":"-1","action":{"kind":"command","target":"autopilot heading -1"}},
+      "p1":{"type":"button","name":"+1","action":{"kind":"command","target":"autopilot heading 1"}},
+      "p10":{"type":"button","name":"+10","action":{"kind":"command","target":"autopilot heading 10"}}},
+      "layout":{"flow":"col","weights":[4,1],"children":[
+        {"element":"ap"},
+        {"flow":"row","children":[{"element":"n10"},{"element":"n1"},{"element":"p1"},{"element":"p10"}]}]}},
     {"id":"route","title":"Route","elements":{
       "dtw":{"type":"single-value","name":"DTW","format":{"unit":"nm"},"style":{"color":"#57c7d8"},"bindings":{"value":{"kind":"signalk","path":"navigation.courseRhumbline.nextPoint.distance"}}},
       "btw":{"type":"single-value","name":"BTW","format":{"unit":"deg"},"style":{"color":"#39d98a"},"bindings":{"value":{"kind":"signalk","path":"navigation.courseRhumbline.nextPoint.bearingTrue"}}},
