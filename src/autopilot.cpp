@@ -160,6 +160,48 @@ Result adjust_heading_deg(int delta) {
     return Result::Failed;
 }
 
+// Clamp a maneuver turn to one PUT's worth: adjust_heading_deg rejects
+// |delta| > 90 (InvalidPayload), so a turn that exceeds a quadrant is capped
+// here and a second tap completes the mirror. Mirrors the legacy
+// src/ui/screen_wind_steer.cpp clamp_delta().
+static int clamp_maneuver(int d) {
+    if (d > 90) return 90;
+    if (d < -90) return -90;
+    return d;
+}
+
+// TACK: reflect the boat across the wind onto the opposite tack. Reflecting the
+// true wind angle through 0 means turning by -2*TWA (TWA normalized to
+// [-180,180]). GYBE: turn the short way through dead-downwind, reflecting |TWA|
+// through 180. Both port the maths from the legacy wind-steer screen and PUT the
+// new target via the same adjustHeading path the heading-nudge command uses.
+// Reads boat::View (current_view) on the calling task; no large stack scratch.
+Result tack() {
+    boat::View d;
+    boat::current_view(d);
+    if (isnan(d.twa)) return Result::InvalidPayload;
+    double twa_deg = d.twa * 180.0 / M_PI;
+    while (twa_deg > 180.0)
+        twa_deg -= 360.0;
+    while (twa_deg < -180.0)
+        twa_deg += 360.0;
+    return adjust_heading_deg(clamp_maneuver((int)lround(-2.0 * twa_deg)));
+}
+
+Result gybe() {
+    boat::View d;
+    boat::current_view(d);
+    if (isnan(d.twa)) return Result::InvalidPayload;
+    double twa_deg = d.twa * 180.0 / M_PI;
+    while (twa_deg > 180.0)
+        twa_deg -= 360.0;
+    while (twa_deg < -180.0)
+        twa_deg += 360.0;
+    int delta =
+        twa_deg >= 0 ? (int)lround(2.0 * (180.0 - twa_deg)) : (int)lround(-2.0 * (180.0 + twa_deg));
+    return adjust_heading_deg(clamp_maneuver(delta));
+}
+
 Result silence_alarm() {
     switch (s_default_backend) {
     case Backend::SignalK:
@@ -206,6 +248,16 @@ bool handleSerialCommand(const String &line) {
         net::logf("[ap] adjust(%+d deg) -> %s", delta, result_name(r));
         return true;
     }
+    if (line == "autopilot tack") {
+        Result r = tack();
+        net::logf("[ap] tack -> %s", result_name(r));
+        return true;
+    }
+    if (line == "autopilot gybe") {
+        Result r = gybe();
+        net::logf("[ap] gybe -> %s", result_name(r));
+        return true;
+    }
     if (line == "autopilot silence") {
         Result r = silence_alarm();
         net::logf("[ap] silence -> %s", result_name(r));
@@ -223,7 +275,8 @@ bool handleSerialCommand(const String &line) {
         }
         return true;
     }
-    net::logf("[ap] usage: autopilot [status|mode <m>|heading <delta>|silence|backend <b>]");
+    net::logf(
+        "[ap] usage: autopilot [status|mode <m>|heading <delta>|tack|gybe|silence|backend <b>]");
     return true;
 }
 

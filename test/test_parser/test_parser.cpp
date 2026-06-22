@@ -194,15 +194,31 @@ static void test_parses_rudder_angle() {
 }
 
 static void test_parses_vmg_performance_path() {
-    // The live SignalK/sim publishes performance.velocityMadeGood (not the
-    // courseRhumbline alias); both must populate vmg.
+    // performance.velocityMadeGood is the WIND/polar VMG — a DISTINCT metric from
+    // the waypoint VMG (navigation.courseRhumbline.velocityMadeGood). It must land
+    // on vmgWind and NOT touch the route vmg field.
     View d;
     const char *j = "{\"updates\":[{\"values\":["
                     "{\"path\":\"performance.velocityMadeGood\",\"value\":-1.83}"
                     "]}]}";
     int n = sk::applyDelta(j, strlen(j), d);
     TEST_ASSERT_EQUAL(1, n);
-    TEST_ASSERT_FLOAT_WITHIN(0.001, -1.83, d.vmg);
+    TEST_ASSERT_FLOAT_WITHIN(0.001, -1.83, d.vmgWind);
+    TEST_ASSERT_TRUE(isnan(d.vmg));  // route VMG untouched by the performance path
+}
+
+static void test_vmg_split_distinct_fields() {
+    // The waypoint VMG and the wind VMG are two distinct readouts: the route
+    // path -> vmg, the performance path -> vmgWind, in a single delta.
+    View d;
+    const char *j = "{\"updates\":[{\"values\":["
+                    "{\"path\":\"navigation.courseRhumbline.velocityMadeGood\",\"value\":4.2},"
+                    "{\"path\":\"performance.velocityMadeGood\",\"value\":2.7}"
+                    "]}]}";
+    int n = sk::applyDelta(j, strlen(j), d);
+    TEST_ASSERT_EQUAL(2, n);
+    TEST_ASSERT_FLOAT_WITHIN(0.001, 4.2, d.vmg);      // waypoint VMG
+    TEST_ASSERT_FLOAT_WITHIN(0.001, 2.7, d.vmgWind);  // wind/polar VMG
 }
 
 static void test_parses_current() {
@@ -374,6 +390,7 @@ int main(int, char **) {
     RUN_TEST(test_parses_autopilot_state_and_target);
     RUN_TEST(test_parses_rudder_angle);
     RUN_TEST(test_parses_vmg_performance_path);
+    RUN_TEST(test_vmg_split_distinct_fields);
     RUN_TEST(test_parses_current);
     RUN_TEST(test_great_circle_aliases_route);
     RUN_TEST(test_apstate_truncates_safely);

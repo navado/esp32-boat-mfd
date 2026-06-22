@@ -85,8 +85,13 @@ void applyValue(const char *path, JsonVariant val, boat::View &out) {
                strcmp(path, "navigation.courseGreatCircle.nextPoint.distance") == 0) {
         out.dtw = asDouble(val, out.dtw);
     } else if (strcmp(path, "navigation.courseRhumbline.velocityMadeGood") == 0 ||
-               strcmp(path, "performance.velocityMadeGood") == 0) {
+               strcmp(path, "navigation.courseGreatCircle.velocityMadeGood") == 0) {
+        // VMG toward the next waypoint (route VMG). Kept on `vmg`.
         out.vmg = asDouble(val, out.vmg);
+    } else if (strcmp(path, "performance.velocityMadeGood") == 0) {
+        // Wind/polar VMG (made good to windward) — a DISTINCT metric from the
+        // waypoint VMG above; surfaced on its own field/readout.
+        out.vmgWind = asDouble(val, out.vmgWind);
     } else if (strcmp(path, "performance.beatAngle") == 0) {
         out.beatAngle = asDouble(val, out.beatAngle);
     } else if (strcmp(path, "performance.gybeAngle") == 0) {

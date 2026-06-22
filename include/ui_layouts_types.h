@@ -51,7 +51,10 @@ enum class MetricSource : uint8_t {
     Rudder_deg,  // rad_to_deg of d.rudder, signed with port/stbd helm suffix
     Position,    // formatted to current pos_format
     APState,
-    STW_kn,  // mps_to_kn(d.stw) — appended (keep ordinals stable for any persisted configs)
+    STW_kn,      // mps_to_kn(d.stw) — appended (keep ordinals stable for any persisted configs)
+    VMGwind_kn,  // mps_to_kn(d.vmgWind) — wind/polar VMG (performance.velocityMadeGood).
+                 // VMG_kn stays = route/waypoint VMG (navigation.courseRhumbline.velocityMadeGood).
+                 // APPEND-ONLY: keep last so existing persisted configs/ordinals are stable.
 };
 
 // Optional extra row beneath the primary value (multi-value tiles).

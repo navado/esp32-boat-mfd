@@ -45,6 +45,7 @@ void compose(View &out, uint32_t now_ms) {
     out.btw = v(s.btw_rad);
     out.dtw = v(s.dtw_m);
     out.vmg = v(s.vmg_mps);
+    out.vmgWind = v(s.vmg_wind_mps);
     out.rudder = v(s.rudder_angle_rad);
     out.apTargetHdg = v(s.autopilot_target_rad);
     out.currentSetTrue = v(s.current_set_rad);
@@ -89,6 +90,7 @@ int ingest_signalk(const View &v, uint32_t now_ms) {
     n += pub(&Snapshot::btw_rad, now_ms, v.btw);
     n += pub(&Snapshot::dtw_m, now_ms, v.dtw);
     n += pub(&Snapshot::vmg_mps, now_ms, v.vmg);
+    n += pub(&Snapshot::vmg_wind_mps, now_ms, v.vmgWind);
     n += pub(&Snapshot::rudder_angle_rad, now_ms, v.rudder);
     n += pub(&Snapshot::autopilot_target_rad, now_ms, v.apTargetHdg);
     n += pub(&Snapshot::current_set_rad, now_ms, v.currentSetTrue);

@@ -94,6 +94,12 @@ Result set_mode(Mode) {
 Result adjust_heading_deg(int) {
     return Result::Ok;
 }
+Result tack() {
+    return Result::Ok;
+}
+Result gybe() {
+    return Result::Ok;
+}
 Result silence_alarm() {
     return Result::Ok;
 }

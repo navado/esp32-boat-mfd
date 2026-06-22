@@ -477,7 +477,8 @@ static void handle_sk_data() {
     put_double(route, "cts", d.cts);
     put_double(route, "btw", d.btw);
     put_double(route, "dtw", d.dtw);
-    put_double(route, "vmg", d.vmg);
+    put_double(route, "vmg", d.vmg);          // VMG to next waypoint
+    put_double(route, "vmgWind", d.vmgWind);  // wind/polar VMG
 
     JsonObject ap = doc["autopilot"].to<JsonObject>();
     put_double(ap, "target", d.apTargetHdg);

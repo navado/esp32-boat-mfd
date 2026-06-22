@@ -95,6 +95,12 @@ void set_default_backend(Backend b);
 void copy_state(State &out);
 Result set_mode(Mode m);
 Result adjust_heading_deg(int delta);
+// Maneuver commands: compute a heading delta from the live true-wind angle
+// (boat::View.twa) and PUT it via adjust_heading_deg. tack() reflects across the
+// wind (turn -2*TWA); gybe() turns through dead-downwind. Both clamp to one
+// PUT's worth (±90°). Return InvalidPayload when TWA is unavailable.
+Result tack();
+Result gybe();
 Result silence_alarm();
 void setup();
 

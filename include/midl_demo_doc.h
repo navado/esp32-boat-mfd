@@ -51,10 +51,12 @@ inline constexpr const char *SQUARE_480_JSON = R"midl({
       "n10":{"type":"button","name":"-10","action":{"kind":"command","target":"autopilot heading -10"}},
       "n1":{"type":"button","name":"-1","action":{"kind":"command","target":"autopilot heading -1"}},
       "p1":{"type":"button","name":"+1","action":{"kind":"command","target":"autopilot heading 1"}},
-      "p10":{"type":"button","name":"+10","action":{"kind":"command","target":"autopilot heading 10"}}},
+      "p10":{"type":"button","name":"+10","action":{"kind":"command","target":"autopilot heading 10"}},
+      "tack":{"type":"button","name":"TACK","action":{"kind":"command","target":"autopilot tack"}},
+      "gybe":{"type":"button","name":"GYBE","action":{"kind":"command","target":"autopilot gybe"}}},
       "layout":{"flow":"col","weights":[3,1],"children":[
         {"element":"wind"},
-        {"flow":"row","children":[{"element":"n10"},{"element":"n1"},{"element":"p1"},{"element":"p10"}]}]}},
+        {"flow":"row","children":[{"element":"n10"},{"element":"n1"},{"element":"p1"},{"element":"p10"},{"element":"tack"},{"element":"gybe"}]}]}},
     {"id":"autopilot","title":"Autopilot","elements":{
       "ap":{"type":"autopilot","name":"PILOT","bindings":{"value":{"kind":"signalk","path":"steering.autopilot.state"}}},
       "n10":{"type":"button","name":"-10","action":{"kind":"command","target":"autopilot heading -10"}},

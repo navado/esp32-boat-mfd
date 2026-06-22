@@ -68,7 +68,8 @@ struct Snapshot {
     Field cts_rad;
     Field btw_rad;
     Field dtw_m;
-    Field vmg_mps;
+    Field vmg_mps;       // VMG to the next waypoint (navigation.courseRhumbline.velocityMadeGood)
+    Field vmg_wind_mps;  // wind/polar VMG (performance.velocityMadeGood)
 
     // steering
     Field rudder_angle_rad;
@@ -181,11 +182,12 @@ struct View {
     double tankWater = NAN;    // 0..1
 
     // routing / steering
-    double xte = NAN;          // cross-track error, m (+ = right of track)
-    double cts = NAN;          // course to steer, rad
-    double btw = NAN;          // bearing to waypoint, rad
-    double dtw = NAN;          // distance to waypoint, m
-    double vmg = NAN;          // velocity made good, m/s
+    double xte = NAN;  // cross-track error, m (+ = right of track)
+    double cts = NAN;  // course to steer, rad
+    double btw = NAN;  // bearing to waypoint, rad
+    double dtw = NAN;  // distance to waypoint, m
+    double vmg = NAN;  // VMG to next waypoint, m/s (navigation.courseRhumbline.velocityMadeGood)
+    double vmgWind = NAN;      // wind/polar VMG, m/s (performance.velocityMadeGood)
     double apTargetHdg = NAN;  // autopilot target heading, rad
     double rudder = NAN;       // rudder angle, rad (+ = starboard helm)
     char apState[16] = {0};    // autopilot state string

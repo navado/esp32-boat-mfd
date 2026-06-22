@@ -112,6 +112,8 @@ const char *source_to_path(MetricSource s) {
         return "navigation.courseRhumbline.crossTrackError";
     case MetricSource::VMG_kn:
         return "navigation.courseRhumbline.velocityMadeGood";
+    case MetricSource::VMGwind_kn:
+        return "performance.velocityMadeGood";
     case MetricSource::Rudder_deg:
         return "steering.rudderAngle";
     case MetricSource::Position:
@@ -162,6 +164,13 @@ void collect_paths(const ScreenVariantSpec &spec, sk::SubscriptionSet &out) {
             out.add("navigation.headingTrue");
             out.add("navigation.courseOverGroundTrue");
             out.add("navigation.courseRhumbline.bearingTrackTrue");
+            // Steering tile band + rudder bar + engage chip read these directly.
+            out.add("navigation.speedOverGround");
+            out.add("navigation.speedThroughWater");
+            out.add("navigation.courseRhumbline.velocityMadeGood");
+            out.add("performance.velocityMadeGood");
+            out.add("steering.rudderAngle");
+            out.add("steering.autopilot.state");
             break;
         case WidgetKind::Autopilot:
             out.add("navigation.headingTrue");
@@ -325,6 +334,9 @@ static void format_metric(const MetricBinding &m, const boat::View &d, char *pri
     case MetricSource::VMG_kn:
         vfmt::format_scaled(mps_to_kn(d.vmg), s_fmt.speed, primary, pcap);
         break;
+    case MetricSource::VMGwind_kn:
+        vfmt::format_scaled(mps_to_kn(d.vmgWind), s_fmt.speed, primary, pcap);
+        break;
     case MetricSource::Rudder_deg:
         // Rudder angle: magnitude in degrees + port/starboard helm suffix
         // (+ve steering.rudderAngle = starboard). Centered "0" reads bare.
@@ -453,6 +465,8 @@ static double metric_scalar(const MetricBinding &m, const boat::View &d) {
         return isnan(d.battSoc) ? NAN : d.battSoc * 100.0;
     case MetricSource::VMG_kn:
         return isnan(d.vmg) ? NAN : mps_to_kn(d.vmg);
+    case MetricSource::VMGwind_kn:
+        return isnan(d.vmgWind) ? NAN : mps_to_kn(d.vmgWind);
     case MetricSource::COG_deg:
         return isnan(d.cogTrue) ? NAN : rad_to_deg_pos(d.cogTrue);
     case MetricSource::HDG_deg:
@@ -553,6 +567,7 @@ static double scalar_unit_fraction(MetricSource src, double v) {
     case MetricSource::STW_kn:
         return clamp01(v / 15.0);
     case MetricSource::VMG_kn:
+    case MetricSource::VMGwind_kn:
         return clamp01(v / 15.0);
     case MetricSource::WaterTemp_C:
         return clamp01((v - 5.0) / (30.0 - 5.0));
@@ -2261,15 +2276,27 @@ struct WindSteerState {
     lv_obj_t *lbl_sub;  // "TWA <mag>°S/P | TWD <ddd>°"
     // Layline sector arcs on the compass band.
     lv_obj_t *nogo, *target_a, *target_b;
-    lv_obj_t *tile_aws, *tile_awa, *tile_tws, *tile_twa;
+    // Steering tile band: SOG / STW / VMG-wpt / VMG-wind.
+    lv_obj_t *tile_sog, *tile_stw, *tile_vmg, *tile_vmgw;
+    // Center-zero RUDDER strip (PORT..STBD, ±35°, cyan needle) — reuses
+    // ui::build_centerzero_strip exactly like aphud::.
+    ui::XteStrip rud;
+    // Engage chip (top-left): Auto/STBY toggle wired DIRECTLY to a SignalK state
+    // PUT (mirrors aphud::). s_last_engage is the mode to re-engage from STBY.
+    lv_obj_t *btn_engage, *lbl_engage;
+    char s_last_engage[8];
 
     // Dirty caches.
     char last_hdg[16];
     char last_sub[40];
-    char last_aws[12];
-    char last_awa[12];
-    char last_tws[12];
-    char last_twa[12];
+    char last_sog[12];
+    char last_stw[12];
+    char last_vmg[12];
+    char last_vmgw[12];
+    int last_rud_x;  // last rudder needle x
+    char last_rud_txt[16];
+    char last_engage[8];
+    uint32_t last_engage_color;
     int16_t last_scale_rot;
     // Sector last-angle caches (LVGL deci-degrees: start*100 + end packed start/end).
     int last_nogo_s, last_nogo_e;
@@ -2335,6 +2362,30 @@ static void on_home(lv_event_t *e) {
     app::post(c, 0);
 }
 
+// PUT steering/autopilot/state DIRECTLY (mirrors aphud::put_state), NOT the
+// permission-gated `autopilot mode` funnel. The legacy wind-steer screen engaged
+// in WIND mode; do the same here.
+static void put_state(const char *state) {
+    app::Command cmd;
+    cmd.type = app::CommandType::SignalKPut;
+    strncpy(cmd.a, "steering/autopilot/state", sizeof(cmd.a) - 1);
+    snprintf(cmd.b, sizeof(cmd.b), "\"%s\"", state);
+    app::post_net(cmd, 50);
+    net::logf("[windsteer] state -> %s queued", state);
+}
+
+// Engage chip handler. Runs on the UI task: read boat::View, decide engaged, then
+// post the state PUT. Toggling from STBY re-engages st->s_last_engage ("wind");
+// toggling from any engaged mode drops to standby. Mirrors aphud::on_engage_short.
+static void on_engage_short(lv_event_t *e) {
+    WindSteerState *st = (WindSteerState *)lv_event_get_user_data(e);
+    if (!st) return;
+    boat::View d;
+    boat::current_view(d);
+    bool engaged = d.apState[0] && strcmp(d.apState, "standby") != 0;
+    put_state(engaged ? "standby" : st->s_last_engage);
+}
+
 // Build the wind-steering composite into `parent` (the tile root) filling its
 // w x h content area. Returns a PSRAM WindSteerState* (also attached to the root
 // user_data). Mirrors aphud::build's band budget exactly.
@@ -2348,11 +2399,16 @@ static WindSteerState *build(lv_obj_t *parent, int w, int h) {
     // Sentinel-init the dirty caches (calloc gives 0; force "unset").
     st->last_hdg[0] = (char)0xFF;
     st->last_sub[0] = (char)0xFF;
-    st->last_aws[0] = (char)0xFF;
-    st->last_awa[0] = (char)0xFF;
-    st->last_tws[0] = (char)0xFF;
-    st->last_twa[0] = (char)0xFF;
+    st->last_sog[0] = (char)0xFF;
+    st->last_stw[0] = (char)0xFF;
+    st->last_vmg[0] = (char)0xFF;
+    st->last_vmgw[0] = (char)0xFF;
+    st->last_rud_x = INT16_MIN;
+    st->last_rud_txt[0] = (char)0xFF;
+    st->last_engage[0] = (char)0xFF;
+    st->last_engage_color = 0xFFFFFFFF;
     st->last_scale_rot = INT16_MIN;
+    strcpy(st->s_last_engage, "wind");  // default mode to re-engage from STBY
     st->last_nogo_s = st->last_nogo_e = INT32_MIN;
     st->last_tgta_s = st->last_tgta_e = INT32_MIN;
     st->last_tgtb_s = st->last_tgtb_e = INT32_MIN;
@@ -2373,16 +2429,36 @@ static WindSteerState *build(lv_obj_t *parent, int w, int h) {
     lv_obj_t *r = st->root;
 
     // --- vertical band budget (mirrors aphud::build) --------------------------
-    //   [ top chip row ][ compass region ][ sub-line ][ tile band? ]
-    const int top_bar_h = 44;  // HOME chip row
+    //   [ top chip row ][ compass region ][ sub-line ][ RUDDER strip ][ tile band? ]
+    const int top_bar_h = 44;  // engage + HOME chip row
     const int sub_h = 28;      // TWA/TWD sub-line strip (own reserved band)
+    const int rud_h = 44;      // RUDDER center-zero strip (own reserved band)
     const int gap = 8;
     const int n = 4;
     const int sq = (w - gap * (n + 1)) / n;  // numeric-tile square side
     const int tile_band_h = sq + gap;        // tiles + bottom gap
     // Drop the secondary numeric tiles when the leaf is too short (matches aphud).
     const bool show_tiles = (h >= 440);
-    const int reserved_below = sub_h + (show_tiles ? tile_band_h : 0);
+    const int reserved_below = sub_h + rud_h + (show_tiles ? tile_band_h : 0);
+
+    // --- engage chip (top-LEFT): Auto/STBY toggle wired DIRECTLY to a state PUT
+    // (on_engage_short), exactly like aphud::build. A composite tile can't carry a
+    // MIDL button action, so this is wired here; text/color are state-driven in
+    // update(). ---
+    st->btn_engage = lv_button_create(r);
+    lv_obj_set_size(st->btn_engage, 110, 40);
+    lv_obj_align(st->btn_engage, LV_ALIGN_TOP_LEFT, 8, 8);
+    lv_obj_set_style_radius(st->btn_engage, ui::chrome::panel_radius, 0);
+    lv_obj_set_style_bg_color(st->btn_engage, lv_color_hex(theme.panel), 0);
+    lv_obj_set_style_border_color(st->btn_engage, lv_color_hex(theme.panel_edge), 0);
+    lv_obj_set_style_border_width(st->btn_engage, ui::chrome::panel_border, 0);
+    lv_obj_set_style_pad_all(st->btn_engage, 0, 0);
+    st->lbl_engage = lv_label_create(st->btn_engage);
+    lv_label_set_text(st->lbl_engage, "ON");
+    lv_obj_set_style_text_font(st->lbl_engage, &lv_font_montserrat_20, 0);
+    lv_obj_set_style_text_color(st->lbl_engage, lv_color_hex(theme.fg), 0);
+    lv_obj_center(st->lbl_engage);
+    lv_obj_add_event_cb(st->btn_engage, on_engage_short, LV_EVENT_SHORT_CLICKED, st);
 
     // --- HOME chip (top-RIGHT): posts ShowScreen "dashboard" ---
     lv_obj_t *btn_home = lv_button_create(r);
@@ -2476,15 +2552,32 @@ static WindSteerState *build(lv_obj_t *parent, int w, int h) {
     st->cp.markers = ui::build_marker_ring(r, scx, scy, st->cp.r - ui::kSemiMarkerInset, ws_markers,
                                            4, /*occlude_lower=*/true);
 
-    // --- numeric tiles (square, pinned to the bottom) --- AWS/AWA/TWS/TWA ---
-    // Dropped entirely on a short leaf (show_tiles == false), like aphud::build.
+    // --- RUDDER strip: its own band directly under the TWA/TWD sub-line ---
+    // Center-zero helm-position indicator reused from aphud:: (the same
+    // ui::build_centerzero_strip the AP HUD uses for RUDDER): PORT…STBD, ±35°
+    // full-scale, cyan (accent) needle. Caption "RUDDER" below it.
+    int rud_y = compass_bottom + sub_h;
+    st->rud = ui::build_centerzero_strip(r, 16, rud_y, w - 32, rud_h, "PORT", "STBD",
+                                         /*full_scale=*/35.0, /*tick_decimals=*/0, theme.accent);
+    lv_obj_t *rud_cap = lv_label_create(r);
+    lv_label_set_text(rud_cap, "RUDDER");
+    lv_obj_set_style_text_font(rud_cap, &lv_font_montserrat_14, 0);
+    lv_obj_set_style_text_color(rud_cap, lv_color_hex(theme.fg_dim), 0);
+    lv_obj_set_style_text_align(rud_cap, LV_TEXT_ALIGN_CENTER, 0);
+    lv_obj_set_width(rud_cap, w);
+    lv_obj_set_pos(rud_cap, 0, rud_y + rud_h);
+
+    // --- numeric tiles (square, pinned to the bottom) --- SOG/STW/VMG/VMGwind ---
+    // Steering-useful speed band (AWS center + TWA/TWD live on the dial). Dropped
+    // entirely on a short leaf (show_tiles == false), like aphud::build.
     if (show_tiles) {
         const lv_font_t *tv = &lv_font_montserrat_38;
-        int ty = h - sq - gap;  // bottom row, below the sub-line band
-        st->tile_aws = ui::numeric_tile(r, gap, ty, sq, sq, "AWS", "kn", tv, theme.warn);
-        st->tile_awa = ui::numeric_tile(r, gap * 2 + sq, ty, sq, sq, "AWA", "", tv, theme.fg);
-        st->tile_tws = ui::numeric_tile(r, gap * 3 + sq * 2, ty, sq, sq, "TWS", "kn", tv, theme.fg);
-        st->tile_twa = ui::numeric_tile(r, gap * 4 + sq * 3, ty, sq, sq, "TWA", "", tv, theme.fg);
+        int ty = h - sq - gap;  // bottom row, below the rudder band
+        st->tile_sog = ui::numeric_tile(r, gap, ty, sq, sq, "SOG", "kn", tv, theme.fg);
+        st->tile_stw = ui::numeric_tile(r, gap * 2 + sq, ty, sq, sq, "STW", "kn", tv, theme.fg);
+        st->tile_vmg = ui::numeric_tile(r, gap * 3 + sq * 2, ty, sq, sq, "VMG", "kn", tv, theme.fg);
+        st->tile_vmgw =
+            ui::numeric_tile(r, gap * 4 + sq * 3, ty, sq, sq, "VMGw", "kn", tv, theme.fg);
     }
 
     lv_obj_set_user_data(st->root, st);
@@ -2600,39 +2693,80 @@ static void update(WindSteerState *st, const boat::View &d) {
     double wind_ref = isnan(hdg) ? 0.0 : hdg;
     ui::marker_ring_update(st->cp.markers, steer_live, 4, wind_ref);
 
-    // Tiles: AWS / AWA / TWS / TWA (null-safe — dropped on a short leaf).
-    if (st->tile_aws) {
-        if (!isnan(d.aws)) {
-            snprintf(buf, sizeof(buf), "%.1f", mps_to_kn(d.aws));
-            ui::set_text_if_changed(st->tile_aws, st->last_aws, sizeof(st->last_aws), buf);
-        } else {
-            ui::set_text_if_changed(st->tile_aws, st->last_aws, sizeof(st->last_aws), "--");
+    // Engage chip: "STBY" (drop to standby) when engaged, "ON" (engage) when
+    // standby. Filled green when engaged, hollow outline when standby — mirrors
+    // aphud::update's chip exactly.
+    bool engaged = d.apState[0] && strcmp(d.apState, "standby") != 0;
+    ui::set_text_if_changed(st->lbl_engage, st->last_engage, sizeof(st->last_engage),
+                            engaged ? "STBY" : "ON");
+    uint32_t want_engage_color = engaged ? theme.good : theme.panel_edge;
+    if (want_engage_color != st->last_engage_color) {
+        st->last_engage_color = want_engage_color;
+        lv_obj_set_style_bg_opa(st->btn_engage, engaged ? LV_OPA_COVER : LV_OPA_TRANSP, 0);
+        lv_obj_set_style_bg_color(st->btn_engage, lv_color_hex(theme.good), 0);
+        lv_obj_set_style_border_color(st->btn_engage, lv_color_hex(want_engage_color), 0);
+        lv_obj_set_style_text_color(st->lbl_engage, lv_color_hex(engaged ? 0x05101c : theme.fg), 0);
+    }
+
+    // RUDDER needle (helm position) — same mapping as aphud::update. rudder is
+    // radians, +ve = starboard; map ±35° full-scale to ±half_px (clamped).
+    if (!isnan(d.rudder)) {
+        double deg = d.rudder * 180.0 / M_PI;  // + = starboard
+        if (deg > 35.0) deg = 35.0;
+        if (deg < -35.0) deg = -35.0;
+        int nx = st->rud.center_x + (int)(deg / 35.0 * st->rud.half_px) - 1;
+        if (nx != st->last_rud_x) {
+            st->last_rud_x = nx;
+            lv_obj_set_x(st->rud.needle, nx);
         }
     }
-    if (st->tile_awa) {
-        if (!isnan(d.awa)) {
-            double a = rad_to_deg_pos(d.awa);
-            bool s = a <= 180.0;
-            snprintf(buf, sizeof(buf), "%.0f%c", s ? a : 360.0 - a, s ? 'S' : 'P');
-            ui::set_text_if_changed(st->tile_awa, st->last_awa, sizeof(st->last_awa), buf);
+    if (st->rud.value) {
+        char rbuf[16];
+        if (isnan(d.rudder)) {
+            snprintf(rbuf, sizeof(rbuf), "--");
         } else {
-            ui::set_text_if_changed(st->tile_awa, st->last_awa, sizeof(st->last_awa), "--");
+            double deg = d.rudder * 180.0 / M_PI;
+            double mag = fabs(deg);
+            if (mag < 0.5)
+                snprintf(rbuf, sizeof(rbuf), "0\xC2\xB0");
+            else
+                snprintf(rbuf, sizeof(rbuf), "%.0f\xC2\xB0 %c", mag, deg > 0 ? 'S' : 'P');
+        }
+        ui::set_text_if_changed(st->rud.value, st->last_rud_txt, sizeof(st->last_rud_txt), rbuf);
+    }
+
+    // Tiles: SOG / STW / VMG (to waypoint) / VMGw (wind/polar VMG). Null-safe —
+    // dropped on a short leaf.
+    if (st->tile_sog) {
+        if (!isnan(d.sog)) {
+            snprintf(buf, sizeof(buf), "%.1f", mps_to_kn(d.sog));
+            ui::set_text_if_changed(st->tile_sog, st->last_sog, sizeof(st->last_sog), buf);
+        } else {
+            ui::set_text_if_changed(st->tile_sog, st->last_sog, sizeof(st->last_sog), "--");
         }
     }
-    if (st->tile_tws) {
-        if (!isnan(d.tws)) {
-            snprintf(buf, sizeof(buf), "%.1f", mps_to_kn(d.tws));
-            ui::set_text_if_changed(st->tile_tws, st->last_tws, sizeof(st->last_tws), buf);
+    if (st->tile_stw) {
+        if (!isnan(d.stw)) {
+            snprintf(buf, sizeof(buf), "%.1f", mps_to_kn(d.stw));
+            ui::set_text_if_changed(st->tile_stw, st->last_stw, sizeof(st->last_stw), buf);
         } else {
-            ui::set_text_if_changed(st->tile_tws, st->last_tws, sizeof(st->last_tws), "--");
+            ui::set_text_if_changed(st->tile_stw, st->last_stw, sizeof(st->last_stw), "--");
         }
     }
-    if (st->tile_twa) {
-        if (!isnan(twa_mag)) {
-            snprintf(buf, sizeof(buf), "%.0f%c", twa_mag, stbd ? 'S' : 'P');
-            ui::set_text_if_changed(st->tile_twa, st->last_twa, sizeof(st->last_twa), buf);
+    if (st->tile_vmg) {
+        if (!isnan(d.vmg)) {
+            snprintf(buf, sizeof(buf), "%.1f", mps_to_kn(d.vmg));
+            ui::set_text_if_changed(st->tile_vmg, st->last_vmg, sizeof(st->last_vmg), buf);
         } else {
-            ui::set_text_if_changed(st->tile_twa, st->last_twa, sizeof(st->last_twa), "--");
+            ui::set_text_if_changed(st->tile_vmg, st->last_vmg, sizeof(st->last_vmg), "--");
+        }
+    }
+    if (st->tile_vmgw) {
+        if (!isnan(d.vmgWind)) {
+            snprintf(buf, sizeof(buf), "%.1f", mps_to_kn(d.vmgWind));
+            ui::set_text_if_changed(st->tile_vmgw, st->last_vmgw, sizeof(st->last_vmgw), buf);
+        } else {
+            ui::set_text_if_changed(st->tile_vmgw, st->last_vmgw, sizeof(st->last_vmgw), "--");
         }
     }
 }
@@ -3220,8 +3354,10 @@ static void update_quad_grid(lv_obj_t *root, const ScreenVariantSpec &spec,
             // ground), green when making good toward it. Neutral on NaN so a
             // dropout doesn't flash a false good/bad cue. Applied on the value
             // label only for the VMG source.
-            if (t.value && m.source == MetricSource::VMG_kn) {
-                double vmg = mps_to_kn(data.vmg);
+            if (t.value &&
+                (m.source == MetricSource::VMG_kn || m.source == MetricSource::VMGwind_kn)) {
+                double vmg =
+                    mps_to_kn(m.source == MetricSource::VMGwind_kn ? data.vmgWind : data.vmg);
                 uint32_t col = isnan(vmg) ? theme.fg : (vmg < 0 ? theme.alarm : theme.good);
                 lv_obj_set_style_text_color(t.value, lv_color_hex(col), 0);
             }
@@ -4844,8 +4980,10 @@ void update_freeform(lv_obj_t *root, const ScreenVariantSpec &spec, const boat::
                     fit_text_font(t.value, pri, st->tiles[i].tile_w - 24);
                 }
             }
-            if (t.value && m.source == MetricSource::VMG_kn) {
-                double vmg = mps_to_kn(data.vmg);
+            if (t.value &&
+                (m.source == MetricSource::VMG_kn || m.source == MetricSource::VMGwind_kn)) {
+                double vmg =
+                    mps_to_kn(m.source == MetricSource::VMGwind_kn ? data.vmgWind : data.vmg);
                 uint32_t col = isnan(vmg) ? theme.fg : (vmg < 0 ? theme.alarm : theme.good);
                 lv_obj_set_style_text_color(t.value, lv_color_hex(col), 0);
             }
