@@ -710,33 +710,38 @@ static void paint_numeric_body(QuadGridTile &t, const MetricBinding &m, int w, i
     // Previous LV_ALIGN_OUT_RIGHT_BOTTOM put the unit's TOP at the value's
     // BOTTOM corner which made the unit drop below the digits and crowd
     // the next character - that's the overlap users saw.
-    lv_obj_t *row = lv_obj_create(t.root);
-    lv_obj_set_size(row, LV_SIZE_CONTENT, LV_SIZE_CONTENT);
-    lv_obj_set_style_bg_opa(row, LV_OPA_TRANSP, 0);
-    lv_obj_set_style_border_width(row, 0, 0);
-    lv_obj_set_style_pad_all(row, 0, 0);
-    lv_obj_set_style_pad_column(row, 8, 0);
-    lv_obj_set_flex_flow(row, LV_FLEX_FLOW_ROW);
-    lv_obj_set_flex_align(row, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_END, LV_FLEX_ALIGN_END);
-    lv_obj_align(row, LV_ALIGN_CENTER, 0, has_extras ? -28 : -8);
-    lv_obj_clear_flag(row, LV_OBJ_FLAG_SCROLLABLE);
-    lv_obj_clear_flag(row, LV_OBJ_FLAG_CLICKABLE);
-    // Fullscreen-zoom scroll hardening (Change B): a transform-scaled hero can be
-    // pulled into a parent's scrollable extent under LVGL v9; belt-and-braces clear
-    // scroll on the row so the zoom view can never start scrolling/jittering.
-    if (fullscreen) {
-        lv_obj_set_scroll_dir(row, LV_DIR_NONE);
-        lv_obj_clear_flag(row, LV_OBJ_FLAG_SCROLL_CHAIN);
-        lv_obj_clear_flag(row, LV_OBJ_FLAG_SCROLL_ELASTIC);
-        lv_obj_clear_flag(row, LV_OBJ_FLAG_SCROLL_MOMENTUM);
+    // Non-fullscreen tiles use a flex row [value][unit] (shared baseline). The
+    // fullscreen-zoom hero instead parents the value DIRECTLY to the tile and
+    // centers it, so transform_scale about its own pivot keeps the giant number
+    // SCREEN-centered. Putting the hero in a flex row beside the unit shifts the
+    // value off the tile centre and the scale amplifies it — that was the
+    // off-center/clipped zoomed-number bug.
+    lv_obj_t *row = nullptr;
+    lv_obj_t *vparent = t.root;
+    if (!fullscreen) {
+        row = lv_obj_create(t.root);
+        lv_obj_set_size(row, LV_SIZE_CONTENT, LV_SIZE_CONTENT);
+        lv_obj_set_style_bg_opa(row, LV_OPA_TRANSP, 0);
+        lv_obj_set_style_border_width(row, 0, 0);
+        lv_obj_set_style_pad_all(row, 0, 0);
+        lv_obj_set_style_pad_column(row, 8, 0);
+        lv_obj_set_flex_flow(row, LV_FLEX_FLOW_ROW);
+        lv_obj_set_flex_align(row, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_END, LV_FLEX_ALIGN_END);
+        lv_obj_align(row, LV_ALIGN_CENTER, 0, has_extras ? -28 : -8);
+        lv_obj_clear_flag(row, LV_OBJ_FLAG_SCROLLABLE);
+        lv_obj_clear_flag(row, LV_OBJ_FLAG_CLICKABLE);
+        vparent = row;
     }
 
-    t.value = lv_label_create(row);
+    t.value = lv_label_create(vparent);
     lv_label_set_text(t.value, "--");
     lv_obj_set_style_text_font(t.value, vfont, 0);
     lv_obj_set_style_text_color(t.value, lv_color_hex(value_color(m)), 0);
     lv_obj_clear_flag(t.value, LV_OBJ_FLAG_CLICKABLE);
     if (fullscreen) {
+        // Center the hero on the tile so transform_scale (about its own 50/50 pivot)
+        // grows it symmetrically around the screen centre.
+        lv_obj_align(t.value, LV_ALIGN_CENTER, 0, -8);
         // Tile root: the zoom tile fills the whole panel; make sure its chrome can
         // never scroll the scaled hero into view (cause-1 hardening).
         lv_obj_set_scroll_dir(t.root, LV_DIR_NONE);
@@ -763,14 +768,18 @@ static void paint_numeric_body(QuadGridTile &t, const MetricBinding &m, int w, i
     }
 
     if (m.unit && m.unit[0]) {
-        t.unit = lv_label_create(row);
+        // Fullscreen hero: the value is centered on t.root (no flex row), so place
+        // the unit on t.root just below the giant number (centered). Non-fullscreen:
+        // the unit rides in the flex row, bottom-baseline-aligned next to the value.
+        t.unit = lv_label_create(fullscreen ? t.root : row);
         lv_label_set_text(t.unit, m.unit);
         lv_obj_set_style_text_font(t.unit, ufont, 0);
         lv_obj_set_style_text_color(t.unit, lv_color_hex(theme.fg_dim), 0);
-        // The flex row's cross-axis ALIGN_END pulls the unit to the
-        // bottom edge of the row's content box - same baseline as the
-        // taller value since digits have no descenders.
         lv_obj_clear_flag(t.unit, LV_OBJ_FLAG_CLICKABLE);
+        if (fullscreen) {
+            // Below the hero: -8 (hero offset) + half the hero height + a gap.
+            lv_obj_align(t.unit, LV_ALIGN_CENTER, 0, -8 + t.hero_h / 2 + 6);
+        }
     }
 
     if (!has_extras) {
