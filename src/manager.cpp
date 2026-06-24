@@ -768,7 +768,9 @@ bool apply_config(JsonDocument &cfg) {
     // Spec 17 §6 dependency order:
     //   1. network hostname/domain   (may reboot - terminal)
     //   2. SignalK target
-    //   3. source settings           (TBD; not implemented yet)
+    //   3. source settings           (priority + freshness windows; §3,
+    //                                 plus 3b NMEA0183-WiFi, 3c NMEA2000,
+    //                                 3d autopilot permissions below)
     //   4. UI (theme/brightness/layout)
     //   5. debug                      (webAuth here as a proxy)
     bool ok = true;
