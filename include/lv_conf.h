@@ -32,8 +32,14 @@
 // low-water (see project memory) - a 2nd draw thread can tip it into the
 // WiFi/BLE-starvation reboot zone. Also competes with the core-0 touch task.
 // To revert: delete these two #defines (falls back to OS_NONE / 1 draw unit).
-#define LV_USE_OS LV_OS_FREERTOS
-#define LV_DRAW_SW_DRAW_UNIT_CNT 2
+//
+// REVERTED 2026-06-24: the 2-draw-unit build hung TWICE under live SignalK load
+// on the lab device (silent hang, AP association FAILED, needed a power-cycle) -
+// the predicted internal-SRAM starvation. Falling back to single-threaded
+// software rendering (OS_NONE / 1 draw unit) for stability. Re-enable only after
+// measuring internal-SRAM low-water headroom under load (idf5+BLE+live data).
+// #define LV_USE_OS LV_OS_FREERTOS
+// #define LV_DRAW_SW_DRAW_UNIT_CNT 2
 
 #define LV_TICK_CUSTOM 0
 
