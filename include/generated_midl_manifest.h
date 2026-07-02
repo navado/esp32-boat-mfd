@@ -19,17 +19,17 @@ inline constexpr const char *JSON = R"midljson({
     }
   ],
   "elements": [
-    { "type": "single-value", "bindings": ["value"], "attrs": ["title", "format", "size", "unit", "color"] },
+    { "type": "single-value", "bindings": ["value"], "attrs": ["title", "format", "size", "unit", "color", "side"] },
     { "type": "text", "bindings": ["value"], "attrs": ["title", "size", "color"] },
-    { "type": "gauge", "bindings": ["value"], "attrs": ["title", "size", "unit", "color", "range", "zones"] },
-    { "type": "bar", "bindings": ["value"], "attrs": ["title", "size", "unit", "color", "range", "zones"] },
-    { "type": "compass", "bindings": ["value", "dir"], "attrs": ["title", "size", "color"], "glyphs": ["triangle", "diamond", "circle", "bar", "cross", "chevron_in", "chevron_out", "chevron_left", "chevron_right", "chevron_double"] },
-    { "type": "windrose", "bindings": ["value", "dir"], "attrs": ["title", "format", "size", "unit", "color"], "glyphs": ["triangle", "diamond", "circle", "bar", "cross", "chevron_in", "chevron_out", "chevron_left", "chevron_right", "chevron_double"] },
+    { "type": "gauge", "bindings": ["value"], "attrs": ["title", "size", "unit", "color", "range", "zones", "center"] },
+    { "type": "bar", "bindings": ["value"], "attrs": ["title", "size", "unit", "color", "range", "zones", "center"] },
+    { "type": "compass", "bindings": ["value", "dir"], "attrs": ["title", "size", "color", "sectors", "hull", "shape"], "glyphs": ["triangle", "diamond", "circle", "bar", "cross", "chevron_in", "chevron_out", "chevron_left", "chevron_right", "chevron_double"] },
+    { "type": "windrose", "bindings": ["value", "dir"], "attrs": ["title", "format", "size", "unit", "color", "side", "sectors", "hull", "shape"], "glyphs": ["triangle", "diamond", "circle", "bar", "cross", "chevron_in", "chevron_out", "chevron_left", "chevron_right", "chevron_double"] },
     { "type": "trend", "bindings": ["value"], "attrs": ["title", "size", "unit", "color"] },
     { "type": "autopilot", "bindings": ["value"], "attrs": ["title", "size", "color"] },
     { "type": "button", "bindings": [], "attrs": ["title", "size", "color"] }
   ],
-  "sources": ["signalk"],
+  "sources": ["signalk", "local"],
   "actionKinds": ["nav", "command"],
   "presets": ["full", "hero-split"],
   "glyphs": ["triangle", "diamond", "circle", "bar", "cross", "chevron_in", "chevron_out", "chevron_left", "chevron_right", "chevron_double"],
